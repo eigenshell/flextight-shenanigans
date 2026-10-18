@@ -1,0 +1,97 @@
+[strip]
+holder = 24x217
+film = negative
+focus = shifted
+focus_offset = 0
+share = 2450   # scan to share: px on each frame's long side
+hf_half_res = no
+
+[frame 1]
+type = full
+include = yes
+ppi = 1729
+bin = 1   # 0 = fastest; smaller = more light, slower
+# bin options at 1729 ppi (time, light, Dmax~): 3: 96 s 1.3x 3.11 | 2: 138 s 2.1x 3.32 | 1: 267 s 4.0x 3.60
+window = 4.000 1.600 36.000 24.400   # y0 x0 length width, mm
+tilt = 0.00
+sprockets = no
+straighten = no
+confidence = high
+focus_offset = 0
+done = no
+group = 1   # window: frames of one group scan together
+
+[frame 2]
+type = full
+include = yes
+ppi = 1729
+bin = 1   # 0 = fastest; smaller = more light, slower
+# bin options at 1729 ppi (time, light, Dmax~): 3: 96 s 1.3x 3.11 | 2: 138 s 2.1x 3.32 | 1: 267 s 4.0x 3.60
+window = 42.000 1.600 36.000 24.400   # y0 x0 length width, mm
+tilt = 0.00
+sprockets = no
+straighten = no
+confidence = high
+focus_offset = 0
+done = no
+group = 1   # window: frames of one group scan together
+
+[frame 3]
+type = full
+include = yes
+ppi = 1729
+bin = 1   # 0 = fastest; smaller = more light, slower
+# bin options at 1729 ppi (time, light, Dmax~): 3: 96 s 1.3x 3.11 | 2: 138 s 2.1x 3.32 | 1: 267 s 4.0x 3.60
+window = 80.000 1.600 36.000 24.400   # y0 x0 length width, mm
+tilt = 0.00
+sprockets = no
+straighten = no
+confidence = high
+focus_offset = 0
+done = no
+group = 1   # window: frames of one group scan together
+
+[frame 4]
+type = full
+include = yes
+ppi = 1729
+bin = 1   # 0 = fastest; smaller = more light, slower
+# bin options at 1729 ppi (time, light, Dmax~): 3: 96 s 1.3x 3.11 | 2: 138 s 2.1x 3.32 | 1: 267 s 4.0x 3.60
+window = 118.000 1.600 36.000 24.400   # y0 x0 length width, mm
+tilt = 0.00
+sprockets = no
+straighten = no
+confidence = high
+focus_offset = 0
+done = no
+group = 1   # window: frames of one group scan together
+
+[frame 5]
+type = full
+include = yes
+ppi = 1729
+bin = 1   # 0 = fastest; smaller = more light, slower
+# bin options at 1729 ppi (time, light, Dmax~): 3: 96 s 1.3x 3.11 | 2: 138 s 2.1x 3.32 | 1: 267 s 4.0x 3.60
+window = 156.000 1.600 36.000 24.400   # y0 x0 length width, mm
+tilt = 0.00
+sprockets = no
+straighten = no
+confidence = high
+focus_offset = 0
+done = no
+group = 1   # window: frames of one group scan together
+
+[frame 6]
+type = partial
+include = no
+ppi = 2000
+bin = 0   # 0 = fastest; smaller = more light, slower
+# bin options at 2000 ppi (time, light, Dmax~): 3: 68 s 1.1x 3.03 | 2: 97 s 1.8x 3.25 | 1: 184 s 3.5x 3.55
+window = 194.000 1.600 20.000 24.400   # y0 x0 length width, mm
+tilt = 0.00
+sprockets = no
+straighten = no
+confidence = high
+focus_offset = 0
+done = no
+group = 0   # window: frames of one group scan together

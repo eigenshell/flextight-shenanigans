@@ -41,28 +41,49 @@ int main(void)
     CHECK(c == 285187 && o == 998540);
     CHECK(ft_optics_for(&ft_lens_default, 6300, &c, &o) == 0);
     CHECK(c == 259254 && o == 1005789);
-    /* low scales (previews), checked against the scanner's FP table */
+    /* low scales: the thin lens (checked against the scanner's FP table)
+     * plus the survey's correction, tandem: -4778 at 1500, -1358 at 2000 */
     CHECK(ft_optics_for(&ft_lens_default, 1500, &c, &o) == 0);
-    CHECK(c == 326230 && o == 541866);
+    CHECK(c == 326230 - 4778 && o == 541866 - 4778);
     CHECK(ft_positions_ok(c, o));
     CHECK(ft_optics_for(&ft_lens_default, 2000, &c, &o) == 0);
-    CHECK(c == 423152 && o == 694091);
+    CHECK(c == 423152 - 1358 && o == 694091 - 1358);
     CHECK(ft_positions_ok(c, o));
+    /* the correction: linear between its points, held past the ends, 0
+     * from 3000 up (the high scales above stay the 2026-10-12 fit) */
+    CHECK_NEAR(ft_lens_correction(&ft_lens_default, 1750), -3068, 1e-9);
+    CHECK_NEAR(ft_lens_correction(&ft_lens_default, 2500), -679, 1e-9);
+    CHECK(ft_lens_correction(&ft_lens_default, 3807) == 0);
+    CHECK(ft_lens_correction(&ft_lens_default, 1000) == -11278);
+    {
+        ft_lens bare = ft_lens_default;
+        bare.ncorr = 0;
+        CHECK(ft_lens_correction(&bare, 1500) == 0);
+        CHECK(ft_optics_for(&bare, 1500, &c, &o) == 0);
+        CHECK(c == 326230 && o == 541866);
+    }
     CHECK(ft_optics_for(&ft_lens_default, 1499, &c, &o) == -1);
-    CHECK(FT_OPTIC_MIN == 530000);
+    /* scan positions: the FP table's scanning envelope (user, 2026-10-15) */
+    CHECK(FT_CCD_MIN == 56674 && FT_CCD_MAX == 466453);
+    CHECK(FT_OPTIC_MIN == 217000 && FT_OPTIC_MAX == 1010000);
+    CHECK(FT_SCALE_REACH_MIN == 980.0);
     CHECK(ft_positions_ok(317523, 530820));     /* FP entry 6, m 0.51 */
-    CHECK(!ft_positions_ok(317523, 529999));
+    CHECK(ft_positions_ok(56674, 217000));      /* FP entry 4, A4 reflective */
+    CHECK(ft_positions_ok(466453, 833910));     /* FP entry 16, 1:1 */
+    CHECK(!ft_positions_ok(56673, 217000));
+    CHECK(!ft_positions_ok(56674, 216999));
+    CHECK(!ft_positions_ok(466454, 833910));
+    CHECK(ft_positions_ok(259254, 1010000));
+    CHECK(!ft_positions_ok(259254, 1010001));
     CHECK(ft_optics_for(&ft_lens_default, 6400, &c, &o) == -1);
 
     CHECK(ft_positions_ok(285187, 998540));
     CHECK(!ft_positions_ok(1020000, 997296));   /* CCD past the lens */
-    CHECK(!ft_positions_ok(200000, 998540));    /* below FlexColor's range */
-    CHECK(ft_positions_ok(240000, 1005789));    /* extended CCD floor */
-    CHECK(!ft_positions_ok(239999, 1005789));
+    CHECK(ft_positions_ok(200000, 998540));     /* inside the FP table */
     /* carrier gap: lens - CCD >= 150000 while scanning (FP table >= 160231) */
     CHECK(FT_GAP_BOTTOM == 1000 && FT_GAP_MIN == 150000);
-    CHECK(ft_positions_ok(850000, 1000000));    /* gap 150000 */
-    CHECK(!ft_positions_ok(850001, 1000000));   /* gap 149999 */
+    CHECK(ft_positions_ok(300000, 450000));     /* gap 150000 */
+    CHECK(!ft_positions_ok(300001, 450000));    /* gap 149999 */
     CHECK(!ft_positions_ok(1020000, 1021000));  /* maintenance bottom, gap 1000 */
 
     /* parabola peak: the 4800-scale bracket measured on hardware */
@@ -164,6 +185,8 @@ int main(void)
         CHECK(ft_lens_read(&b, f, &e) == 0);
         CHECK_NEAR(b.film, a.film, 0.05);
         CHECK_NEAR(b.p, a.p, 1e-9);
+        CHECK(b.ncorr == a.ncorr && b.ncorr == 5);
+        CHECK(b.corr_scale[1] == 1500 && b.corr_off[1] == -4778);
         fclose(f);
         f = tmpfile();
         fputs("film = 1\nw = 2\n", f);
@@ -179,10 +202,18 @@ int main(void)
                       289987, 265226 };
         long L[8] = { 911050, 922360, 938639, 959966, 981011, 989872,
                       997296, 1004246 };
-        ft_lens l = { 1460000.0, 270000.0, 320000.0, 3.5e-4 };
+        ft_lens l = { 1460000.0, 270000.0, 320000.0, 3.5e-4, 0, {0}, {0} };
         double rc, rl;
         CHECK(ft_lens_fit(M, C, L, 8, &l, &rc, &rl) == 0);
         CHECK(rc < 240 && rl < 130);
+        CHECK(l.ncorr == 0);                    /* a fit stands alone */
+        {   /* from the default (with its table): the fit drops it */
+            ft_lens d = ft_lens_default;
+            d.ncorr = 0x5a5a;               /* what garbage would look like */
+            d = ft_lens_default;
+            CHECK(ft_lens_fit(M, C, L, 8, &d, &rc, &rl) == 0);
+            CHECK(d.ncorr == 0 && ft_lens_correction(&d, 1500) == 0);
+        }
         CHECK_NEAR(l.film, ft_lens_default.film, 3000);
         CHECK_NEAR(l.p, ft_lens_default.p, 2e-6);
         CHECK(ft_lens_fit(M, C, L, 3, &l, &rc, &rl) == -1);
@@ -220,7 +251,7 @@ int main(void)
 
     /* focus file parsing is strict and leaves *l alone on failure */
     {
-        ft_lens keep = { 1, 2, 3, 4 }, l = keep;
+        ft_lens keep = { 1, 2, 3, 4, 0, {0}, {0} }, l = keep;
         ft_err e;
         char big[400];
         static const char *bad[] = {
@@ -250,6 +281,91 @@ int main(void)
         fclose(f);
     }
 
+    /* focus file from a buffer (the page's planner): the stream reader's
+     * rules, n bytes only (no NUL needed) */
+    {
+        ft_lens keep = { 1, 2, 3, 4, 0, {0}, {0} }, l = keep, s;
+        ft_err e;
+        char line[200], text[400];
+        static const char good[] = "# fit\n  # x\nfilm = 1\nw = 2\nfl = 3\n"
+                                   "p = 4";             /* no last '\n' */
+        static const char *bad[] = {
+            "film = 1\nw = 2\nfl = 3\np = nan\n",
+            "film = 1\nw = 2\nfl = 3\np = 1 junk\n",
+            "film = 1\nw = 2\nfl = 3\np = 1\nbogus = 5\n",
+            "film = 1\nw = 2\nfl = 3\np = 0\n",
+            "film = 1\nw = 2\n",
+        };
+        static const char *msg[] = {
+            "focus file line 4: value not finite",
+            "focus file line 4: expected key = number",
+            "focus file line 5: unknown key bogus",
+            "focus file: fl and p must be positive",
+            "focus file: needs film, w, fl and p",
+        };
+        int i;
+        FILE *f;
+        CHECK(ft_lens_parse(&l, good, sizeof good - 1, &e) == 0);
+        CHECK(l.film == 1 && l.w == 2 && l.fl == 3 && l.p == 4);
+        /* n bytes only: "p = 4" cut to "p = " */
+        l = keep;
+        CHECK(ft_lens_parse(&l, good, sizeof good - 2, &e) == -1);
+        CHECK(strcmp(e.msg, "focus file line 6: expected key = number") == 0);
+        for (i = 0; i < 5; i++) {
+            l = keep;
+            CHECK(ft_lens_parse(&l, bad[i], strlen(bad[i]), &e) == -1);
+            CHECK(strcmp(e.msg, msg[i]) == 0);
+            CHECK(l.film == 1 && l.w == 2 && l.fl == 3 && l.p == 4);
+            /* the stream reader says the same */
+            f = tmpfile();
+            fputs(bad[i], f);
+            rewind(f);
+            CHECK(ft_lens_read(&s, f, &e) == -1);
+            CHECK(strcmp(e.msg, msg[i]) == 0);
+            fclose(f);
+        }
+        /* a long comment is fine, a long key line is not (158 chars of
+         * content fit fgets' 160, 159 do not) */
+        memset(line, 'x', 190);
+        line[190] = 0;
+        snprintf(text, sizeof text, "# %s\nfilm = 1\nw = 2\nfl = 3\np = 4\n",
+                 line);
+        CHECK(ft_lens_parse(&l, text, strlen(text), &e) == 0);
+        for (i = 158; i <= 159; i++) {
+            int k = snprintf(text, sizeof text, "film = 1%*s\nw = 2\nfl = 3\n"
+                             "p = 4\n", i - 8, "");
+            int rp = ft_lens_parse(&l, text, (size_t)k, &e), rs;
+            f = tmpfile();
+            fputs(text, f);
+            rewind(f);
+            rs = ft_lens_read(&s, f, &e);
+            fclose(f);
+            CHECK(rp == rs);
+            CHECK(rp == (i == 158 ? 0 : -1));
+        }
+        CHECK(strcmp(e.msg, "focus file line 1: too long") == 0);
+    }
+
+    /* the 95 % depth of field: the survey's fit, K pinned; against the
+     * survey's measured widths (2026-10-15/16, bin 1) within 10 % (the
+     * law is a fit: 651 / 3431 / 5474 here); bin scales it */
+    CHECK(FT_DOF95_K == 980.0);
+    CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 6300, 1), 636, 63.6);
+    CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 2000, 1), 3651, 365.1);
+    CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 1500, 1), 5653, 565.3);
+    CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 6300, 1), 650.9, 0.5);
+    CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 3150, 2),
+               2 * ft_lens_dof95(&ft_lens_default, 3150, 1), 1e-9);
+    CHECK(ft_lens_dof95(&ft_lens_default, 3150, 0) ==
+          ft_lens_dof95(&ft_lens_default, 3150, 1));
+    {
+        ft_lens l = ft_lens_default;
+        double m = 2 * l.p * 3000;
+        l.p *= 2;                       /* the lens' p, not the default's */
+        CHECK_NEAR(ft_lens_dof95(&l, 3000, 1), 980 * (1 + m) / (m * m),
+                   1e-9);
+    }
+
     /* fit converges from a start 20 % off, and keeps *l on failure */
     {
         double M[8] = { 3807, 4000, 4309, 4787, 5384, 5678, 5947, 6230 };
@@ -257,8 +373,8 @@ int main(void)
                       289987, 265226 };
         long L[8] = { 911050, 922360, 938639, 959966, 981011, 989872,
                       997296, 1004246 };
-        ft_lens l = { 1.2e6, 3.2e5, 3.8e5, 4.2e-4 };
-        ft_lens z = { 1.0e6, 3.0e5, 0, 4.0e-4 };
+        ft_lens l = { 1.2e6, 3.2e5, 3.8e5, 4.2e-4, 0, {0}, {0} };
+        ft_lens z = { 1.0e6, 3.0e5, 0, 4.0e-4, 0, {0}, {0} };
         double rc, rl, Mbad[8];
         memcpy(Mbad, M, sizeof M);
         CHECK(ft_lens_fit(M, C, L, 8, &l, &rc, &rl) == 0);

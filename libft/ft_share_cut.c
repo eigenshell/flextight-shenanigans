@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "ft_detect.h"
@@ -143,25 +144,6 @@ int ft_share_meta_parse(const char *text, size_t n, ft_share_meta *m,
     if (!ft_holder_find(m->holder))
         return ft_fail(e, "share meta: unknown holder %s", m->holder);
     return 0;
-}
-
-int ft_share_meta_write(FILE *out, const ft_job *j, int g)
-{
-    int i;
-    fprintf(out, "film=%s\nholder=%s\nshare=%g\nhf_half_res=%d\n",
-            j->film == FT_FILM_SLIDE ? "slide" : "negative", j->holder,
-            j->share, j->hf_half_res ? 1 : 0);
-    if (j->has_film_base)
-        fprintf(out, "film_base=%.4f %.4f %.4f\n", j->film_base[0],
-                j->film_base[1], j->film_base[2]);
-    for (i = 0; i < j->nframes; i++) {
-        const ft_job_frame *f = &j->f[i];
-        if (!f->include || f->group != g || (unsigned)f->type > 3)
-            continue;
-        fprintf(out, "share_frame=%d %s %.3f %.3f %.3f %.3f\n", f->index,
-                TYPES[f->type], f->y0, f->len, f->x0, f->width);
-    }
-    return ferror(out) ? -1 : 0;
 }
 
 /* the detected frame overlapping p most along, if it is p: overlap of at
@@ -371,25 +353,34 @@ void ft_share_cut_free(ft_share_cut_result *r)
     r->n = 0;
 }
 
-int ft_share_sidecar_write(FILE *out, const ft_share_meta *m,
-                           const ft_share_cut_frame *c)
+int ft_share_sidecar_write_buf(char *buf, size_t cap,
+                               const ft_share_meta *m,
+                               const ft_share_cut_frame *c)
 {
-    fprintf(out, "frame=%d\ntype=%s\nfilm=%s\nppi=%g\nshare=%g\n"
-                 "hf_half_res=%d\n", c->index,
-            (unsigned)c->type <= 3 ? TYPES[c->type] : "full",
-            m->film == FT_FILM_SLIDE ? "slide" : "negative", m->ppi, m->share,
-            m->hf_half_res);
+    size_t n = 0;
+    int w;
+#define APP(...) do { \
+        w = snprintf(buf ? buf + (n < cap ? n : cap) : NULL, \
+                     n < cap ? cap - n : 0, __VA_ARGS__); \
+        if (w > 0) \
+            n += (size_t)w; \
+    } while (0)
+    APP("frame=%d\ntype=%s\nfilm=%s\nppi=%g\nshare=%g\nhf_half_res=%d\n",
+        c->index, (unsigned)c->type <= 3 ? TYPES[c->type] : "full",
+        m->film == FT_FILM_SLIDE ? "slide" : "negative", m->ppi, m->share,
+        m->hf_half_res);
     if (m->has_film_base)
-        fprintf(out, "film_base=%.4f %.4f %.4f\n", m->film_base[0],
-                m->film_base[1], m->film_base[2]);
+        APP("film_base=%.4f %.4f %.4f\n", m->film_base[0], m->film_base[1],
+            m->film_base[2]);
     if (c->im.has_noise)
-        fprintf(out, "noise_profile=%.17g %.17g %.17g %.17g %.17g %.17g\n",
-                c->im.noise[0], c->im.noise[1], c->im.noise[2],
-                c->im.noise[3], c->im.noise[4], c->im.noise[5]);
-    fprintf(out, "box=%d %d %d %d\nexport_scale=%.6f\nestimated=%d\n"
-                 "shift_mm=%.3f\n", c->box[0], c->box[1], c->box[2],
-            c->box[3], c->export_scale, c->estimated, c->shift_mm);
-    return ferror(out) ? -1 : 0;
+        APP("noise_profile=%.17g %.17g %.17g %.17g %.17g %.17g\n",
+            c->im.noise[0], c->im.noise[1], c->im.noise[2], c->im.noise[3],
+            c->im.noise[4], c->im.noise[5]);
+    APP("box=%d %d %d %d\nexport_scale=%.6f\nestimated=%d\nshift_mm=%.3f\n",
+        c->box[0], c->box[1], c->box[2], c->box[3], c->export_scale,
+        c->estimated, c->shift_mm);
+#undef APP
+    return (int)n;
 }
 
 int ft_share_sidecar_parse(const char *text, size_t n, ft_share_sidecar *s,

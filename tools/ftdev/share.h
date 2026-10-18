@@ -9,17 +9,18 @@
 
 /* whole file + a NUL; NULL if unreadable (ftdev.c) */
 void *ftdev_load(const char *path, long *size);
-/* the box x,y,w,h of im as a new image (allocated in cut); -1 with e
- * filled if it does not fit */
-int ftdev_crop(const ft_image *im, const int box[4], ft_image *cut,
-               ft_err *e);
 /* noise reduction on cut (transmittance, before the render) as export
  * does it: sensor NR with the profile of im (the whole frame's DNG), else
  * the sidecar's (sc NULL: none), else estimated; then grain NR. 0 ok, 1
  * out of memory (printed). */
 int ftdev_denoise(const ft_image *im, const ft_share_sidecar *sc,
                   ft_image *cut, const ft_look_detail *d);
-/* the share tail: resize cut (rendered: linear Rec.2020) by scale (never
+/* jpg (n bytes, ow x oh) at outp, text in <outp>.txt, the summary line
+ * on stdout. 0 ok, 1 error, 2 bad path (messages printed). */
+int ftdev_write_jpeg(const char *outp, const unsigned char *jpg, size_t n,
+                     int ow, int oh, ft_space space, ft_gamut gamut,
+                     int quality, const char *text);
+/* the share tail (ft_share_finish) into outp: resize cut (rendered: linear Rec.2020) by scale (never
  * up), output sharpening, output colour, an 8-bit JPEG at outp with its
  * ICC profile and text as its comment, and text in <outp>.txt. 0 ok, 1
  * error, 2 bad path (messages printed). */
@@ -37,6 +38,8 @@ int ftdev_export(int argc, char **argv);
 int ftdev_print(int argc, char **argv);
 /* ftdev emulsions: the emulsion table */
 int ftdev_emulsions(int argc, char **argv);
+/* ftdev plan <strip.job> --size 4mp|6mp|px:frames ... (plan.c) */
+int ftdev_plan(int argc, char **argv);
 /* ftdev stock learn <roll.edit> <frame.dng>... -o <name.look> [--replace] */
 int ftdev_stock(int argc, char **argv);
 

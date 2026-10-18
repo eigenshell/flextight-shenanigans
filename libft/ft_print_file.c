@@ -82,6 +82,26 @@ static int insert(ft_print_file *pf, int index)
     return at;
 }
 
+static int rotation_ok(int deg)
+{
+    return deg == 0 || deg == 90 || deg == 180 || deg == 270;
+}
+
+static int auto_clicks(ft_cmyd k)
+{
+    return !k.c && !k.m && !k.y && !k.d;
+}
+
+/* frame i's section goes when it says nothing */
+static void drop_if_empty(ft_print_file *pf, int i)
+{
+    if (i < 0 || !auto_clicks(pf->f[i].k) || pf->f[i].rotate)
+        return;
+    memmove(&pf->f[i], &pf->f[i + 1],
+            (size_t)(pf->nframes - i - 1) * sizeof pf->f[0]);
+    pf->nframes--;
+}
+
 static int list_ids(ft_err *e, int ln, const char *v)
 {
     char ids[160];
@@ -106,7 +126,7 @@ int ft_print_file_parse(const char *text, size_t n, ft_print_file *pf,
                         ft_err *e)
 {
     const ft_emulsion *em = NULL;
-    int ln = 0, cur = -1, had_cmyd = 0, i;
+    int ln = 0, cur = -1, had_cmyd = 0, had_rot = 0, i;
     size_t at = 0;
     char line[256];
     ft_err in;
@@ -150,7 +170,7 @@ int ft_print_file_parse(const char *text, size_t n, ft_print_file *pf,
                 return ft_fail(e, "line %d: more than %d frames", ln,
                                FT_MAX_FRAMES);
             pf->f[cur].line = ln;
-            had_cmyd = 0;
+            had_cmyd = had_rot = 0;
             continue;
         }
         eq = find_char(s, '=');
@@ -168,6 +188,15 @@ int ft_print_file_parse(const char *text, size_t n, ft_print_file *pf,
             if (!em)
                 return list_ids(e, ln, val);
             memcpy(pf->emulsion, em->id, strlen(em->id) + 1);
+        } else if (strcmp(key, "rotate") == 0) {
+            int v;
+            if (had_rot)
+                return ft_fail(e, "line %d: rotate: set twice", ln);
+            if (wholes(val, 1, 270, &v) || !rotation_ok(v))
+                return ft_fail(e, "line %d: rotate: '%.40s' is not 0, 90, "
+                                  "180 or 270", ln, val);
+            pf->f[cur].rotate = v;
+            had_rot = 1;
         } else {
             int v[4];
             if (strcmp(key, "cmyd") != 0)
@@ -241,15 +270,23 @@ size_t ft_print_file_write(const ft_print_file *pf, char *buf, size_t cap)
         const ft_cmyd *k = &pf->f[i].k;
         put(&w, "\n[frame ");
         put_int(&w, pf->f[i].index);
-        put(&w, "]\ncmyd = ");
-        put_int(&w, k->c);
-        put(&w, " ");
-        put_int(&w, k->m);
-        put(&w, " ");
-        put_int(&w, k->y);
-        put(&w, " ");
-        put_int(&w, k->d);
-        put(&w, "\n");
+        put(&w, "]\n");
+        if (!auto_clicks(*k) || !pf->f[i].rotate) {
+            put(&w, "cmyd = ");
+            put_int(&w, k->c);
+            put(&w, " ");
+            put_int(&w, k->m);
+            put(&w, " ");
+            put_int(&w, k->y);
+            put(&w, " ");
+            put_int(&w, k->d);
+            put(&w, "\n");
+        }
+        if (pf->f[i].rotate) {
+            put(&w, "rotate = ");
+            put_int(&w, pf->f[i].rotate);
+            put(&w, "\n");
+        }
     }
     return w.n;
 }
@@ -273,17 +310,36 @@ int ft_print_file_set(ft_print_file *pf, int frame, ft_cmyd k, ft_err *e)
     if (ft_print_clicks_ok(em, k, e))
         return -1;
     i = find(pf, frame);
-    if (!k.c && !k.m && !k.y && !k.d) {
-        if (i >= 0) {
-            memmove(&pf->f[i], &pf->f[i + 1],
-                    (size_t)(pf->nframes - i - 1) * sizeof pf->f[0]);
-            pf->nframes--;
-        }
+    if (i < 0 && auto_clicks(k))
         return 0;
-    }
     if (i < 0 && (i = insert(pf, frame)) < 0)
         return ft_fail(e, "more than %d frames", FT_MAX_FRAMES);
     pf->f[i].k = k;
+    drop_if_empty(pf, i);
+    return 0;
+}
+
+int ft_print_file_rotation(const ft_print_file *pf, int frame)
+{
+    int i = find(pf, frame);
+    return i < 0 ? 0 : pf->f[i].rotate;
+}
+
+int ft_print_file_set_rotation(ft_print_file *pf, int frame, int deg,
+                               ft_err *e)
+{
+    int i;
+    if (frame < 0 || frame > MAX_INDEX)
+        return ft_fail(e, "frame %d (0..%d)", frame, MAX_INDEX);
+    if (!rotation_ok(deg))
+        return ft_fail(e, "rotate: %d is not 0, 90, 180 or 270", deg);
+    i = find(pf, frame);
+    if (i < 0 && !deg)
+        return 0;
+    if (i < 0 && (i = insert(pf, frame)) < 0)
+        return ft_fail(e, "more than %d frames", FT_MAX_FRAMES);
+    pf->f[i].rotate = deg;
+    drop_if_empty(pf, i);
     return 0;
 }
 

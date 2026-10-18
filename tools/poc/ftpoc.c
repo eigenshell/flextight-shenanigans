@@ -44,6 +44,7 @@
 #include "ft_plan.h"
 #include "ft_png.h"
 #include "ft_preview.h"
+#include "ft_progress.h"
 #include "ft_share.h"
 #include "ft_share_cut.h"
 #include "ft_upload.h"
@@ -471,6 +472,105 @@ static BOOL WINAPI on_ctrl(DWORD type)
         return TRUE;
     }
     return FALSE;
+}
+
+/* --progress (any position): machine-readable lines for the web server
+ * (ft_progress.h) instead of the \r line counter. Lines are counted only
+ * while a unit's own scan runs (g_pg_track), not during focus crops. */
+static int g_progress, g_pg_track, g_pg_refused;
+static long g_pg_crops;                 /* focus crops in this unit */
+static int g_pg_frame;                  /* the frame focus crops are on */
+
+static void pg_emit(const ft_progress *p)
+{
+    char buf[320];
+    if (g_progress && ft_progress_fmt(p, buf, sizeof buf) < sizeof buf) {
+        fputs(buf, stdout);
+        fflush(stdout);
+    }
+}
+
+static void pg_begin(ft_pg_kind kind, int n)
+{
+    ft_progress p;
+    memset(&p, 0, sizeof p);
+    p.type = FT_PG_BEGIN;
+    p.kind = kind;
+    p.n = n;
+    pg_emit(&p);
+}
+
+static void pg_unit(ft_pg_kind kind, int i, int label)
+{
+    ft_progress p;
+    memset(&p, 0, sizeof p);
+    p.type = FT_PG_UNIT;
+    p.kind = kind;
+    p.n = i;
+    p.label = label;
+    g_pg_crops = 0;
+    pg_emit(&p);
+}
+
+static void pg_lines(long k, long total)
+{
+    ft_progress p;
+    memset(&p, 0, sizeof p);
+    p.type = FT_PG_LINES;
+    p.k = k;
+    p.total = total;
+    pg_emit(&p);
+}
+
+static void pg_focus(long k, long off)
+{
+    ft_progress p;
+    memset(&p, 0, sizeof p);
+    p.type = FT_PG_FOCUS;
+    p.k = k;
+    p.label = g_pg_frame;
+    p.off = off;
+    pg_emit(&p);
+}
+
+static void pg_sharp(long off, double s)
+{
+    ft_progress p;
+    memset(&p, 0, sizeof p);
+    p.type = FT_PG_SHARP;
+    p.off = off;
+    p.sharp = s;
+    pg_emit(&p);
+}
+
+static void pg_focused(long off, ft_pg_how how)
+{
+    ft_progress p;
+    memset(&p, 0, sizeof p);
+    p.type = FT_PG_FOCUSED;
+    p.off = off;
+    p.how = how;
+    pg_emit(&p);
+}
+
+static void pg_file(const char *path)
+{
+    ft_progress p;
+    memset(&p, 0, sizeof p);
+    p.type = FT_PG_FILE;
+    if (strlen(path) < sizeof p.path) {
+        strcpy(p.path, path);
+        pg_emit(&p);
+    }
+}
+
+static void pg_end(ft_pg_status s)
+{
+    ft_progress p;
+    memset(&p, 0, sizeof p);
+    p.type = FT_PG_END;
+    p.status = s;
+    pg_emit(&p);
 }
 
 /* The first scan of the process holds at least this long before its
@@ -1213,8 +1313,13 @@ static long read_flood(long n, WORD blklen, FILE *f)
                 last_full = GetTickCount();
             }
             done++;
-            if (!err && kept && kept % 500 == 0 && got == blklen)
+            if (g_progress) {
+                if (g_pg_track && !err && got == blklen &&
+                    (kept % 50 == 0 || kept == n))
+                    pg_lines(kept, n);
+            } else if (!err && kept && kept % 500 == 0 && got == blklen) {
                 printf("  %ld/%ld\r", kept, n), fflush(stdout);
+            }
         }
     }
 out:
@@ -1861,9 +1966,18 @@ struct crop_req {
 
 static long crop_bin(const struct crop_req *r)
 {
+    double s;
     if (!r->bin)
         return ft_bin_for_ppi(r->ppi);
-    return ft_bin_ok(r->ppi, r->bin) ? r->bin : -1;
+    if (ft_bin_ok(r->ppi, r->bin))
+        return r->bin;
+    /* explicit positions (-p): any optics the scanner reaches, down to
+     * FT_SCALE_REACH_MIN (the curve stops at FT_SCALE_MIN) */
+    s = r->ppi * r->bin;
+    if (r->ccd >= 0 && r->bin >= 1 && 12 % r->bin == 0 &&
+        s >= FT_SCALE_REACH_MIN - 1e-6 && s <= FT_SCALE_MAX + 1e-6)
+        return r->bin;
+    return -1;
 }
 
 /* Every check crop_scan makes before it sends anything: 0 with the
@@ -2083,7 +2197,11 @@ static int focus_bracket(double ppi, double xc, double yc, double w,
                          long centre, long step, int n, int max_samples,
                          int ccd_only, long *best)
 {
-    const long lim = ccd_only ? FT_CAL_BRACKET_MAX : FT_BRACKET_MAX;
+    /* a wide bracket (low magnification: share_focus) may reach as far
+     * as it spans; every crop still goes through crop_check */
+    const long lim = ccd_only ? FT_CAL_BRACKET_MAX
+                     : (long)(n - 1) * step > FT_BRACKET_MAX
+                     ? (long)(n - 1) * step : FT_BRACKET_MAX;
     long off[FB_SAMPLES];
     double sh[FB_SAMPLES];
     int ns = 0, tries, i, k, m, dir = 0;
@@ -2136,6 +2254,7 @@ static int focus_bracket(double ppi, double xc, double yc, double w,
             q.ccd_only = ccd_only;
             q.hold = 3000;
             q.out = "fb.raw";
+            pg_focus(++g_pg_crops, o);
             rc = crop_scan(&q);
             if (rc == CROP_REFUSED) {
                 /* outside the safe CCD/lens range: unreachable, not fatal
@@ -2156,6 +2275,8 @@ static int focus_bracket(double ppi, double xc, double yc, double w,
             s = green_sharpness(t, lines, px);
             free(t);
             printf("  focus %+6ld: sharpness %.4f\n", o, s);
+            if (isfinite(s))
+                pg_sharp(o, s);
             /* insert sorted by offset */
             for (k = ns; k > 0 && off[k - 1] > o; k--) {
                 off[k] = off[k - 1];
@@ -2457,6 +2578,7 @@ static int focus_point(const float *t, int lines, int px, const ft_axes *ax,
                        double ppi, const ft_job_frame *fr, long *off)
 {
     double score, x0, x1, yc = textured_band(t, lines, px, ax, fr, &score);
+    int rc;
     if (!(score >= TEXTURE_MIN)) {
         printf("frame %d: no texture for focus\n", fr->index);
         return FB_NO_PEAK;
@@ -2467,8 +2589,11 @@ static int focus_point(const float *t, int lines, int px, const ft_axes *ax,
     }
     printf("focus check, frame %d at %.1f mm (%.1f..%.1f mm across)\n",
            fr->index, yc, x0, x1);
-    return focus_bracket(ppi, (x0 + x1) / 2, yc, x1 - x0, 0, 500, FOCUS_N,
-                         FB_FRAME_SAMPLES, 0, off);
+    g_pg_frame = fr->index;
+    rc = focus_bracket(ppi, (x0 + x1) / 2, yc, x1 - x0, 0, 500, FOCUS_N,
+                       FB_FRAME_SAMPLES, 0, off);
+    g_pg_frame = 0;
+    return rc;
 }
 
 /* 3-point focus check on the first, middle and last whole frame; a point
@@ -2577,10 +2702,11 @@ static int detail_plan(const float *t, int lines, int px, const ft_axes *ax,
                        double ppi, const char *select, ft_job *j);
 
 /* frames --share: pick the frames, price every bin (ft_share.h), keep
- * the most light, write the plan into the job. Focus: the curve as is
- * (offset 0). The share optics have the deepest depth of field, and the
- * 3-point check would bracket at another magnification (the fastest bin
- * at the job's ppi). -1 on a bad selection (message printed). */
+ * the most light, write the plan into the job. Focus: per-frame, which a
+ * share job's scan --job takes as one bracket on the first window, at
+ * its own optics, carried to the rest (no 3-point check here: it would bracket at
+ * another magnification, the fastest bin at the job's ppi). -1 on a bad
+ * selection (message printed). */
 static int plan_share(ft_job *j, const ft_holder *h, double share, int hf,
                       const char *select)
 {
@@ -2604,7 +2730,7 @@ static int plan_share(ft_job *j, const ft_holder *h, double share, int hf,
     }
     k = ft_share_pick_max_dmax(c, nc);
     ft_share_apply(j, sel, n, &o, &c[k]);
-    j->focus = FT_FOCUS_SHIFTED;
+    j->focus = FT_FOCUS_PER_FRAME;
     j->focus_offset = 0;
     printf("\n share: %g px on each frame's long side%s, %d frame(s)\n"
            "   bin   ppi  optics win    scan   focus   total  light  Dmax~\n",
@@ -2623,8 +2749,8 @@ static int plan_share(ft_job *j, const ft_holder *h, double share, int hf,
                    x->last - x->first + 1);
         printf(", %.1f..%.1f mm\n", x->y0, x->y0 + x->len);
     }
-    printf(" focus: the curve as is (offset 0); share optics need no "
-           "bracket\n");
+    printf(" focus: scan --job brackets the first window, the rest carry "
+           "its offset (focus = shifted: none)\n");
     return 0;
 }
 
@@ -2800,7 +2926,12 @@ static int cmd_frames(int argc, char **argv)
 
     g_lamp = 255;                    /* the lamp level persists: set it */
     /* the preview is the run's first scan: it holds g_first_hold (-h) */
-    if (preview_scan(pm, 0, g_first_hold, raw))
+    pg_begin(FT_PG_PREVIEW, 1);
+    pg_unit(FT_PG_PREVIEW, 1, 1);
+    g_pg_track = 1;
+    rc = preview_scan(pm, 0, g_first_hold, raw);
+    g_pg_track = 0;
+    if (rc)
         return 1;
     if (pm->bin == 12) {
         /* the axes below assume SCAN_WIN's geometry: 666 px from pixel 2 */
@@ -2886,9 +3017,12 @@ static int cmd_frames(int argc, char **argv)
         free(t);
         return 1;
     }
+    pg_file(path);
     snprintf(path, sizeof path, "%s.png", base);
     rc = write_strip_png(path, t, lines, px, &ax, &j);
     free(t);
+    if (!rc)
+        pg_file(path);
     print_job(&j);
     if (!(share > 0))
         print_options(&j);
@@ -3304,6 +3438,7 @@ static int scan_detail(ft_job *j, const char *path, const char *jobbase,
         npass++;
         if (crop_check(&q, &ccd, &optic)) {
             printf("pass %d: REFUSED (reason above); nothing scanned\n", p);
+            g_pg_refused = 1;
             return 1;
         }
         need += detail_bytes(j, p, &ds);
@@ -3333,6 +3468,8 @@ static int scan_detail(ft_job *j, const char *path, const char *jobbase,
 
     ft_image_init(&meta);
     g_lamp = 255;
+    pg_begin(FT_PG_PASS, npass);
+    npass = 0;                          /* now: passes started */
     for (p = 1; p <= maxp && !g_abort; p++) {
         struct crop_req q;
         ft_dscan ds;
@@ -3393,9 +3530,12 @@ static int scan_detail(ft_job *j, const char *path, const char *jobbase,
                q.y + q.h, ft_scan_seconds(q.ppi, 1, q.h), q.focus_offset);
         g_detail = &run;
         t0 = ring_ms();
+        pg_unit(FT_PG_PASS, ++npass, p);
+        g_pg_track = 1;
         rc = synth_scan("detail", "detailed-scan pass", q.ppi, 1, ds.x_out,
                         ds.y_line, ds.px, ds.lines, ccd, optic, 0, q.hold,
                         out);
+        g_pg_track = 0;
         g_detail = NULL;
         if (run.d) {
             ring_end(run.r);
@@ -3444,6 +3584,8 @@ static int scan_detail(ft_job *j, const char *path, const char *jobbase,
                 j->f[i].done = 1;
         if (save_job(path, j))
             return 1;
+        for (i = 0; i < res.nframes; i++)
+            pg_file(res.f[i].path);
     }
     if (g_abort) {
         save_job(path, j);
@@ -3494,6 +3636,66 @@ static int share_request(const ft_job *j, const ft_holder *h, int g,
     return 0;
 }
 
+#define SHARE_FOCUS_TRIES 2  /* frames of a window tried for a peak */
+
+/* The 95 % depth of field in tandem steps at an optical scale and bin
+ * (ft_lens_dof95: ~980 (1+m)/m^2 x bin, focus survey 2026-10-15/16,
+ * RESULTS.md 4: 636 at 6300, 3651 at 2000, 5653 at 1500, bin 1). */
+static double focus_dof95(double scale, int bin)
+{
+    return ft_lens_dof95(&g_lens, scale, bin);
+}
+
+/* A share bracket's step: half the depth of field (5 crops span +-1
+ * DOF95, so the peak stands out of the 3 % flat cut-off), never under
+ * the 500 the high-magnification brackets use. ~2200 at 1705 bin 1. */
+static long share_focus_step(double scale, int bin)
+{
+    long st = (long)(focus_dof95(scale, bin) / 2 / 50 + 0.5) * 50;
+    return st > 500 ? st : 500;
+}
+
+/* A share window's focus: a bracket of n crops at the window's own
+ * optics (q: its ppi, bin and reach across), share_focus_step apart, on
+ * the centre band of its first included frame, the next one if that
+ * gives no peak, centred on centre. 0 with *off, FB_NO_PEAK (no frame
+ * gave one), -1 on a scan or file failure. */
+static int share_focus(const ft_job *j, int g, const struct crop_req *q,
+                       long centre, int n, long *off)
+{
+    double a = q->x + FOCUS_X_MARGIN, b = q->x + q->w - FOCUS_X_MARGIN;
+    long step = share_focus_step(q->ppi * q->bin, q->bin);
+    int i, tried = 0, rc = FB_NO_PEAK, keep = g_focus_bin;
+    g_focus_bin = q->bin;
+    for (i = 0; i < j->nframes && tried < SHARE_FOCUS_TRIES; i++) {
+        const ft_job_frame *fr = &j->f[i];
+        double lo, hi;
+        if (!fr->include || fr->group != g)
+            continue;
+        lo = fr->x0 > a ? fr->x0 : a;
+        hi = fr->x0 + fr->width < b ? fr->x0 + fr->width : b;
+        if (!(hi - lo >= FOCUS_W_MIN)) {
+            printf("frame %d: outside the area a focus crop can scan\n",
+                   fr->index);
+            continue;
+        }
+        tried++;
+        printf("focus, window %d: frame %d at %.1f mm (%.1f..%.1f mm "
+               "across), %g ppi, bin %d, %d crops %ld apart\n", g,
+               fr->index, fr->y0 + fr->len / 2, lo, hi, q->ppi, q->bin, n,
+               step);
+        g_pg_frame = fr->index;
+        rc = focus_bracket(q->ppi, (lo + hi) / 2, fr->y0 + fr->len / 2,
+                           hi - lo, centre, step, n, FB_FRAME_SAMPLES, 0,
+                           off);
+        g_pg_frame = 0;
+        if (rc != FB_NO_PEAK)
+            break;
+    }
+    g_focus_bin = keep;
+    return rc;
+}
+
 static int group_todo(const ft_job *j, int g)
 {
     int i;
@@ -3506,12 +3708,20 @@ static int group_todo(const ft_job *j, int g)
 /* scan --job of a share job: one scan per group not yet done, every
  * window checked (crop_check) before the scanner does anything. Output
  * <jobbase>_winNN.raw; its .txt gets the share keys (ft_share_cut.h) for
- * ftdev cut. A window's frames are marked done together. */
+ * ftdev cut. A window's frames are marked done together.
+ * Focus (focus = per-frame): a tandem offset moves the film-side focus
+ * plane, the same at any scale, so one measured window serves the rest:
+ * a full bracket until one finds a peak (centred on any offset the job
+ * kept, e.g. from a stopped run), then the curve with that offset and no
+ * crops, except a 3-crop check where the window's scale is above
+ * FT_SHARE_FOCUS_RECHECK x the measured one (less depth of field). */
 static int scan_share(ft_job *j, const char *path, const char *jobbase,
                       const ft_holder *h)
 {
     char ref[FT_MAX_FRAMES + 1];
     int g, ng = 0, i, nref = 0, ntodo = 0, nscan = 0;
+    long centre = j->focus_offset;      /* the next bracket's centre */
+    double mscale = 0;                  /* scale measured at; 0: none yet */
 
     for (i = 0; i < j->nframes; i++)
         if (j->f[i].include && j->f[i].group > ng)
@@ -3527,11 +3737,16 @@ static int scan_share(ft_job *j, const char *path, const char *jobbase,
                    g);
             ref[g] = 1;
             nref++;
+            g_pg_refused = 1;
         } else {
             ntodo++;
         }
     }
+    for (i = 0; i < j->nframes; i++)    /* an offset a stopped run kept */
+        if (j->f[i].include && j->f[i].focus_offset)
+            centre = j->f[i].focus_offset;
     printf("%s: share job, %d window(s) to scan\n", path, ntodo);
+    pg_begin(FT_PG_WINDOW, ntodo);
     g_lamp = 255;                       /* the lamp level persists: set it */
     for (g = 1; g <= ng && !g_abort; g++) {
         struct crop_req q;
@@ -3543,14 +3758,69 @@ static int scan_share(ft_job *j, const char *path, const char *jobbase,
         share_request(j, h, g, &q);
         snprintf(out, sizeof out, "%s_win%02d.raw", jobbase, g);
         q.out = out;
-        printf("\n=== window %d: %.1f..%.1f mm, %g ppi, bin %d (~%.0f s)\n",
-               g, q.y, q.y + q.h, q.ppi, q.bin,
-               ft_scan_seconds(q.ppi, q.bin, q.h));
+        pg_unit(FT_PG_WINDOW, nscan + 1, g);
+        if (j->focus == FT_FOCUS_PER_FRAME) {
+            double scale = q.ppi * q.bin;
+            long off = 0;
+            ft_pg_how how;
+            if (mscale > 0 && scale <= mscale * FT_SHARE_FOCUS_RECHECK) {
+                printf("\n=== window %d: focus offset %ld carried (measured "
+                       "at scale %g, this is %g): no crops\n", g, centre,
+                       mscale, scale);
+                rc = 0;
+                off = centre;
+                how = FT_PG_CARRIED;
+            } else {
+                int check = mscale > 0;
+                if (check)
+                    printf("\n=== window %d: focus check, scale %g above "
+                           "%g x the measured %g\n", g, scale,
+                           FT_SHARE_FOCUS_RECHECK, mscale);
+                else
+                    printf("\n=== window %d: focus\n", g);
+                rc = share_focus(j, g, &q, centre, check ? 3 : FOCUS_N,
+                                 &off);
+                if (rc < 0) {
+                    save_job(path, j);
+                    printf("%s; stopped (finished windows are marked done "
+                           "in %s)\n", g_abort ? "interrupted"
+                                               : "focus crop failed", path);
+                    return 1;
+                }
+                how = check ? FT_PG_CHECKED : FT_PG_MEASURED;
+                if (rc == FB_NO_PEAK && check) {
+                    printf("window %d: no peak in the check; offset %ld "
+                           "carried\n", g, centre);
+                    off = centre;
+                    how = FT_PG_CARRIED;
+                } else if (rc == FB_NO_PEAK) {
+                    printf("WARNING: window %d: no usable focus peak; using "
+                           "offset %ld\n", g, centre);
+                    off = centre;
+                    how = FT_PG_NONE;
+                } else {
+                    mscale = scale;
+                }
+            }
+            centre = off;
+            if (how != FT_PG_NONE)
+                for (i = 0; i < j->nframes; i++)
+                    if (j->f[i].include && j->f[i].group == g)
+                        j->f[i].focus_offset = off;
+            pg_focused(off, how);
+            q.focus_offset = off;
+        }
+        printf("\n=== window %d: %.1f..%.1f mm, %g ppi, bin %d (~%.0f s), "
+               "focus offset %ld\n", g, q.y, q.y + q.h, q.ppi, q.bin,
+               ft_scan_seconds(q.ppi, q.bin, q.h), q.focus_offset);
+        g_pg_track = 1;
         rc = crop_scan(&q);
+        g_pg_track = 0;
         if (rc == CROP_REFUSED) {
             printf("window %d: REFUSED (reason above); not scanned\n", g);
             ref[g] = 1;
             nref++;
+            g_pg_refused = 1;
             continue;
         }
         if (rc) {
@@ -3576,6 +3846,8 @@ static int scan_share(ft_job *j, const char *path, const char *jobbase,
                 j->f[i].done = 1;
         if (save_job(path, j))
             return 1;
+        if (m)                          /* the window, its share keys too */
+            pg_file(out);
         printf("next: ftdev cut %s\n", out);
     }
     for (g = 1, i = 0; g <= ng; g++)
@@ -3682,10 +3954,12 @@ static int cmd_scanjob(int argc, char **argv)
                    fr->index);
             ref[i] = 1;
             nref++;
+            g_pg_refused = 1;
         } else {
             ntodo++;
         }
     }
+    pg_begin(FT_PG_FRAME, ntodo);
     printf("%s: %d frame(s) to scan%s", path, ntodo,
            nref ? ", refused:" : "\n");
     for (i = 0; nref && i < j.nframes; i++)
@@ -3704,6 +3978,7 @@ static int cmd_scanjob(int argc, char **argv)
 
         if (!fr->include || fr->done || ref[i])
             continue;
+        pg_unit(FT_PG_FRAME, nscan + 1, fr->index);
         if (j.focus == FT_FOCUS_PER_FRAME) {
             long base = frame_focus_base(&j, fr);
             double lo, hi;
@@ -3713,9 +3988,11 @@ static int cmd_scanjob(int argc, char **argv)
                        fr->index);
                 rc = FB_NO_PEAK;
             } else {
+                g_pg_frame = fr->index;
                 rc = focus_bracket(fr->ppi, (lo + hi) / 2, fr->y0 + fr->len / 2,
                                    hi - lo, base, 500, FOCUS_N,
                                    FB_FRAME_SAMPLES, 0, &off);
+                g_pg_frame = 0;
             }
             if (rc < 0) {
                 save_job(path, &j);
@@ -3728,8 +4005,10 @@ static int cmd_scanjob(int argc, char **argv)
                 printf("WARNING: frame %d: no usable focus peak; using "
                        "offset %ld\n", fr->index, base);
                 off = base;
+                pg_focused(off, FT_PG_NONE);
             } else {
                 fr->focus_offset = off;
+                pg_focused(off, FT_PG_MEASURED);
             }
         }
         job_window(fr, h, off, &q);
@@ -3739,12 +4018,15 @@ static int cmd_scanjob(int argc, char **argv)
                "%ld\n", fr->index, type_name(fr->type), fr->ppi,
                ft_job_bin(fr), ft_scan_seconds(fr->ppi, ft_job_bin(fr), q.h),
                off);
+        g_pg_track = 1;
         rc = crop_scan(&q);
+        g_pg_track = 0;
         if (rc == CROP_REFUSED) {
             printf("frame %d: REFUSED (reason above); not scanned, left "
                    "not done\n", fr->index);
             ref[i] = 1;
             nref++;
+            g_pg_refused = 1;
             continue;
         }
         if (rc) {
@@ -3759,6 +4041,7 @@ static int cmd_scanjob(int argc, char **argv)
         fr->done = 1;
         if (save_job(path, &j))
             return 1;
+        pg_file(out);
     }
     for (i = left = 0; i < j.nframes; i++)
         left += j.f[i].include && !j.f[i].done && !ref[i];
@@ -4019,8 +4302,16 @@ static int scan_args(int argc, char **argv)
 int main(int argc, char **argv)
 {
     const char *cmd;
-    int rc = 0;
+    int rc = 0, i, k;
 
+    /* --progress anywhere: taken out before the commands parse argv */
+    for (i = k = 1; i < argc; i++)
+        if (strcmp(argv[i], "--progress") == 0)
+            g_progress = 1;
+        else
+            argv[k++] = argv[i];
+    argc = k;
+    argv[argc] = NULL;
     load_lens();
     if (argc < 2) {
         fprintf(stderr,
@@ -4092,6 +4383,9 @@ int main(int argc, char **argv)
             "                     memory read, idle only; everything else is\n"
             "                     refused (README: Maintenance writes)\n"
             "  upload <file>      MICROCOD.3XX upload (loader mode only!)\n"
+            "  --progress         (frames, scan) machine-readable progress lines\n"
+            "                     for the web server: progress begin|unit|lines|\n"
+            "                     file|end ... (libft/ft_progress.h)\n"
             "\n"
             "CLOSE FlexColor first. Motion is slow and clamped. The first scan of a\n"
             "run holds at least 10 s, except that frames, scan --job and\n"
@@ -4163,6 +4457,9 @@ int main(int argc, char **argv)
         }
     }
 
+    if (strcmp(cmd, "frames") == 0 || strcmp(cmd, "scan") == 0)
+        pg_end(rc == 0 ? FT_PG_OK : g_abort ? FT_PG_STOPPED
+               : g_pg_refused ? FT_PG_REFUSED : FT_PG_FAILED);
     if (g_dev != INVALID_HANDLE_VALUE)
         CloseHandle(g_dev);
     return rc;

@@ -257,6 +257,39 @@ int main(void)
         a.has_noise = 0;
     }
     CHECK(strstr(e.msg, "no_such_file") != NULL);
+    /* ft_dng_as_stored is the write + read round trip, exactly: pixels
+     * (edges, out of range), ppi over 1000, a usable noise profile */
+    {
+        ft_image s, r;
+        int x;
+        ft_image_init(&s);
+        ft_image_init(&r);
+        CHECK(ft_image_alloc(&s, 37, 23, &e) == 0);
+        for (x = 0; x < 37 * 23 * 3; x++)
+            s.rgb[x] = (float)((x * 7919 % 10007) / 9000.0 - 0.05);
+        s.rgb[0] = 0.5f / 65535.0f;
+        s.rgb[1] = 1.0f - 0.4f / 65535.0f;
+        s.ppi = 2449.87654321;
+        s.has_noise = 1;
+        for (x = 0; x < 6; x++)
+            s.noise[x] = 1.234567891e-5 * (x + 1);
+        CHECK(ft_dng_write(path, &s, &e) == 0);
+        CHECK(ft_dng_read(path, &r, &e) == 0);
+        ft_dng_as_stored(&s);
+        CHECK(memcmp(s.rgb, r.rgb, sizeof(float) * 37 * 23 * 3) == 0);
+        CHECK(s.ppi == r.ppi && s.ppi != 2449.87654321);
+        CHECK(s.has_noise && r.has_noise &&
+              memcmp(s.noise, r.noise, sizeof s.noise) == 0);
+        s.noise[3] = 0;                 /* unusable: dropped by both */
+        CHECK(ft_dng_write(path, &s, &e) == 0);
+        ft_image_free(&r);
+        ft_image_init(&r);
+        CHECK(ft_dng_read(path, &r, &e) == 0);
+        ft_dng_as_stored(&s);
+        CHECK(!s.has_noise && !r.has_noise);
+        ft_image_free(&s);
+        ft_image_free(&r);
+    }
     free(buf);
     free(bad);
     ft_image_free(&a);

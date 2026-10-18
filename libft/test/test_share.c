@@ -97,8 +97,9 @@ int main(void)
     CHECK_NEAR(est.scan_s, 10 + (40 / 25.4 * 1500 + 250) * 7992 / 84000.0,
                1e-9);
     CHECK_NEAR(est.scan_s, 258.5, 0.1);
-    CHECK(est.focus_s == 0);                    /* 1500 optics: strip focus */
-    CHECK_NEAR(est.seconds, est.scan_s, 1e-12);
+    /* one window: one focus bracket */
+    CHECK_NEAR(est.focus_s, FT_SHARE_FOCUS_CROPS * FT_FOCUS_SAMPLE_S, 1e-12);
+    CHECK_NEAR(est.seconds, est.scan_s + est.focus_s, 1e-12);
     CHECK_NEAR(est.light, ft_light_rel(&ft_lens_default, 1500), 1e-12);
     CHECK_NEAR(est.dmax, ft_dmax_est(est.light), 1e-12);
     /* window clipped to the holder at the strip start */
@@ -117,6 +118,9 @@ int main(void)
         CHECK(ft_share_estimate(sel, n, &o, 1500, 1, &ft_lens_default,
                                 &est, &e) == 0);
         CHECK(est.nwin == 3);
+        /* one focus bracket for the strip: windows 2 and 3 carry it */
+        CHECK_NEAR(est.focus_s, FT_SHARE_FOCUS_CROPS * FT_FOCUS_SAMPLE_S,
+                   1e-12);
         CHECK(sel[est.win[0].first].index == 1 &&
               sel[est.win[0].last].index == 1);
         CHECK(sel[est.win[1].first].index == 3 &&
@@ -171,8 +175,10 @@ int main(void)
         CHECK(ok);                              /* a bin ft_plan accepts */
         CHECK(i == 0 || c[i].dmax >= c[i - 1].dmax);   /* less magnif. */
     }
-    CHECK(c[0].focus_s > 0 && c[3].focus_s == 0);      /* 5648 vs 1500 */
-    CHECK_NEAR(c[0].focus_s, 6 * FT_FOCUS_SAMPLES * FT_FOCUS_SAMPLE_S, 1e-9);
+    for (i = 0; i < n; i++) {   /* one bracket a strip: later windows carry it */
+        CHECK_NEAR(c[i].focus_s, FT_SHARE_FOCUS_CROPS * FT_FOCUS_SAMPLE_S,
+                   1e-9);
+    }
     CHECK(c[0].scan_s < c[3].scan_s);           /* larger bin is faster */
     k = ft_share_pick_max_dmax(c, n);
     CHECK(c[k].bin == 1 && c[k].ppi == 1500);
@@ -268,6 +274,82 @@ int main(void)
         }
         CHECK(ft_share_group_window(&j, 4, &o, &y0, &len) == -1);
         o.hf_half_res = 0;
+
+        /* sizes per frame (the web page): one size is the plan above */
+        {
+            static ft_job s;
+            double tg[FT_MAX_FRAMES];
+            memset(&s, 0, sizeof s);
+            strcpy(s.holder, "24x217");
+            s.nframes = 12;
+            for (i = 0; i < 12; i++) {
+                s.f[i].index = i + 1;
+                s.f[i].type = FT_FRAME_HALF;
+                s.f[i].include = 1;
+                s.f[i].ppi = 2000;
+                s.f[i].y0 = 3 + 19.0 * i;
+                s.f[i].len = 18;
+                s.f[i].x0 = 4;
+                s.f[i].width = 24;
+                tg[i] = i == 1 || i == 6 ? 0 : 2000;
+            }
+            s.focus = FT_FOCUS_SHIFTED;
+            s.focus_offset = 700;
+            CHECK(ft_share_plan_sizes(&s, tg, 1, &ft_lens_default,
+                                      o.scan_len_mm, &e) == 3);
+            CHECK(s.share == j.share && s.hf_half_res == j.hf_half_res);
+            CHECK(s.focus == FT_FOCUS_PER_FRAME && s.focus_offset == 0);
+            for (i = 0; i < 12; i++)
+                CHECK(s.f[i].include == j.f[i].include &&
+                      s.f[i].group == j.f[i].group &&
+                      s.f[i].ppi == j.f[i].ppi && s.f[i].bin == j.f[i].bin &&
+                      s.f[i].share_px == 0);
+
+            /* mixed, on full frames: 1-2 4MP, 3 6MP, 4 skipped, 5 4MP */
+            s.nframes = 5;                          /* 5 full frames fit */
+            for (i = 0; i < 5; i++) {
+                s.f[i].type = FT_FRAME_FULL;
+                s.f[i].len = 36;
+                s.f[i].y0 = 4 + 38.0 * i;
+            }
+            tg[0] = tg[1] = FT_SHARE_4MP;
+            tg[2] = FT_SHARE_6MP;
+            tg[3] = 0;                              /* skipped */
+            tg[4] = FT_SHARE_4MP;
+            n = ft_share_plan_sizes(&s, tg, 0, &ft_lens_default,
+                                    o.scan_len_mm, &e);
+            CHECK(n >= 3);
+            CHECK(s.share == FT_SHARE_4MP && s.hf_half_res == 0);
+            CHECK(s.f[0].share_px == 0 && s.f[1].share_px == 0 &&
+                  s.f[2].share_px == FT_SHARE_6MP && s.f[4].share_px == 0);
+            CHECK(!s.f[3].include && s.f[3].group == 0 &&
+                  s.f[3].share_px == 0);
+            /* runs never share a window; groups follow the strip */
+            CHECK(s.f[0].group >= 1 && s.f[1].group >= s.f[0].group);
+            CHECK(s.f[2].group > s.f[1].group && s.f[4].group > s.f[2].group);
+            CHECK(s.f[2].ppi > s.f[0].ppi);
+            CHECK(ft_job_share_px(&s, &s.f[2]) == FT_SHARE_6MP);
+            CHECK(ft_job_share_px(&s, &s.f[4]) == FT_SHARE_4MP);
+            CHECK(ft_job_validate(&s, &ft_lens_default, &e) == 0);
+            /* the smallest size is the strip's share */
+            tg[0] = tg[1] = tg[4] = FT_SHARE_6MP;
+            tg[2] = FT_SHARE_4MP;
+            CHECK(ft_share_plan_sizes(&s, tg, 0, &ft_lens_default,
+                                      o.scan_len_mm, &e) >= 3);
+            CHECK(s.share == FT_SHARE_4MP && s.f[2].share_px == 0 &&
+                  s.f[0].share_px == FT_SHARE_6MP);
+            /* refusals */
+            for (i = 0; i < 5; i++)
+                tg[i] = 0;
+            CHECK(ft_share_plan_sizes(&s, tg, 0, &ft_lens_default,
+                                      o.scan_len_mm, &e) == -1);
+            CHECK(strcmp(e.msg, "share: no frames selected") == 0);
+            tg[1] = 50;
+            CHECK(ft_share_plan_sizes(&s, tg, 0, &ft_lens_default,
+                                      o.scan_len_mm, &e) == -1);
+            CHECK(strcmp(e.msg, "share: frame 2: 50 px is out of range "
+                                "(100..20000)") == 0);
+        }
     }
     /* refusals */
     strip(2, FT_FRAME_FULL, 4, 36, 38);

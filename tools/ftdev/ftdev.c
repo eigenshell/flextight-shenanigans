@@ -113,6 +113,8 @@ static void usage(void)
                     "[--cmyd c,m,y,d] | --roll <roll.print>\n"
                     "             [--job <file.job>]) [-o out.jpg]\n"
                     "       ftdev emulsions\n"
+                    "       ftdev plan <strip.job> --size 4mp|6mp|px:frames "
+                    "... [-o out.job]\n"
                     "formats (default dng):\n");
     for (w = ft_writers(); w->name; w++)
         fprintf(stderr, "  %-8s %s\n", w->name, w->what);
@@ -152,6 +154,8 @@ int main(int argc, char **argv)
         return ftdev_print(argc - 2, argv + 2);
     if (argc > 1 && strcmp(argv[1], "emulsions") == 0)
         return ftdev_emulsions(argc - 2, argv + 2);
+    if (argc > 1 && strcmp(argv[1], "plan") == 0)
+        return ftdev_plan(argc - 2, argv + 2);
     ft_image_init(&im);
     rflags_init(&rf);
     for (i = 1; i < argc; i++) {

@@ -1,14 +1,17 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /* <roll>.print, next to the job file: the roll's emulsion and each
- * frame's C/M/Y/D clicks (ft_print.h). What the web UI and ftdev print
- * read and write; nothing else about a print is stored.
+ * frame's C/M/Y/D clicks (ft_print.h) and turn. What the web UI and
+ * ftdev print read and write; nothing else about a print is stored.
  *
  *   emulsion = generic-neg
  *   [frame 3]
  *   cmyd = 0 2 0 -1
+ *   rotate = 90
  *
  * emulsion comes first, before any [frame N]. A frame without a section
- * prints at auto (0 0 0 0). Syntax as the job
+ * prints at auto (0 0 0 0), as scanned; rotate (degrees clockwise: 90,
+ * 180, 270; 0 = as scanned) turns the print. The writer leaves out
+ * cmyd = 0 0 0 0 beside a rotate and rotate = 0 always. Syntax as the job
  * file: '#' starts a comment. The writer is byte-stable (parse -> write
  * -> parse -> write gives the same bytes) and sorts frames by number.
  * Pure C99 (buffers only): runs in the browser too. */
@@ -24,6 +27,7 @@ typedef struct {
     int index;                      /* the job's frame number, 0..9999 */
     int line;                       /* where [frame N] was read; 0 = set */
     ft_cmyd k;
+    int rotate;                     /* degrees clockwise: 0 90 180 270 */
 } ft_print_file_frame;
 
 typedef struct {
@@ -46,6 +50,13 @@ ft_cmyd ft_print_file_clicks(const ft_print_file *pf, int frame);
 /* set a frame's clicks (all 0: its section goes); -1 with e filled on bad
  * clicks for the emulsion, a bad frame number or too many frames */
 int ft_print_file_set(ft_print_file *pf, int frame, ft_cmyd k, ft_err *e);
+/* the frame's turn, degrees clockwise (0 without a section) */
+int ft_print_file_rotation(const ft_print_file *pf, int frame);
+/* set a frame's turn (0 90 180 270; a frame at 0 with auto clicks loses
+ * its section); -1 with e filled on another angle, a bad frame number or
+ * too many frames */
+int ft_print_file_set_rotation(ft_print_file *pf, int frame, int deg,
+                               ft_err *e);
 /* the [frame N] sections whose N is not in frames[0..n): their count,
  * and with any, a warning in w: "[frame 7] is not in the job: ignored"
  * ("[frame 7] and 2 more are ...") */

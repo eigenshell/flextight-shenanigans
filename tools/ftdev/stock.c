@@ -70,7 +70,7 @@ static int measure(const char *dng, double ratio[3])
                         "negatives\n", dng);
         return 2;
     }
-    if (ft_dng_read(dng, &im, &e) || ftdev_crop(&im, sc.box, &cut, &e)) {
+    if (ft_dng_read(dng, &im, &e) || ft_image_crop(&im, sc.box, &cut, &e)) {
         fprintf(stderr, "ftdev: %s: %s\n", dng, e.msg);
         goto out;
     }

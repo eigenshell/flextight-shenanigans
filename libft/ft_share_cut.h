@@ -99,6 +99,12 @@ typedef struct {
     double noise[6];
 } ft_share_sidecar;
 
+/* the sidecar text into buf (snprintf's contract: the full length back,
+ * at most cap - 1 bytes and a NUL written; buf may be NULL with cap 0) */
+int ft_share_sidecar_write_buf(char *buf, size_t cap,
+                               const ft_share_meta *m,
+                               const ft_share_cut_frame *c);
+/* the same into a stream (ft_share_cut_io.c, as ft_share_meta_write) */
 int ft_share_sidecar_write(FILE *out, const ft_share_meta *m,
                            const ft_share_cut_frame *c);
 /* -1 with e naming the key if box or export_scale is missing or bad, or

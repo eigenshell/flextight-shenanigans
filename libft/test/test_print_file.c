@@ -110,7 +110,59 @@ int main(void)
         CHECK(strcmp(e.msg, "untouched") == 0);
     }
 
+    /* rotate: its own line, no cmyd = 0 0 0 0 beside it; a section
+     * stays while it says anything */
+    {
+        static const char *ROT =
+            "emulsion = generic-neg\n"
+            "\n"
+            "[frame 2]\n"
+            "rotate = 90\n"
+            "\n"
+            "[frame 5]\n"
+            "cmyd = 1 0 0 0\n"
+            "rotate = 270\n";
+        CHECK(parse("emulsion = generic-neg\n[frame 5]\nrotate = 270\n"
+                    "cmyd = 1 0 0 0\n[frame 2]\ncmyd = 0 0 0 0\n"
+                    "rotate = 90\n", &e) == 0);
+        CHECK(ft_print_file_rotation(&pf, 2) == 90 &&
+              ft_print_file_rotation(&pf, 5) == 270 &&
+              ft_print_file_rotation(&pf, 3) == 0);
+        n = ft_print_file_write(&pf, buf, sizeof buf);
+        CHECK(strcmp(buf, ROT) == 0);
+        CHECK(ft_print_file_parse(buf, n, &pf2, &e) == 0);
+        CHECK(ft_print_file_write(&pf2, buf2, sizeof buf2) == n &&
+              strcmp(buf, buf2) == 0);
+        /* clicks back to auto keep a turned frame's section */
+        CHECK(ft_print_file_set(&pf, 5, (ft_cmyd){ 0, 0, 0, 0 }, &e) == 0);
+        CHECK(pf.nframes == 2 && ft_print_file_rotation(&pf, 5) == 270);
+        /* and the turn back to 0 drops it */
+        CHECK(ft_print_file_set_rotation(&pf, 5, 0, &e) == 0);
+        CHECK(pf.nframes == 1 && pf.f[0].index == 2);
+        CHECK(ft_print_file_set_rotation(&pf, 8, 0, &e) == 0);
+        CHECK(pf.nframes == 1);                 /* nothing to say: none */
+        CHECK(ft_print_file_set_rotation(&pf, 8, 180, &e) == 0);
+        CHECK(pf.nframes == 2 && pf.f[1].index == 8 &&
+              ft_print_file_clicks(&pf, 8).d == 0);
+        CHECK(ft_print_file_set_rotation(&pf, 8, 45, &e) == -1);
+        CHECK(strcmp(e.msg, "rotate: 45 is not 0, 90, 180 or 270") == 0);
+        CHECK(ft_print_file_set_rotation(&pf, -1, 90, &e) == -1);
+        CHECK(strcmp(e.msg, "frame -1 (0..9999)") == 0);
+        /* rotate = 0 is never written */
+        CHECK(parse("emulsion = generic-neg\n[frame 1]\nrotate = 0\n",
+                    &e) == 0);
+        ft_print_file_write(&pf, buf, sizeof buf);
+        CHECK(strcmp(buf, "emulsion = generic-neg\n\n[frame 1]\n"
+                          "cmyd = 0 0 0 0\n") == 0);
+    }
+
     /* every error, pinned */
+    fails("emulsion = generic-neg\n[frame 2]\nrotate = 45\n",
+          "line 3: rotate: '45' is not 0, 90, 180 or 270");
+    fails("emulsion = generic-neg\n[frame 2]\nrotate = -90\n",
+          "line 3: rotate: '-90' is not 0, 90, 180 or 270");
+    fails("emulsion = generic-neg\n[frame 2]\nrotate = 90\nrotate = 90\n",
+          "line 4: rotate: set twice");
     fails("[frame 1]\ncmyd = 0 0 0 1\n",
           "emulsion: missing (emulsion = <id>)");
     fails("emulsion = portra400\n",

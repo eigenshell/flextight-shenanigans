@@ -23,6 +23,9 @@ typedef struct {
     int pass;                     /* detailed scan: its pass (1..), 0 none */
     int group;                    /* share job: the window it scans in
                                      (1..); 0 = not in a share job */
+    double share_px;              /* share job: this frame's target, px
+                                     on its long side; 0 = the strip's
+                                     share. One target per group */
 } ft_job_frame;
 
 /* Detailed scans (sub-project 2b): what the passes write */
@@ -58,11 +61,23 @@ typedef struct {
     ft_job_frame f[FT_MAX_FRAMES];
 } ft_job;
 
+/* j -> text in buf (NUL-terminated if cap > 0); returns the length the
+ * whole text needs, without the NUL: >= cap means truncated. FT_JOB_BAD
+ * (nothing written) when a frame type or a detail setting is out of
+ * range. */
+#define FT_JOB_BAD ((size_t)-1)
+size_t ft_job_write_buf(const ft_job *j, char *buf, size_t cap);
+/* text[0..n) -> j (no NUL needed); errors name the line: "line 3:
+ * unknown key bogus". -1 with e filled. */
+int ft_job_parse(ft_job *j, const char *text, size_t n, ft_err *e);
+/* the same through a stream (ft_job_io.c; not in the browser build) */
 int ft_job_write(const ft_job *j, FILE *out);
 int ft_job_read(ft_job *j, FILE *in, ft_err *e);
 int ft_job_validate(const ft_job *j, const ft_lens *lens, ft_err *e);
 /* the bin a frame scans with: its own, or the fastest for its ppi */
 int ft_job_bin(const ft_job_frame *f);
+/* share job: the frame's target px, its own or the strip's share */
+double ft_job_share_px(const ft_job *j, const ft_job_frame *f);
 /* detailed scan: the included frames of pass `pass` not yet done; 0 =
  * nothing to scan in it (finished, or no frame) */
 int ft_job_pass_todo(const ft_job *j, int pass);

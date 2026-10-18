@@ -26,13 +26,12 @@
 #include "ft_print.h"
 #include "ft_print_file.h"
 #include "ft_render_auto.h"
-#include "ft_resize.h"
+#include "ft_share_print.h"
 #include "render_flags.h"
 #include "share.h"
 
 #define PATH_CAP 4096
 
-static ft_print_render g_print;         /* ~380 KB */
 static ft_print_file g_pf;
 
 typedef struct {
@@ -111,7 +110,7 @@ static int load_cut(const pframe *f, ft_image *im, ft_image *cut)
         box[2] = im->w;
         box[3] = im->h;
     }
-    if (ftdev_crop(im, box, cut, &e)) {
+    if (ft_image_crop(im, box, cut, &e)) {
         fprintf(stderr, "ftdev: %s: %s (sidecar from another DNG?)\n",
                 f->dng, e.msg);
         return 1;
@@ -119,53 +118,10 @@ static int load_cut(const pframe *f, ft_image *im, ft_image *cut)
     return 0;
 }
 
-/* how the print was made: the .txt next to the JPEG and its comment */
-static int print_text(char *buf, size_t cap, const ft_emulsion *em,
-                      int frame, ft_cmyd k, const ft_print_auto *a,
-                      const ft_recipe *r, const ft_look_detail *d)
-{
-    char s[3][32];
-    size_t n = 0;
-    int w;
-#define APP(...) do { \
-        w = snprintf(buf + (n < cap ? n : cap), n < cap ? cap - n : 0, \
-                     __VA_ARGS__); \
-        if (w > 0) \
-            n += (size_t)w; \
-    } while (0)
-#define F3(v) fmtf((v)[0], s[0], 32), fmtf((v)[1], s[1], 32), \
-              fmtf((v)[2], s[2], 32)
-    APP("emulsion=%s\n", em->id);
-    APP("science=%d\n", FT_EMULSION_REV);
-    APP("chain=%s %s %s %s\n", em->film->name, em->balance->name,
-        em->print->name, em->output->name);
-    if (frame >= 0)
-        APP("frame=%d\n", frame);
-    APP("cmyd=%d %d %d %d\n", k.c, k.m, k.y, k.d);
-    APP("auto_exposure=%s\n", fmtf(a->exposure, s[0], 32));
-    APP("auto_tint=%s %s %s\n", F3(a->tint));
-    APP("film=%s\n", r->mode == FT_RENDER_BW ? "bw"
-                     : r->mode == FT_RENDER_SLIDE ? "slide" : "neg");
-    APP("base=%s %s %s\n", F3(r->base));
-    APP("range=%s %s %s\n", F3(r->range));
-    APP("exposure=%s\n", fmtf(r->exposure, s[0], 32));
-    APP("tint=%s %s %s\n", F3(r->tint));
-    APP("grade=%s\n", fmtf(r->grade, s[0], 32));
-    APP("paper_black=%s\n", fmtf(r->paper_black, s[0], 32));
-    APP("paper_white=%s\n", fmtf(r->paper_white, s[0], 32));
-    APP("nr_sensor=%g\nnr_chroma=%g\nnr_grain=%g\nsharpen=%g\n",
-        d->nr_sensor, d->nr_chroma, d->nr_grain, d->sharpen);
-    APP("space=srgb\ngamut=soft\n");
-#undef F3
-#undef APP
-    return (int)n;
-}
-
 int ftdev_print(int argc, char **argv)
 {
     static pframe fs[FT_MAX_FRAMES];
     static ft_print_frame pfr[FT_MAX_FRAMES];
-    static const ft_look_detail DET = { 1, 2, 0, 0.5 };  /* share's */
     const char *emulsion = NULL, *cmyd = NULL, *roll_path = NULL;
     const char *job_path = NULL, *outp = NULL;
     const ft_emulsion *em;
@@ -267,8 +223,6 @@ int ftdev_print(int argc, char **argv)
         long ns = 0;
         char *side;
         ft_image im, cut;
-        int pw, ph;
-        void *scratch;
         if (snprintf(path, sizeof path, "%s.txt", f->dng) >= (int)sizeof path) {
             fprintf(stderr, "ftdev: path too long: %.60s...\n", f->dng);
             rc = 2;
@@ -315,17 +269,11 @@ int ftdev_print(int argc, char **argv)
             goto out;
         }
         ft_image_free(&im);
-        ft_print_proxy_dims(cut.w, cut.h, &pw, &ph);
-        scratch = malloc(ft_resize_scratch_bytes(cut.w, cut.h, pw, ph));
-        if (!scratch || ft_image_alloc(&f->proxy, pw, ph, &e) ||
-            ft_resize(cut.rgb, cut.w, cut.h, f->proxy.rgb, pw, ph, scratch,
-                      &e)) {
-            fprintf(stderr, "ftdev: %s\n", scratch ? e.msg : "out of memory");
-            free(scratch);
+        if (ft_share_print_proxy(&cut, &f->proxy, &e)) {
+            fprintf(stderr, "ftdev: %s\n", e.msg);
             ft_image_free(&cut);
             goto out;
         }
-        free(scratch);
         ft_image_free(&cut);
         proxies[i] = &f->proxy;
     }
@@ -379,38 +327,13 @@ int ftdev_print(int argc, char **argv)
     for (i = 0; i < n; i++) {
         pframe *f = &fs[i];
         ft_cmyd k = roll_path ? ft_print_file_clicks(&g_pf, f->frame) : k1;
-        ft_print_auto a;
-        ft_recipe r;
-        ft_image im, cut;
-        char out[PATH_CAP], text[4096];
-        int clamped, t, r2;
-        double scale;
-        if (ft_print_recipe(em, &roll, &pfr[i], k, &r, &a, &clamped, &e)) {
-            fprintf(stderr, "ftdev: %s: %s\n", f->dng, e.msg);
-            rc = 2;
-            goto out;
-        }
-        if (clamped)
-            fprintf(stderr, "ftdev: warning: %s: the filtration is at its "
-                            "limit (50 CC, 6 stops)\n", f->dng);
-        if (ft_print_compile(em, &r, &g_print, &e)) {
-            fprintf(stderr, "ftdev: %s: %s\n", f->dng, e.msg);
-            goto out;
-        }
-        ft_image_init(&im);
-        ft_image_init(&cut);
-        if (load_cut(f, &im, &cut)) {
-            ft_image_free(&im);
-            ft_image_free(&cut);
-            goto out;
-        }
-        if (ftdev_denoise(&im, f->has_side ? &f->sc : NULL, &cut, &DET)) {
-            ft_image_free(&im);
-            ft_image_free(&cut);
-            goto out;
-        }
-        ft_image_free(&im);
-        ft_print_apply(&g_print, cut.rgb, cut.rgb, (size_t)cut.w * cut.h);
+        int rot = roll_path ? ft_print_file_rotation(&g_pf, f->frame) : 0;
+        ft_share_print_info info;
+        ft_image im;
+        unsigned char *jpg;
+        size_t nj;
+        char out[PATH_CAP], text[FT_SHARE_TEXT_MAX];
+        int r2;
         if (outp) {
             snprintf(out, sizeof out, "%s", outp);
         } else {
@@ -419,29 +342,41 @@ int ftdev_print(int argc, char **argv)
                 l -= 4;
             if (l + 5 > sizeof out) {
                 fprintf(stderr, "ftdev: path too long: %.60s...\n", f->dng);
-                ft_image_free(&cut);
                 rc = 2;
                 goto out;
             }
             memcpy(out, f->dng, l);
             memcpy(out + l, ".jpg", 5);
         }
-        scale = f->has_side ? f->sc.export_scale : 1;
+        ft_image_init(&im);
+        if (ft_dng_read(f->dng, &im, &e)) {
+            fprintf(stderr, "ftdev: %s\n", e.msg);
+            goto out;
+        }
         if (!f->has_side)
             fprintf(stderr, "ftdev: note: no sidecar for %s; printing at "
                             "full size\n", f->dng);
-        t = print_text(text, sizeof text, em, f->frame, k, &a, &r, &DET);
-        if (t >= (int)sizeof text) {
-            fprintf(stderr, "ftdev: print text too long\n");
-            ft_image_free(&cut);
-            goto out;
-        }
         printf("print: %s frame %d, %s, cmyd %d %d %d %d\n", f->dng,
                f->frame, em->id, k.c, k.m, k.y, k.d);
-        r2 = ftdev_finish(&cut, scale > 1 ? 1 : scale, DET.sharpen,
-                          FT_SPACE_SRGB, FT_GAMUT_SOFT, FT_JPEG_QUALITY,
-                          text, out);
-        ft_image_free(&cut);
+        if (ft_share_print_frame(em, &roll, &pfr[i], k, rot, &im,
+                                 f->has_side ? &f->sc : NULL, f->frame, &jpg,
+                                 &nj, text, &info, &e)) {
+            fprintf(stderr, "ftdev: %s: %s\n", f->dng, e.msg);
+            ft_image_free(&im);
+            goto out;
+        }
+        ft_image_free(&im);
+        if (info.clamped)
+            fprintf(stderr, "ftdev: warning: %s: the filtration is at its "
+                            "limit (50 CC, 6 stops)\n", f->dng);
+        if (info.nr_notes & FT_NR_NOTE_DISAGREE)
+            fprintf(stderr, "ftdev: warning: sidecar noise_profile disagrees "
+                            "with the DNG; using the DNG's\n");
+        if (info.nr_notes & FT_NR_NOTE_ESTIMATED)
+            fprintf(stderr, "ftdev: warning: no noise profile, estimated\n");
+        r2 = ftdev_write_jpeg(out, jpg, nj, info.w, info.h, FT_SPACE_SRGB,
+                              FT_GAMUT_SOFT, FT_JPEG_QUALITY, text);
+        free(jpg);
         if (r2) {
             rc = r2;
             goto out;

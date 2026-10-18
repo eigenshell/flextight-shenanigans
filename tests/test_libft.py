@@ -55,6 +55,26 @@ def test_png_writer_decodes_with_zlib(tmp_path):
          0, 10, 20, 30, 40, 50, 60, 70, 80, 90])
 
 
+import zipfile
+
+
+@needs_cc
+def test_zip_opens_with_zipfile(tmp_path):
+    r = subprocess.run(["make", "-C", str(LIBFT), "test/test_zip"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = tmp_path / "t.zip"
+    subprocess.run([str(LIBFT / "test" / "test_zip"), str(out)], check=True)
+    with zipfile.ZipFile(out) as z:
+        assert z.testzip() is None              # every CRC right
+        assert z.namelist() == ["frame01.jpg", "frame01.jpg.txt"]
+        assert z.read("frame01.jpg") == b"\xff\xd8\xff\xd9"
+        assert z.read("frame01.jpg.txt") == b"emulsion=x\n"
+        info = z.getinfo("frame01.jpg")
+        assert info.compress_type == zipfile.ZIP_STORED
+        assert info.date_time == (1980, 1, 1, 0, 0, 0)
+
+
 import re
 
 TOOLS = LIBFT.parent / "tools"

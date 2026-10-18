@@ -308,6 +308,41 @@ int main(void)
                  "window = 50 4 36 24\ngroup = -1\n");
         CHECK(ft_job_read(&b, f, &e) == -1);
         fclose(f);
+
+        /* share_px: a frame's own target (the web page's 4MP / 6MP);
+         * written only when set, one target per group */
+        b = c;
+        CHECK(ft_job_share_px(&b, &b.f[0]) == 2000);
+        b.f[2].share_px = 3000;
+        CHECK(ft_job_share_px(&b, &b.f[2]) == 3000);
+        n = ft_job_write_buf(&b, buf, sizeof buf);
+        CHECK(n < sizeof buf);
+        CHECK(strstr(buf, "group = 2   # window: frames of one group scan "
+                          "together\nshare_px = 3000   # this frame's "
+                          "target, px on its long side\n") != NULL);
+        CHECK(strstr(strstr(buf, "share_px") + 1, "share_px") == NULL);
+        {
+            ft_job d;
+            CHECK(ft_job_parse(&d, buf, n, &e) == 0);
+            CHECK(d.f[0].share_px == 0 && d.f[2].share_px == 3000);
+            CHECK(ft_job_validate(&d, &ft_lens_default, &e) == 0);
+            d.f[0].group = 2;                 /* one window, two targets */
+            CHECK(ft_job_validate(&d, &ft_lens_default, &e) == -1);
+            CHECK(strstr(e.msg, "(frame 3): frames of group 2 differ in "
+                                "share_px") != NULL);
+            d.f[0].share_px = 3000;           /* same target: fine */
+            CHECK(ft_job_validate(&d, &ft_lens_default, &e) == 0);
+            d.share = 0;                      /* share_px needs share */
+            d.f[0].group = d.f[2].group = 0;
+            CHECK(ft_job_validate(&d, &ft_lens_default, &e) == -1);
+            CHECK(strstr(e.msg, "(frame 1): share_px without share in "
+                                "[strip]") != NULL);
+        }
+        f = text("[strip]\nholder = 24x217\nshare = 2000\n[frame 1]\n"
+                 "ppi = 1500\nwindow = 50 4 36 24\nshare_px = 50\n");
+        CHECK(ft_job_read(&b, f, &e) == -1 &&
+              strcmp(e.msg, "line 7: bad value for share_px: 50") == 0);
+        fclose(f);
     }
     /* a job without bin keys (older files) scans with the fastest bin */
     f = text("[strip]\nholder = 24x217\n[frame 1]\nppi = 2000\n"
@@ -438,5 +473,151 @@ int main(void)
     b.nframes = 0;
     CHECK(ft_job_validate(&b, &ft_lens_default, &e) == -1 &&
           strstr(e.msg, "no frames"));
+
+    /* buffers (the web page): the text is the FILE writer's, byte for byte */
+    {
+        static const char golden[] =
+            "[strip]\n"
+            "holder = 24x217\n"
+            "film = negative\n"
+            "focus = shifted\n"
+            "focus_offset = -1200\n"
+            "film_base = 0.2512 0.6000 0.9123   # D r g b: unexposed film\n"
+            "detail = neg   # neg: digital negative, pos: archive positive\n"
+            "detail_fmt = tiff\n"
+            "detail_bw = off\n"
+            "keep_raw = yes\n"
+            "ring_mb = 64\n"
+            "share = 2450   # scan to share: px on each frame's long side\n"
+            "hf_half_res = yes\n"
+            "\n"
+            "[frame 1]\n"
+            "type = full\n"
+            "include = yes\n"
+            "ppi = 1729.5\n"
+            "bin = 2   # 0 = fastest; smaller = more light, slower\n"
+            "# bin options at 1729.5 ppi (time, light, Dmax~): 3: 96 s 1.3x 3.11 | 2: 139 s 2.1x 3.32 | 1: 268 s 4.0x 3.60\n"
+            "window = 4.100 1.600 36.200 24.400   # y0 x0 length width, mm\n"
+            "tilt = 0.12\n"
+            "sprockets = no\n"
+            "straighten = no\n"
+            "confidence = high\n"
+            "focus_offset = 0\n"
+            "done = no\n"
+            "pass = 1\n"
+            "group = 1   # window: frames of one group scan together\n"
+            "\n"
+            "[frame 7]\n"
+            "type = half\n"
+            "include = no\n"
+            "ppi = 6300\n"
+            "bin = 0   # 0 = fastest; smaller = more light, slower\n"
+            "window = 42.000 4.100 18.000 24.000   # y0 x0 length width, mm\n"
+            "tilt = 0.00\n"
+            "sprockets = yes\n"
+            "straighten = yes\n"
+            "confidence = low\n"
+            "focus_offset = -800\n"
+            "done = yes\n"
+            "pass = 0\n"
+            "group = 2   # window: frames of one group scan together\n";
+        static char buf[8192], buf2[8192], small[16];
+        ft_job g;
+        size_t n, n2;
+
+        memset(&g, 0, sizeof g);
+        strcpy(g.holder, "24x217");
+        g.film = FT_FILM_NEGATIVE;
+        g.focus = FT_FOCUS_SHIFTED;
+        g.focus_offset = -1200;
+        g.has_film_base = 1;
+        g.film_base[0] = 0.2512; g.film_base[1] = 0.6;
+        g.film_base[2] = 0.91234;
+        g.detail = FT_DETAIL_NEG; g.detail_fmt = FT_DFMT_TIFF;
+        g.ring_mb = 64; g.keep_raw = 1;
+        g.share = 2450; g.hf_half_res = 1;
+        g.nframes = 2;
+        g.f[0].index = 1; g.f[0].type = FT_FRAME_FULL; g.f[0].include = 1;
+        g.f[0].ppi = 1729.5; g.f[0].bin = 2; g.f[0].y0 = 4.1;
+        g.f[0].x0 = 1.6; g.f[0].len = 36.2; g.f[0].width = 24.4;
+        g.f[0].tilt_deg = 0.12; g.f[0].pass = 1; g.f[0].group = 1;
+        g.f[1].index = 7; g.f[1].type = FT_FRAME_HALF; g.f[1].include = 0;
+        g.f[1].ppi = 6300; g.f[1].y0 = 42; g.f[1].x0 = 4.1;
+        g.f[1].len = 18; g.f[1].width = 24; g.f[1].sprockets = 1;
+        g.f[1].straighten = 1; g.f[1].confidence_low = 1;
+        g.f[1].focus_offset = -800; g.f[1].done = 1; g.f[1].group = 2;
+
+        n = ft_job_write_buf(&g, buf, sizeof buf);
+        CHECK(n == sizeof golden - 1 && strcmp(buf, golden) == 0);
+        /* the FILE writer is the same text */
+        f = tmpfile();
+        CHECK(ft_job_write(&g, f) == 0);
+        rewind(f);
+        n2 = fread(buf2, 1, sizeof buf2 - 1, f);
+        buf2[n2] = 0;
+        fclose(f);
+        CHECK(n2 == n && strcmp(buf2, golden) == 0);
+
+        /* too small: the length needed, cut text NUL-terminated */
+        CHECK(ft_job_write_buf(&g, small, sizeof small) == n);
+        CHECK(strlen(small) == sizeof small - 1 &&
+              memcmp(small, golden, sizeof small - 1) == 0);
+        CHECK(ft_job_write_buf(&g, NULL, 0) == n);
+
+        /* a bad enum writes nothing */
+        b = g;
+        b.f[1].type = (ft_frame_type)9;
+        CHECK(ft_job_write_buf(&b, buf2, sizeof buf2) == FT_JOB_BAD);
+        f = tmpfile();
+        CHECK(ft_job_write(&b, f) == -1);
+        fclose(f);
+
+        /* parse: exactly n bytes, no NUL needed; byte-stable round trip */
+        memcpy(buf2, golden, n);
+        buf2[n] = 'X';                      /* past the end: never read */
+        CHECK(ft_job_parse(&b, buf2, n, &e) == 0);
+        CHECK(b.nframes == 2 && b.f[1].index == 7 && b.f[1].group == 2 &&
+              b.f[0].pass == 1 && b.share == 2450 && b.hf_half_res);
+        CHECK(ft_job_write_buf(&b, buf2, sizeof buf2) == n &&
+              strcmp(buf2, golden) == 0);
+        /* the FILE reader parses the same way */
+        f = text(golden);
+        CHECK(ft_job_read(&b, f, &e) == 0 && b.f[1].done);
+        fclose(f);
+
+        /* parse errors name the line, as the FILE reader did */
+        CHECK(ft_job_parse(&b, "[strip]\nholder = 24x217\nbogus = 1\n", 34,
+                           &e) == -1 &&
+              strcmp(e.msg, "line 3: unknown key bogus") == 0);
+        CHECK(ft_job_parse(&b, "", 0, &e) == -1 &&
+              strcmp(e.msg, "no [strip] section") == 0);
+        /* a last line without '\n' is read */
+        {
+            const char *t = "[strip]\nholder = 24x217\nfilm = slide";
+            CHECK(ft_job_parse(&b, t, strlen(t), &e) == 0 &&
+                  b.film == FT_FILM_SLIDE);
+        }
+        /* lines of 255 characters or more are refused, 254 is fine */
+        {
+            static char t[600];
+            size_t k;
+            strcpy(t, "[strip]\nholder = 24x217\n");
+            k = strlen(t);
+            memset(t + k, ' ', 254 - 12);
+            memcpy(t + k + 254 - 12, "film = slide", 12);
+            t[k + 254] = '\n';
+            CHECK(ft_job_parse(&b, t, k + 255, &e) == 0);
+            memmove(t + k + 1, t + k, 255);
+            t[k] = ' ';
+            CHECK(ft_job_parse(&b, t, k + 256, &e) == -1 &&
+                  strcmp(e.msg, "line 3: too long") == 0);
+        }
+        /* a NUL inside the text is refused */
+        {
+            static const char t[] = "[strip]\nholder = 24x217\0junk\n";
+            CHECK(ft_job_parse(&b, t, sizeof t - 1, &e) == -1 &&
+                  strcmp(e.msg, "line 2: NUL byte") == 0);
+        }
+    }
     return TEST_DONE();
 }

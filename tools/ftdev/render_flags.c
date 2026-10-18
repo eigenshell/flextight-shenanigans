@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ft_render_auto.h"
+#include "ft_share_print.h"
 #include "render_flags.h"
 
 /* "a,b,c" -> v; -1 if malformed or not finite */
@@ -29,14 +30,7 @@ static int parse1(const char *s, float *v)
 /* the shortest %g text of v that reads back as the same float */
 const char *fmtf(float v, char *buf, size_t cap)
 {
-    int p;
-    for (p = 6; p < 9; p++) {
-        snprintf(buf, cap, "%.*g", p, (double)v);
-        if (strtof(buf, NULL) == v)
-            return buf;
-    }
-    snprintf(buf, cap, "%.9g", (double)v);
-    return buf;
+    return ft_fmtf(v, buf, cap);
 }
 
 void rflags_init(rflags *f)

@@ -256,6 +256,23 @@ int main(void)
             CHECK(ft_share_meta_parse(all, strlen(all), &m, &e) == 0);
         }
         CHECK(m.nframes == 1 && m.f[0].index == 2 && m.f[0].len == 36);
+        /* a group with its own target (share_px): the window's share is
+         * that target, so ftdev cut sizes its frames by it */
+        j.f[1].share_px = 3000;
+        f = tmpfile();
+        CHECK(ft_share_meta_write(f, &j, 2) == 0);
+        rewind(f);
+        n = fread(buf, 1, sizeof buf - 1, f);
+        buf[n] = 0;
+        fclose(f);
+        CHECK(strstr(buf, "share=3000\n") && !strstr(buf, "share=2000\n"));
+        f = tmpfile();                        /* group 1 keeps the strip's */
+        CHECK(ft_share_meta_write(f, &j, 1) == 0);
+        rewind(f);
+        n = fread(buf, 1, sizeof buf - 1, f);
+        buf[n] = 0;
+        fclose(f);
+        CHECK(strstr(buf, "share=2000\n") != NULL);
     }
 
     /* sidecar round trip */
@@ -326,6 +343,20 @@ int main(void)
             CHECK(strstr(e.msg, "noise_profile") != NULL);
             CHECK(ft_share_sidecar_parse(neg, sizeof neg - 1, &sc, &e) == 0);
             CHECK(!sc.has_noise);
+        }
+        /* the buffer writer: the FILE writer's text, snprintf's contract */
+        {
+            char b2[1024];
+            int len = ft_share_sidecar_write_buf(b2, sizeof b2, &m, &c);
+            f = tmpfile();
+            CHECK(ft_share_sidecar_write(f, &m, &c) == 0);
+            rewind(f);
+            n = fread(buf, 1, sizeof buf - 1, f);
+            fclose(f);
+            CHECK(len == (int)n && memcmp(b2, buf, n) == 0 && b2[n] == 0);
+            CHECK(ft_share_sidecar_write_buf(b2, 10, &m, &c) == len);
+            CHECK(strlen(b2) == 9 && memcmp(b2, buf, 9) == 0);
+            CHECK(ft_share_sidecar_write_buf(NULL, 0, &m, &c) == len);
         }
     }
     return TEST_DONE();

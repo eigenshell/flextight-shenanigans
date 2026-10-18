@@ -54,6 +54,7 @@ libft/test/test_*
 !libft/test/test_*.c
 libft/test/png_dump
 libft/test/window_dump
+libft/test/web/*.o
 
 # ssh credential helper (local-only credential, notes/ already ignored)
 notes/ssh-askpass.sh
@@ -63,4 +64,11 @@ CLAUDE.md
 
 # ftdev build output
 tools/ftdev/ftdev
+tools/ftwebd/ftwebd
+tools/ftwebd/ftwebd.exe
+tools/ftweb/ftweb_cli
+tools/ftweb/*.o
+tools/ftweb/*.wasm
+tools/ftweb/wasm/
+tools/ftwebd/www/ftweb.wasm
 tools/detail/test_ring

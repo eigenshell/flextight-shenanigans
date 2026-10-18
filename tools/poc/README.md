@@ -124,9 +124,18 @@ between runs), so selected frames next to each other share a window and
 an unselected frame between them splits it when skipping it is faster
 (it always is for a whole frame: ~34 s per window against ~210 s per
 full frame at 1500 ppi bin 1). The job gets `share` and `hf_half_res`,
-and each frame a `group` (its window). No focus check: share optics have
-the deepest depth of field; the focus curve is used as is (set
-`focus_offset` by hand if a hardware check says otherwise).
+and each frame a `group` (its window). Focus: the job gets `focus =
+per-frame`, which on a share job means one bracket in `scan --job`, on
+the first window at its own optics (its ppi and bin), on the centre
+band of its first frame (the next one if that gives no peak); ~5 crops,
+~1 min. A focus offset moves the CCD and the lens together, so it moves
+the film-side focus plane by the same steps at any scale: later windows
+take the curve with that offset and no crops, except a 3-crop check
+where a window's scale (ppi x bin) is above 1.25 x the measured one
+(less depth of field). Until a window finds a peak, each window gets
+the full bracket. Each window's frames keep their offset as
+`focus_offset` (a resumed run starts there). `focus = shifted` scans
+with the curve and the strip's `focus_offset` as they are, no bracket.
 
 `scan --job` on a share job scans each group as one window, 2 mm beyond
 its first and last frame and the full film width (`<jobbase>_winNN.raw`,
@@ -148,6 +157,35 @@ for another), maps colour to `--space srgb|p3|adobe` (`--gamut soft`,
 the default, compresses only saturated colours near the edge; `clip`
 clamps) and writes an 8-bit JPEG with its ICC profile; `--raw-too` also
 copies the DNG next to it.
+
+A size per frame (the web page's 4MP / 6MP): `ftdev plan` re-plans a
+job on any OS, without the scanner:
+
+```
+ftdev plan strip.job --size 4mp:1-2,5 --size 6mp:3   # 4mp 2450, 6mp 3000 px
+```
+
+Frames not named are excluded. Each run of frames of one size (in strip
+order) is planned as `--share` plans a strip, and runs never share a
+window; the strip's `share` is the smallest size and frames of another
+size carry `share_px`. Any px works too (`--size 2000:1-6`); `-o` writes
+another file.
+
+`--progress` (frames, scan) adds machine-readable lines for the web
+server; the rest of the output stays as it is:
+
+```
+progress begin window 3        a run of 3 units (preview|window|frame|pass)
+progress unit window 2 5       unit 2 of the run: the job's window 5
+progress lines 812/1890        lines read of that unit's scan
+progress focus 2 frame 4 at -500   focus crop 2 of that unit (before
+                               its scan): frame 4's band, offset -500
+progress sharp -500 0.0412     that crop's sharpness
+progress focused +620 measured the unit's offset: measured | checked |
+                               carried (no crops) | none (no peak)
+progress file strip_win05.raw  a finished file
+progress end ok                ok | stopped | failed | refused
+```
 
 #### Optics per frame (the job's `bin` key, `crop -b`)
 
@@ -202,11 +240,14 @@ confidence    high | low: detection confidence (informational)
 focus_offset  per-frame mode: the measured offset; 0 = use the strip's
 done          yes | no: scanned already (scan --job skips it; set no to redo)
 group         share jobs only: the window (1..) the frame is scanned in;
-              a group's frames share ppi and bin and follow each other
+              a group's frames share ppi, bin and share_px and follow
+              each other
+share_px      share jobs only, optional: this frame's px on its long side
+              (100..20000); absent = the strip's share (`ftdev plan`)
 ```
 
 Jobs written by this ftpoc contain `film_base` (and share jobs `share`,
-`hf_half_res`, `group`), which older ftpoc builds reject ("unknown
+`hf_half_res`, `group`, `share_px`), which older ftpoc builds reject ("unknown
 key"); rebuild ftpoc on the scanner box before using them.
 
 `scan --job` validates the job and runs every remaining frame's scan
@@ -242,13 +283,23 @@ Other commands are stopped by Ctrl+C at once, as before.
 
 Focus: the curve comes from `focus.txt` in the current directory
 (written there by `calibrate-focus` on a textured window) or the
-built-in curve for the development scanner. Focus offsets move the CCD
+built-in curve for the development scanner. Below scale ~3000 the
+thin-lens curve drifts from the true focus (focus survey 2026-10-15/16,
+the same trend on three films): the built-in curve carries a correction
+per scale, tandem steps added to the CCD and the lens alike, linear
+between its points: -11278 at 1200, -4778 at 1500, -1358 at 2000, 0 from
+3000 up. `focus.txt` may carry its own (`correct = <scale> <offset>`
+lines, scales ascending); a fitted `focus.txt` (`calibrate-focus`) has
+none. Focus offsets move the CCD
 and the lens together (tandem, as the manual's manual focus does): the
 gap between them, and so the magnification, stays, and only the focus
 plane on the film side moves. Moving the CCD alone also changes the
 magnification (~1 % for 9000 steps at 6300 ppi) and is ~5x less
 sensitive. The check points and the per-frame brackets step 500 and stay
-within ±4000 of the curve. If the three check points agree within ±300
+within ±4000 of the curve. A share window's bracket steps half its depth
+of field (~980 (1+m)/m^2 x bin tandem steps for 95 %, m = p x scale;
+~2200 at 1705 ppi bin 1), at least 500, and may reach as far as it
+spans. If the three check points agree within ±300
 steps of their mean the curve is shifted by the mean; otherwise every
 frame gets its own focus bracket before it is
 scanned, centred on its `focus_offset` (the strip's when 0); a frame
