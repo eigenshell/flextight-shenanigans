@@ -104,9 +104,10 @@ int ftw_cut(ftw *w, const unsigned short *raw, size_t raw_n,
 /* the landed frames' numbers, ascending, into frames (cap); the count */
 int ftw_frames(const ftw *w, int *frames, int cap);
 
-/* the strip's colour balance over every landed frame (ftdev print
- * --roll over them): rerun as frames land. -> out: notes, one per line
- * (the "[frame N] not in the job" warning, few frames, estimated base) */
+/* each landed frame's colour balance, measured from the frame alone
+ * (per-frame balance: ftdev print --roll on that one frame, its own
+ * film base): rerun as frames land. -> out: notes, one per line (the
+ * "[frame N] not in the job" warning, estimated base) */
 int ftw_measure(ftw *w);
 /* one frame's share JPEG (-> out) and its text (ftw_text) with its
  * clicks from strip.print */
@@ -118,8 +119,8 @@ int ftw_display(ftw *w, int frame, int long_edge, int *pw, int *ph);
  * standard 525 ppi preview) with the preview's job (ftw_job_load): each
  * frame's box cut as a share frame is (x along). Returns the number of
  * frames; replaces any earlier preview. ftw_preview_display: one of them
- * printed with strip.print's emulsion, the strip's balance over the
- * preview's frames, the job's film base, no clicks and no turn, at most
+ * printed with strip.print's emulsion, its own balance (per-frame, as
+ * the share prints it), the job's film base, no clicks and no turn, at most
  * long_edge px -> out: RGBA rows; *pw x *ph. */
 int ftw_preview_load(ftw *w, const unsigned short *raw, size_t raw_n,
                      const unsigned short *cal, size_t cal_n,

@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """The web page's engine (tools/ftweb) makes the CLI's JPEGs: ftweb_cli
 (the engine driven from files) against ftdev cut + ftdev print --roll on
-synthetic window scans; and the engine compiled to wasm32 makes the same
-bytes as native (skipped without the wasi-sdk or node)."""
+synthetic window scans, one frame a call (the engine balances each frame
+on its own: per-frame balance); and the engine compiled to wasm32 makes
+the same bytes as native (skipped without the wasi-sdk or node)."""
+import types
 import json
 import os
 import shutil
@@ -76,11 +78,16 @@ def both(tools, tmp_path_factory):
         r = subprocess.run([str(ftdev), "cut", str(w)], capture_output=True,
                            text=True)
         assert r.returncode == 0, r.stderr
-    dngs = [str(tmp / "cli" / ("job_frame%02d.dng" % n)) for n in (1, 2, 3)]
-    pr = subprocess.run([str(ftdev), "print", *dngs, "--roll",
-                         str(tmp / "cli" / "strip.print")],
-                        capture_output=True, text=True)
-    assert pr.returncode == 0, pr.stderr
+    # per-frame balance: the CLI's reference prints each frame alone
+    err = ""
+    for n in (1, 2, 3):
+        dng = str(tmp / "cli" / ("job_frame%02d.dng" % n))
+        r = subprocess.run([str(ftdev), "print", dng, "--roll",
+                            str(tmp / "cli" / "strip.print")],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        err += r.stderr
+    pr = types.SimpleNamespace(stderr=err)
     b = windows(tmp / "web")
     out = tmp / "web" / "out"
     out.mkdir()
@@ -101,7 +108,7 @@ def test_engine_makes_the_cli_jpegs(both):
         assert a == b, name
         assert (cli / (name + ".txt")).read_bytes() == \
             (web / (name + ".txt")).read_bytes()
-    # the clicks and the roll balance reached the prints
+    # the clicks reached the prints
     t2 = (web / "job_frame02.jpg.txt").read_text()
     assert "\ncmyd=3 -2 0 1\n" in t2
     # the turn: frame 2 portrait, the others as scanned
@@ -120,8 +127,31 @@ def test_engine_notes_are_the_cli_warnings(both):
     assert "[frame 9] is not in the job: ignored" in pr.stderr
     assert "warning: strip.print: [frame 9] is not in the job: ignored" \
         in wr.stderr
-    assert "note: 3 frames: print a roll's frames together" in pr.stderr
-    assert "note: 3 frames: print a roll's frames together" in wr.stderr
+    # per-frame balance: one frame is the whole "roll", said by the CLI;
+    # the engine balances every frame alone by design and says nothing
+    assert "note: 1 frame: print a roll's frames together" in pr.stderr
+    assert "print a roll's frames together" not in wr.stderr
+
+
+@needs_cc
+def test_engine_balances_each_frame_alone(tools, tmp_path):
+    """a frame's print does not depend on the other frames of the strip:
+    frame 1 printed with frame 3 (another film base) beside it is frame 1
+    printed alone"""
+    _, cli = tools
+    b = windows(tmp_path / "web")
+    outs = []
+    for k, wins in enumerate((b[:1], [b[0], b[2]])):
+        out = tmp_path / ("out%d" % k)
+        out.mkdir()
+        r = subprocess.run([str(cli), "--print", str(tmp_path / "web" /
+                                                     "strip.print"),
+                            "-o", str(out), *map(str, wins)],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        outs.append(out)
+    assert (outs[0] / "job_frame01.jpg").read_bytes() == \
+        (outs[1] / "job_frame01.jpg").read_bytes()
 
 
 @needs_cc

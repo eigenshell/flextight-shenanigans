@@ -45,6 +45,9 @@ typedef struct {
     int frame;
     ft_image im;
     ft_image proxy;
+    int measured;               /* roll and pf: its own balance */
+    ft_print_roll roll;
+    ft_print_frame pf;
 } pframe;
 
 struct ftw {
@@ -57,14 +60,11 @@ struct ftw {
     int has_print;
     int n;
     wframe f[FT_MAX_FRAMES];    /* by frame number */
-    int measured;
-    ft_print_roll roll;
+    int measured;               /* per-frame balance: each its own */
+    ft_print_roll rolls[FT_MAX_FRAMES];
     ft_print_frame pfr[FT_MAX_FRAMES];
     int npv;                    /* the preview's frames (ftw_preview_load) */
     pframe pv[FT_MAX_FRAMES];
-    int pv_measured;
-    ft_print_roll pv_roll;
-    ft_print_frame pv_pfr[FT_MAX_FRAMES];
     double live_white[3];       /* ftw_live_rows: the preview's white */
     int disp_frame;             /* the cached screen copy's frame, 0 none */
     int disp_edge;              /* and the long edge it was asked at */
@@ -180,7 +180,14 @@ static void preview_free(ftw *w)
         ft_image_free(&w->pv[i].proxy);
     }
     w->npv = 0;
-    w->pv_measured = 0;
+}
+
+/* the preview's frames to be measured again (another emulsion) */
+static void pv_unmeasure(ftw *w)
+{
+    int i;
+    for (i = 0; i < w->npv; i++)
+        w->pv[i].measured = 0;
 }
 
 void ftw_free(ftw *w)
@@ -484,7 +491,7 @@ int ftw_print_load(ftw *w, const char *text, size_t n)
     w->pf = pf;
     w->has_print = 1;
     w->measured = 0;
-    w->pv_measured = 0;
+    pv_unmeasure(w);
     w->disp_frame = 0;
     return 0;
 }
@@ -496,7 +503,7 @@ int ftw_print_new(ftw *w, const char *emulsion)
     ft_print_file_init(&w->pf, emulsion);
     w->has_print = 1;
     w->measured = 0;
-    w->pv_measured = 0;
+    pv_unmeasure(w);
     w->disp_frame = 0;
     return 0;
 }
@@ -522,7 +529,7 @@ int ftw_print_emulsion(ftw *w, const char *emulsion)
     }
     w->pf = pf;
     w->measured = 0;
-    w->pv_measured = 0;
+    pv_unmeasure(w);
     out_reset(w);
     return outf(w, "%s", em->id) ? -1 : dropped;
 }
@@ -764,13 +771,14 @@ static const ft_emulsion *emulsion(ftw *w)
     return em;
 }
 
+/* per-frame balance: each frame measured alone (ft_share_print_balance)
+ * with its own film base (its sidecar's, else estimated from it), as
+ * ftdev print does one frame a call */
 int ftw_measure(ftw *w)
 {
-    static double bsum[3][FT_MAX_FRAMES];
-    const ft_image *proxies[FT_MAX_FRAMES];
     const ft_emulsion *em = emulsion(w);
     float base[3];
-    int i, c, nbase = 0, idx[FT_MAX_FRAMES], ni = 0;
+    int i, c, idx[FT_MAX_FRAMES], ni = 0, estimated = 0;
     ft_err e;
 
     if (!em)
@@ -789,21 +797,6 @@ int ftw_measure(ftw *w)
                                                          : "negatives");
             return fail(w, m);
         }
-        if (f->sc.has_film_base) {
-            for (c = 0; c < 3; c++)
-                bsum[c][nbase] = f->sc.film_base[c];
-            nbase++;
-        }
-        proxies[i] = &f->proxy;
-    }
-    if (nbase) {
-        for (c = 0; c < 3; c++)
-            base[c] = (float)ft_print_median(bsum[c], nbase);
-    } else {
-        if (ft_render_base_from_frames(proxies, w->n, em->mode, base, &e))
-            return fail_e(w, &e);
-        outf(w, "note: no film_base in the sidecars; estimated from the "
-                "frames\n");
     }
     if (job_now(w)) {
         const ft_job *j = job_now(w);
@@ -815,12 +808,25 @@ int ftw_measure(ftw *w)
     }
     if (ft_print_file_unknown(&w->pf, idx, ni, &e))
         outf(w, "warning: strip.print: %s\n", e.msg);
-    if (ft_print_roll_measure(em, base, proxies, w->n, w->pfr, &w->roll,
-                              &e))
-        return fail_e(w, &e);
-    if (w->n < 6 && em->balance == &ft_pm_balance_frontier)
-        outf(w, "note: %d frame%s: print a roll's frames together for the "
-                "roll's colour balance\n", w->n, w->n == 1 ? "" : "s");
+    for (i = 0; i < w->n; i++) {
+        const wframe *f = &w->f[i];
+        if (f->sc.has_film_base) {
+            for (c = 0; c < 3; c++)
+                base[c] = (float)f->sc.film_base[c];
+        } else {
+            const ft_image *one[1];
+            one[0] = &f->proxy;
+            if (ft_render_base_from_frames(one, 1, em->mode, base, &e))
+                return fail_e(w, &e);
+            estimated = 1;
+        }
+        if (ft_share_print_balance(em, base, &f->proxy, &w->rolls[i],
+                                   &w->pfr[i], &e))
+            return fail_e(w, &e);
+    }
+    if (estimated)
+        outf(w, "note: no film_base in the sidecars; estimated from the "
+                "frames\n");
     w->measured = 1;
     return 0;
 }
@@ -838,7 +844,7 @@ static int print_one(ftw *w, int i, unsigned char **jpg, size_t *n)
         return -1;
     if (frame_image(f, &im, &e))
         return fail_e(w, &e);
-    rc = ft_share_print_frame(em, &w->roll, &w->pfr[i],
+    rc = ft_share_print_frame(em, &w->rolls[i], &w->pfr[i],
                               ft_print_file_clicks(&w->pf, f->frame),
                               ft_print_file_rotation(&w->pf, f->frame), &im,
                               &f->sc, f->frame, jpg, n, w->text, &info, &e);
@@ -984,7 +990,7 @@ int ftw_display(ftw *w, int frame, int long_edge, int *pw, int *ph)
         w->disp_frame = frame;
         w->disp_edge = long_edge;
     }
-    return rgba_out(w, em, &w->roll, &w->pfr[i],
+    return rgba_out(w, em, &w->rolls[i], &w->pfr[i],
                     ft_print_file_clicks(&w->pf, frame), &w->disp,
                     ft_print_file_rotation(&w->pf, frame), pw, ph);
 }
@@ -1053,43 +1059,42 @@ int ftw_preview_load(ftw *w, const unsigned short *raw, size_t raw_n,
             return fail_e(w, &e);
         }
         p->frame = f->index;
+        p->measured = 0;
         w->npv++;
     }
     free(t);
     return w->npv;
 }
 
-/* the strip's balance over the preview's frames (no clicks) */
-static int preview_measure(ftw *w, const ft_emulsion *em)
+/* preview frame i's own balance (per-frame: measured from the frame
+ * alone, locked until its box or the emulsion changes) */
+static int preview_measure(ftw *w, const ft_emulsion *em, int i)
 {
-    const ft_image *proxies[FT_MAX_FRAMES];
     const ft_job *j = &w->job;
+    pframe *p = &w->pv[i];
     float base[3];
     ft_err e;
-    int i;
-    if (w->pv_measured)
+    int c;
+    if (p->measured)
         return 0;
-    if (w->npv == 0)
-        return fail(w, "no preview frames");
     if ((j->film == FT_FILM_SLIDE) != (em->mode == FT_RENDER_SLIDE))
         return fail(w, j->film == FT_FILM_SLIDE
                        ? "the strip is slide film; the emulsion prints "
                          "negatives"
                        : "the strip is negative film; the emulsion prints "
                          "slides");
-    for (i = 0; i < w->npv; i++)
-        proxies[i] = &w->pv[i].proxy;
     if (j->has_film_base) {
-        for (i = 0; i < 3; i++)
-            base[i] = (float)j->film_base[i];
-    } else if (ft_render_base_from_frames(proxies, w->npv, em->mode, base,
-                                          &e)) {
-        return fail_e(w, &e);
+        for (c = 0; c < 3; c++)
+            base[c] = (float)j->film_base[c];
+    } else {
+        const ft_image *one[1];
+        one[0] = &p->proxy;
+        if (ft_render_base_from_frames(one, 1, em->mode, base, &e))
+            return fail_e(w, &e);
     }
-    if (ft_print_roll_measure(em, base, proxies, w->npv, w->pv_pfr,
-                              &w->pv_roll, &e))
+    if (ft_share_print_balance(em, base, &p->proxy, &p->roll, &p->pf, &e))
         return fail_e(w, &e);
-    w->pv_measured = 1;
+    p->measured = 1;
     return 0;
 }
 
@@ -1107,10 +1112,10 @@ static int preview_rgba(ftw *w, int frame, int long_edge, int with_print,
         return fail(w, "no such frame in the preview");
     if (long_edge < 16)
         return fail(w, "display: too small");
-    if (!(em = emulsion(w)) || preview_measure(w, em) ||
+    if (!(em = emulsion(w)) || preview_measure(w, em, i) ||
         fit(w, &w->pv[i].im, long_edge, &d))
         return -1;
-    rc = rgba_out(w, em, &w->pv_roll, &w->pv_pfr[i],
+    rc = rgba_out(w, em, &w->pv[i].roll, &w->pv[i].pf,
                   with_print ? ft_print_file_clicks(&w->pf, frame) : none, &d,
                   with_print ? ft_print_file_rotation(&w->pf, frame) : 0, pw,
                   ph);

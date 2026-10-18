@@ -270,3 +270,12 @@ done:
     free(pr);
     return rc;
 }
+
+int ft_share_print_balance(const ft_emulsion *em, const float base[3],
+                           const ft_image *proxy, ft_print_roll *roll,
+                           ft_print_frame *pf, ft_err *e)
+{
+    const ft_image *one[1];
+    one[0] = proxy;
+    return ft_print_roll_measure(em, base, one, 1, pf, roll, e);
+}

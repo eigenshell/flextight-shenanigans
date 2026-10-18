@@ -45,9 +45,9 @@ refused) until per-frame resolution.
 
 The box does no image or planning work. The page does, in C compiled to
 wasm (`tools/ftweb`, `ftweb.wasm` in a worker): it plans the share
-windows, cuts each window scan as it lands, measures the strip's colour
+windows, cuts each window scan as it lands, measures each frame's colour
 balance and prints, with the same bytes as `ftdev cut` + `ftdev print
---roll`. The server runs whitelisted `ftpoc` tasks and streams their
+--roll` (one frame a call). The server runs whitelisted `ftpoc` tasks and streams their
 output (the client never sends a command line), and keeps the strip's
 files, checking `strip.job` and `strip.print` with libft before it writes
 them.
