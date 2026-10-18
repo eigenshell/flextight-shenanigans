@@ -52,7 +52,7 @@ const HTML=`<div class="bar"><canvas id="live" width="1" height="1" aria-label="
 
 // ---------------------------------------------------------------- state
 let frames=[],dec={},landed=[],sel=0,task=null,es=null,run={kind:"",n:1,i:1},scanPx=0,info={},meta="";
-let pv=null,pvImg=null,kk={},queued=new Set(),scanning=new Set(),rescan=new Set(),cropped=new Set(),groups={},zoomed=0;
+let pv=null,pvImg=null,kk={},queued=new Set(),scanning=new Set(),rescan=new Set(),cropped=new Set(),groups={},dofs={},zoomed=0;
 // frames of a window scanned but not fetched (no rescan for them; a
 // reload fetches again), and why, per window
 let unfetched=new Set(),fe={};
@@ -68,7 +68,7 @@ const started=f=>/queued|scanning|done/.test(stateOf(f));
 // ---------------------------------------------------------------- screen
 async function review(s){
  if(!$("live")){const st_=document.createElement("style");st_.textContent=CSS;document.head.append(st_);$("rv").innerHTML=HTML;wire()}
- frames=[];dec={};landed=[];sel=0;kk={};queued.clear();scanning.clear();rescan.clear();cropped.clear();groups={};pv=null;pvImg=null;unfetched.clear();fe={};fetchBad();fetching("");
+ frames=[];dec={};landed=[];sel=0;kk={};queued.clear();scanning.clear();rescan.clear();cropped.clear();groups={};dofs={};pv=null;pvImg=null;unfetched.clear();fe={};fetchBad();fetching("");
  $("thumbs").innerHTML="";$("jobs").innerHTML="";$("notes").textContent="";$("ppin").textContent="";$("log").textContent="";$("pb").style.width="0";
  $("again").hidden=true;drawBig();
  const t=await api("/api/tasks/current").catch(()=>null);
@@ -245,7 +245,7 @@ function maybeStart(){if(task&&task.state==="running")return;if(!frames.length||
  startT=setTimeout(()=>{startT=0;$("toast").hidden=true;scanFrames(todo)},3000)}
 function cancelStart(){if(!startT)return;clearTimeout(startT);startT=0;$("toast").hidden=true;st("scan not started: confirm or skip a frame to start it")}
 async function scanFrames(todo){try{const r=await ft("plan",frames.map(f=>todo.includes(f.n)?scanPx:0));await api(S("strip.job"),{method:"PUT",body:r.text});
- const j=await ft("jobJson",meta);groups={};for(const f of j.frames)if(f.group)groups[f.n]=f.group;
+ const j=await ft("jobJson",meta);groups={};dofs={};for(const f of j.frames)if(f.group)groups[f.n]=f.group,dofs[f.group]=f.dof;
  // one pixel count per window: a cropped or partial frame needs more ppi
  // for it, and its window scans at that; said, not hidden
  const top=Math.max(...j.frames.map(f=>f.ppi)),why=frames.filter(f=>todo.includes(f.n)&&cropped.has(f.n)).map(f=>f.n);
@@ -263,7 +263,7 @@ function watch(t){task=t;busy(t.state==="running");if(es)es.close();$("log").tex
 function onLine(t){const lg=$("log");lg.textContent+=t+"\n";if(lg.textContent.length>2e4)lg.textContent=lg.textContent.slice(-15e3);
  const w=t.split(" ");if(w[0]!=="progress"){if(t.startsWith("ftwebd exit"))done(+w[2]);return}
  if(w[1]==="begin"){run={kind:w[2],n:+w[3]||1,i:1};fzReset();st(w[2]==="upload"?"the scanner was powered up: uploading its microcode first …":w[2]+" …")}
- else if(w[1]==="unit"){run.i=+w[3];fzReset();if(run.kind==="window"){const g=+w[4];scanning=new Set(Object.keys(groups).filter(n=>groups[n]===g).map(Number));for(const f of frames)badge(f);jobs()}st(run.kind+" "+run.i+"/"+run.n)}
+ else if(w[1]==="unit"){run.i=+w[3];run.g=+w[4];fzReset();if(run.kind==="window"){const g=+w[4];scanning=new Set(Object.keys(groups).filter(n=>groups[n]===g).map(Number));for(const f of frames)badge(f);jobs()}st(run.kind+" "+run.i+"/"+run.n)}
  else if(w[1]==="lines"){const[k,n]=w[2].split("/").map(Number);$("pb").style.width=((run.i-1+k/n)/run.n*100).toFixed(1)+"%";st(run.kind+" "+run.i+"/"+run.n+" · line "+k+"/"+n);
   if(task&&task.op==="preview")liveGrow(n)}
  else if(/^(focus|focused|sharp)$/.test(w[1]))onFocus(w);
@@ -277,17 +277,20 @@ async function done(code){busy(false);const op=task&&task.op;if(task)task.state=
  else if(code!==0&&!/stopped|ok/.test($("rst").textContent))st("failed (exit "+code+"); see the log",1);
  await landQ;if(!task||task.strip!==cur)return;if(op==="preview")await load();else{for(const f of frames)badge(f);jobs();maybeStart()}}
 
-// focus: ftpoc's crops as the status, the frame and a sharpness plot
+// focus: ftpoc's crops as the status, the frame and a sharpness plot; a
+// share window's peak shaded +-DOF95/2 (its frames' dof, ftw_dof95): how
+// far it may drift (or be carried) and stay at >= 95 % sharpness
 let fz=[],fzAt=null;
 function fzReset(){fz=[];fzAt=null;$("fz").hidden=true}
 function onFocus(w){const u=run.kind+" "+run.i+"/"+run.n+" · ";
  if(w[1]==="focus")st(u+"focusing"+(w[4]?" frame "+w[4]:"")+" · crop "+w[2]+(w[6]?" at "+w[6]:""));
  else if(w[1]==="sharp"){fz.push([+w[2],+w[3]]);plot()}
- else{fzAt=[+w[2],w[2]+" "+w[3]];st(u+(w[3]==="carried"?"focus "+w[2]+" carried: no crops":w[3]==="none"?"no focus peak: "+w[2]+" as it was":"focus "+w[2]+" ("+w[3]+")"),w[3]==="none");plot()}}
+ else{const h=run.kind==="window"&&w[3]!=="none"&&dofs[run.g]?Math.round(dofs[run.g]/2):0;
+  fzAt=[+w[2],w[2]+" "+w[3],h];st(u+(w[3]==="carried"?"focus "+w[2]+" carried: no crops":w[3]==="none"?"no focus peak: "+w[2]+" as it was":"focus "+w[2]+" ("+w[3]+")")+(h?" · DOF ±"+h+" steps":""),w[3]==="none");plot()}}
 function plot(){const c=$("fz"),d=devicePixelRatio,W=240*d,H=64*d,P=8*d;c.hidden=false;c.width=W;c.height=H;const x=c.getContext("2d"),
- os=fz.map(p=>p[0]).concat(fzAt?[fzAt[0]]:[]),lo=Math.min(...os)-250,hi=Math.max(...os)+250,ss=fz.map(p=>p[1]),a=Math.min(...ss),b=Math.max(...ss),
+ h=fzAt?fzAt[2]:0,os=fz.map(p=>p[0]).concat(fzAt?[fzAt[0]-h,fzAt[0]+h]:[]),lo=Math.min(...os)-250,hi=Math.max(...os)+250,ss=fz.map(p=>p[1]),a=Math.min(...ss),b=Math.max(...ss),
  X=o=>P+(o-lo)/(hi-lo)*(W-2*P),Y=v=>H-P-(b>a?(v-a)/(b-a):.5)*(H-3*P);
- x.fillStyle="#171311";x.fillRect(0,0,W,H);x.lineWidth=d;x.strokeStyle="#ff9a1f88";x.beginPath();
+ x.fillStyle="#171311";x.fillRect(0,0,W,H);if(h){x.fillStyle="#7fd17f26";x.fillRect(X(fzAt[0]-h),P,X(fzAt[0]+h)-X(fzAt[0]-h),H-2*P)}x.lineWidth=d;x.strokeStyle="#ff9a1f88";x.beginPath();
  [...fz].sort((p,q)=>p[0]-q[0]).forEach((p,i)=>i?x.lineTo(X(p[0]),Y(p[1])):x.moveTo(X(p[0]),Y(p[1])));x.stroke();x.fillStyle="#ff9a1f";
  for(const p of fz){x.beginPath();x.arc(X(p[0]),Y(p[1]),2.5*d,0,7);x.fill()}
  if(fzAt){const m=X(fzAt[0]);x.strokeStyle="#7fd17f";x.beginPath();x.moveTo(m,P);x.lineTo(m,H-P);x.stroke()}}

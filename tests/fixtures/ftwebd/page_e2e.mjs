@@ -137,7 +137,7 @@ try {
     await key("x");
     await until("sel === 5", "frame 5");
   }
-  await ev('window.stSeen=[];new MutationObserver(()=>stSeen.push(document.getElementById("rst").textContent)).observe(document.getElementById("rst"),{childList:true,characterData:true,subtree:true})');
+  await ev('window.stSeen=[];new MutationObserver(()=>stSeen.push(document.getElementById("rst").textContent+" |band "+(fzAt&&fzAt[2]))).observe(document.getElementById("rst"),{childList:true,characterData:true,subtree:true})');
   await key("x");
   await until('!document.getElementById("toast").hidden || (task && task.op === "scan")', "starting toast");
   if (mode === "fail") {

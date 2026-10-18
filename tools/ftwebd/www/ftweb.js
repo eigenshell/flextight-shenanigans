@@ -98,6 +98,7 @@ const ops = {
   },
   holders: () => (ok(X.ftw_holders(w)), JSON.parse(text())),
   lens: t => load(X.ftw_lens)(t),
+  dof95: (scale, bin) => X.ftw_dof95(w, scale, bin),
   job: t => load(X.ftw_job_load)(t),
   planLoad: t => load(X.ftw_plan_load)(t),
   // sizes: one px per frame of the preview's job (0: skip)

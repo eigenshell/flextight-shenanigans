@@ -30,6 +30,12 @@ double ft_lens_correction(const ft_lens *l, double scale)
     return l->corr_off[n - 1];
 }
 
+double ft_lens_dof95(const ft_lens *l, double scale, int bin)
+{
+    double m = l->p * scale;
+    return FT_DOF95_K * (1 + m) / (m * m) * (bin > 0 ? bin : 1);
+}
+
 int ft_bin_for_ppi(double ppi)
 {
     static const int bins[] = { 12, 6, 4, 3, 2, 1 };

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_ftweb import NODE, WASI_SDK, make
+from tests.test_ftweb import LENS_2P, LENS_P, NODE, WASI_SDK, dof95, make
 from tests.test_ftwebd import Server
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -181,6 +181,34 @@ def test_worker_lens(built, tmp_path):
     ])
     assert rep[0] == {"err": "focus file: needs film, w, fl and p"}
     assert rep[1] == {"r": None}
+
+
+def test_worker_dof95(built, tmp_path):
+    """the depth of field the page shows: ftw_dof95 (libft's law) on the
+    box's lens; jobJson's dof per planned frame at its ppi and bin"""
+    pv = (FIX / "preview.job").read_text()
+    rep = worker(tmp_path, [
+        {"op": "dof95", "a": [6300, 1]},
+        {"op": "dof95", "a": [3150, 2]},
+        {"op": "job", "a": [pv]},
+        {"op": "plan", "a": [[2450, 2450, 3000, 0, 0, 0]]},
+        {"op": "jobJson", "a": [None]},
+        {"op": "lens", "a": [LENS_2P]},
+        {"op": "dof95", "a": [3000, 1]},
+    ])
+    assert rep[0]["r"] == pytest.approx(dof95(6300, 1), abs=1e-9)
+    assert rep[1]["r"] == pytest.approx(dof95(3150, 2), abs=1e-9)
+    assert rep[6]["r"] == pytest.approx(dof95(3000, 1, 2 * LENS_P),
+                                        abs=1e-9)
+    text = rep[3]["r"]["text"]
+    secs = text.split("\n[frame ")[1:]
+    fr = rep[4]["r"]["frames"]
+    for f, s in zip(fr, secs):
+        ppi = float(s.split("\nppi = ")[1].split()[0])
+        b = int(s.split("\nbin = ")[1].split()[0])
+        want = round(dof95(ppi * b, b)) if f["px"] else 0
+        assert f["dof"] == want, (f, ppi, b)
+    assert [f["dof"] > 0 for f in fr] == [True] * 3 + [False] * 3
 
 
 def test_worker_print_file(built, tmp_path):
@@ -591,7 +619,14 @@ def check_end_to_end(tmp_path, out, box, dl):
                              "skipped", "under construction"]
     seen = "\n".join(out["seen"])
     assert "window 1/1 · focusing frame 1 · crop 1 at -500" in seen
-    assert "window 1/1 · focus +250 (measured)" in seen
+    # the depth of field: the window's peak shaded +-DOF95/2 (its frames'
+    # dof, ftw_dof95 at the planned ppi and bin) and said
+    sec = j1.split("\n[frame 1]")[1]
+    ppi = float(sec.split("\nppi = ")[1].split()[0])
+    b = int(sec.split("\nbin = ")[1].split()[0])
+    h = round(round(dof95(ppi * b, b)) / 2)
+    assert "window 1/1 · focus +250 (measured) · DOF ±%d steps |band %d" \
+        % (h, h) in seen, seen
     assert out["plot"]
     # a crop on a scanned frame asked; R rescanned it in a run of its own,
     # the first run's windows kept beside it

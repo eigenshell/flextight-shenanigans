@@ -2117,9 +2117,18 @@ struct crop_req {
 
 static long crop_bin(const struct crop_req *r)
 {
+    double s;
     if (!r->bin)
         return ft_bin_for_ppi(r->ppi);
-    return ft_bin_ok(r->ppi, r->bin) ? r->bin : -1;
+    if (ft_bin_ok(r->ppi, r->bin))
+        return r->bin;
+    /* explicit positions (-p): any optics the scanner reaches, down to
+     * FT_SCALE_REACH_MIN (the curve stops at FT_SCALE_MIN) */
+    s = r->ppi * r->bin;
+    if (r->ccd >= 0 && r->bin >= 1 && 12 % r->bin == 0 &&
+        s >= FT_SCALE_REACH_MIN - 1e-6 && s <= FT_SCALE_MAX + 1e-6)
+        return r->bin;
+    return -1;
 }
 
 /* Every check crop_scan makes before it sends anything: 0 with the
@@ -3799,13 +3808,12 @@ static int share_request(const ft_job *j, const ft_holder *h, int g,
 
 #define SHARE_FOCUS_TRIES 2  /* frames of a window tried for a peak */
 
-/* The 95 % depth of field in tandem steps at an optical scale and bin:
- * ~980 (1+m)/m^2 x bin (focus survey 2026-10-15/16, RESULTS.md 4: 636
- * at 6300, 3651 at 2000, 5653 at 1500, bin 1). */
+/* The 95 % depth of field in tandem steps at an optical scale and bin
+ * (ft_lens_dof95: ~980 (1+m)/m^2 x bin, focus survey 2026-10-15/16,
+ * RESULTS.md 4: 636 at 6300, 3651 at 2000, 5653 at 1500, bin 1). */
 static double focus_dof95(double scale, int bin)
 {
-    double m = g_lens.p * scale;
-    return 980.0 * (1 + m) / (m * m) * (bin > 0 ? bin : 1);
+    return ft_lens_dof95(&g_lens, scale, bin);
 }
 
 /* A share bracket's step: half the depth of field (5 crops span +-1

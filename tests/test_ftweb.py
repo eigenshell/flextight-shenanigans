@@ -170,6 +170,46 @@ def test_engine_display_copy(both):
     assert len(set(data[0::4])) > 20              # an image, not flat
 
 
+# libft's ft_lens_dof95 (ft_focus.c, the focus survey 2026-10-15/16's
+# fit): K (1+m)/m^2 x bin, m = p x scale; K and the default p pinned here
+DOF95_K, LENS_P = 980.0, 3.4799e-4
+LENS_2P = ("film = 1468601.0\nw = 268105.0\nfl = 317836.0\n"
+           "p = 6.9598e-04\n")
+
+
+def dof95(scale, b, p=LENS_P):
+    m = p * scale
+    return DOF95_K * (1 + m) / (m * m) * max(b, 1)
+
+
+def cli_dof(run, *args):
+    a = list(map(str, args))
+    r = run(a[:-2] + ["--dof95"] + a[-2:])
+    assert r.returncode == 0, r.stdout + r.stderr
+    return float(r.stdout)
+
+
+@needs_cc
+def test_engine_dof95_is_libft(tools, tmp_path):
+    """ftw_dof95 is libft's law on the page's lens (default: libft's),
+    the survey's widths within 10 % at bin 1, bin 2 twice bin 1"""
+    cli = tools[1]
+    run = lambda a: subprocess.run([str(cli), *a], capture_output=True,
+                                   text=True)
+    for scale, b in ((6300, 1), (2000, 1), (1500, 1), (1729, 1), (3150, 2),
+                     (3150, 0)):
+        assert cli_dof(run, scale, b) == pytest.approx(dof95(scale, b),
+                                                       abs=1e-5)
+    for scale, measured in ((6300, 636), (2000, 3651), (1500, 5653)):
+        assert cli_dof(run, scale, 1) == pytest.approx(measured, rel=0.10)
+    assert cli_dof(run, 3150, 2) == pytest.approx(2 * cli_dof(run, 3150, 1),
+                                                  abs=1e-5)
+    lens = tmp_path / "focus.txt"
+    lens.write_text(LENS_2P)
+    assert cli_dof(run, "--lens", str(lens), 3000, 1) == \
+        pytest.approx(dof95(3000, 1, 2 * LENS_P), abs=1e-5)
+
+
 WASI_SDK = Path(os.environ.get(
     "WASI_SDK", Path.home() / ".local/opt/wasi-sdk-34.0-x86_64-linux"))
 
@@ -216,7 +256,8 @@ def test_wasm_module_imports_and_exports(wasm):
     assert {i["module"] for i in imports} == {"wasi_snapshot_preview1"}
     assert {i["name"] for i in imports} == WASM_IMPORTS
     for name in ("ftw_new", "ftw_cut", "ftw_measure", "ftw_jpeg",
-                 "ftw_display", "ftw_zip", "ftw_alloc", "memory"):
+                 "ftw_display", "ftw_zip", "ftw_alloc", "ftw_dof95",
+                 "memory"):
         assert name in exports
     assert wasm[0].stat().st_size < 400_000       # light: ~200 KB
 
@@ -240,3 +281,20 @@ def test_wasm_makes_the_native_bytes(wasm, both, tmp_path):
         assert (out / name).read_bytes() == (native / name).read_bytes(), \
             name
     assert r.stderr == wr.stderr
+
+
+@needs_cc
+@needs_wasm
+def test_wasm_dof95_is_native(wasm, tools, tmp_path):
+    lens = tmp_path / "focus.txt"
+    lens.write_text(LENS_2P)
+    for args in (["--dof95", "1729", "1"], ["--dof95", "3150", "2"],
+                 ["--lens", str(lens), "--dof95", "3000", "1"]):
+        n = subprocess.run([str(tools[1]), *args], capture_output=True,
+                           text=True)
+        w = subprocess.run([NODE, "--no-warnings",
+                            str(FTWEB / "wasi_run.mjs"), str(wasm[1]),
+                            str(tmp_path), *args], capture_output=True,
+                           text=True)
+        assert n.returncode == 0 and w.returncode == 0, w.stderr
+        assert w.stdout == n.stdout

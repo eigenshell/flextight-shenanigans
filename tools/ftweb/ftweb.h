@@ -42,6 +42,9 @@ int ftw_holders(ftw *w);
 /* the planner's focus fit: the box's focus.txt (default: libft's
  * built-in curve, ft_lens_default) */
 int ftw_lens(ftw *w, const char *text, size_t n);
+/* the 95 % depth of field in tandem focus steps at an optical scale
+ * (ppi x bin) and bin, on that lens (ft_lens_dof95) */
+double ftw_dof95(const ftw *w, double scale, int bin);
 
 /* strip.job. ftw_job_load: the preview's job (strip.preview.job, every
  * frame as detected), the base every plan starts from (the planner
@@ -51,10 +54,11 @@ int ftw_lens(ftw *w, const char *text, size_t n);
  * FT_SHARE_6MP, ...); the number of windows. ftw_job_text: the planned
  * job's text (else the base's) -> out. ftw_job_json -> out: {"film":
  * "neg|slide","holder","windows","frames":[{"n","type","low","x","y",
- * "w","h","px","ppi","group","done"}]}: the base's frames, their boxes in the
- * preview image's pixels (strip.png; x = the "x=" line of the preview's
- * strip.raw.txt, NULL/0: the standard preview's), px/ppi/group/done from
- * the plan (0/0/0/false without one). */
+ * "w","h","px","ppi","group","done","dof"}]}: the base's frames, their
+ * boxes in the preview image's pixels (strip.png; x = the "x=" line of
+ * the preview's strip.raw.txt, NULL/0: the standard preview's),
+ * px/ppi/group/done from the plan (0/0/0/false without one), dof:
+ * ftw_dof95 at the planned frame's ppi and bin (0 unplanned). */
 int ftw_job_load(ftw *w, const char *text, size_t n);
 int ftw_plan_load(ftw *w, const char *text, size_t n);
 int ftw_plan(ftw *w, const double *px, int n);
