@@ -160,6 +160,7 @@ int http_read(http_req *r)
     r->nbody = 0;
     r->last_event_id[0] = 0;
     r->if_none_match[0] = 0;
+    r->range_from = -1;
     while (!end) {
         int got;
         if (k + 1 >= sizeof head)
@@ -183,6 +184,12 @@ int http_read(http_req *r)
     }
     if (header(head, "Last-Event-ID", v, sizeof v))
         snprintf(r->last_event_id, sizeof r->last_event_id, "%.23s", v);
+    if (header(head, "Range", v, sizeof v) && strncmp(v, "bytes=", 6) == 0) {
+        char *end;
+        long from = strtol(v + 6, &end, 10);
+        if (end != v + 6 && *end == '-' && !end[1] && from >= 0)
+            r->range_from = from;
+    }
     if (header(head, "If-None-Match", v, sizeof v))
         snprintf(r->if_none_match, sizeof r->if_none_match, "%.47s", v);
     q = strchr(target, '?');
@@ -272,34 +279,64 @@ static const char *mime(const char *path)
     return "application/octet-stream";
 }
 
-/* path with cache headers ("Cache-Control: ...\r\n" + more) */
-static void send_file(sock_t s, const char *path, const char *cache)
+/* path with cache headers ("Cache-Control: ...\r\n" + more); from >= 0:
+ * a range from there (http_file_from) */
+static void send_file(sock_t s, const char *path, const char *cache,
+                      long from)
 {
-    char h[400], buf[65536];
+    char h[500], buf[65536], rng[100] = "";
     FILE *f = fopen(path, "rb");
-    long n;
+    long n, len;
     size_t got;
     int k;
-    if (!f || fseek(f, 0, SEEK_END) || (n = ftell(f)) < 0 ||
-        fseek(f, 0, SEEK_SET)) {
+    if (!f || fseek(f, 0, SEEK_END) || (n = ftell(f)) < 0) {
         if (f)
             fclose(f);
         http_error(s, 404, "no such file");
         return;
     }
-    k = snprintf(h, sizeof h, "HTTP/1.1 200 OK\r\nContent-Type: %s\r\n"
-                 "Content-Length: %ld\r\n%sConnection: close\r\n\r\n",
-                 mime(path), n, cache);
+    len = n;
+    if (from >= 0) {
+        if (from >= n) {
+            fclose(f);
+            k = snprintf(h, sizeof h, "HTTP/1.1 416 Range Not Satisfiable"
+                         "\r\nContent-Range: bytes */%ld\r\n"
+                         "Content-Length: 0\r\n%sConnection: close\r\n\r\n",
+                         n, cache);
+            http_send_all(s, h, (size_t)k);
+            return;
+        }
+        len = n - from < HTTP_RANGE_MAX ? n - from : HTTP_RANGE_MAX;
+        snprintf(rng, sizeof rng, "Content-Range: bytes %ld-%ld/%ld\r\n",
+                 from, from + len - 1, n);
+    }
+    if (fseek(f, from >= 0 ? from : 0, SEEK_SET)) {
+        fclose(f);
+        http_error(s, 404, "no such file");
+        return;
+    }
+    k = snprintf(h, sizeof h, "HTTP/1.1 %s\r\nContent-Type: %s\r\n"
+                 "Content-Length: %ld\r\n%s%sConnection: close\r\n\r\n",
+                 from >= 0 ? "206 Partial Content" : "200 OK", mime(path),
+                 len, rng, cache);
     if (http_send_all(s, h, (size_t)k) == 0)
-        while ((got = fread(buf, 1, sizeof buf, f)) > 0)
+        while (len > 0 && (got = fread(buf, 1, len < (long)sizeof buf
+                                       ? (size_t)len : sizeof buf, f)) > 0) {
+            len -= (long)got;
             if (http_send_all(s, buf, got))
                 break;
+        }
     fclose(f);
 }
 
 void http_file(sock_t s, const char *path)
 {
-    send_file(s, path, "Cache-Control: no-store\r\n");
+    send_file(s, path, "Cache-Control: no-store\r\n", -1);
+}
+
+void http_file_from(sock_t s, const char *path, long from)
+{
+    send_file(s, path, "Cache-Control: no-store\r\n", from);
 }
 
 void http_static(sock_t s, const char *path, const char *inm)
@@ -321,7 +358,7 @@ void http_static(sock_t s, const char *path, const char *inm)
         http_send_all(s, h, (size_t)k);
         return;
     }
-    send_file(s, path, cache);
+    send_file(s, path, cache, -1);
 }
 
 int http_sse_head(sock_t s)

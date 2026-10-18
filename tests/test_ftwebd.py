@@ -401,3 +401,88 @@ def test_page_fits_the_first_packet(srv):
     # the rest loads after the shell: the print stage, the worker
     assert b'<script src="print.js" defer>' in page
     assert b'new Worker("ftweb.js")' in page
+
+
+def ranged(s, path, start):
+    """GET with Range: bytes=start- -> (code, headers, body)"""
+    r = urllib.request.Request("http://127.0.0.1:%d%s" % (s.port, path))
+    r.add_header("Range", "bytes=%d-" % start)
+    try:
+        with urllib.request.urlopen(r, timeout=10) as f:
+            return f.status, dict(f.headers), f.read()
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read()
+
+
+def test_range_reads_a_growing_file(srv):
+    """the live bar reads strip.raw as ftpoc writes it: bytes=N- -> 206
+    with what is there now (at most 1 MB a reply), 416 when nothing new;
+    no Range: the whole file as before"""
+    srv.req("POST", "/api/strips", {"name": "a"})
+    raw = srv.cwd / "strips" / "a" / "strip.raw"
+    raw.write_bytes(bytes(range(256)) * 4)
+    p = "/api/strips/a/files/strip.raw"
+    code, h, body = ranged(srv, p, 1000)
+    assert code == 206 and body == (bytes(range(256)) * 4)[1000:]
+    assert h["Content-Range"] == "bytes 1000-1023/1024"
+    assert ranged(srv, p, 1024)[0] == 416
+    with raw.open("ab") as f:
+        f.write(b"\x01" * (3 << 20))
+    code, h, body = ranged(srv, p, 1024)
+    assert code == 206 and len(body) == 1 << 20
+    assert h["Content-Range"] == "bytes 1024-%d/%d" % ((1 << 20) + 1023,
+                                                       1024 + (3 << 20))
+    assert len(srv.req("GET", p, raw=True)[1]) == 1024 + (3 << 20)
+
+
+def test_recent_scans_placeholder(srv):
+    assert srv.req("GET", "/api/scans") == (200, [])
+
+
+def test_strip_with_choices(srv):
+    """the landing page's choices are kept with the strip (strip.scan);
+    bad ones refused, the folder not made"""
+    body = {"name": "b", "type": "quick", "ppi": "1730", "holder": "24x217",
+            "emulsion": "generic-neg"}
+    assert srv.req("POST", "/api/strips", body) == (200, {"name": "b"})
+    t = (srv.cwd / "strips" / "b" / "strip.scan").read_text()
+    assert re.fullmatch(r"type = quick\nppi = 1730\nholder = 24x217\n"
+                        r"emulsion = generic-neg\n"
+                        r"created = \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\n", t)
+    for k, v, msg in (("ppi", "500", "ppi: 500 is out of the optics' range"),
+                      ("holder", "nope", "holder: no holder 'nope'"),
+                      ("emulsion", "nope", "emulsion: no emulsion 'nope'"),
+                      ("type", "archive", "type: only quick scans so far")):
+        code, e = srv.req("POST", "/api/strips", dict(body, name="c", **{k: v}))
+        assert (code, e["error"]) == (422, msg)
+    assert not (srv.cwd / "strips" / "c").exists()
+
+
+def test_review_put_validated(srv):
+    srv.req("POST", "/api/strips", {"name": "a"})
+    p = "/api/strips/a/strip.review"
+    assert srv.req("GET", p, raw=True)[0] == 404
+    good = "1 confirmed\n2 skipped\n3 pending\n"
+    assert srv.req("PUT", p, good) == (200, {"ok": True})
+    assert srv.req("GET", p, raw=True) == (200, good.encode())
+    for bad, msg in (("1 maybe\n", "line 1: '1 maybe' is not <frame> "
+                                   "pending|confirmed|skipped"),
+                     ("x confirmed\n", "line 1: 'x confirmed' is not <frame> "
+                                       "pending|confirmed|skipped")):
+        code, e = srv.req("PUT", p, bad)
+        assert (code, e["error"]) == (422, msg)
+    assert srv.req("GET", p, raw=True) == (200, good.encode())
+
+
+def test_preview_job_put_validated(srv):
+    """a crop keeps the preview's job (the base of every plan)"""
+    previewed(srv)
+    d = srv.cwd / "strips" / "a"
+    before = (d / "strip.preview.job").read_text()
+    p = "/api/strips/a/strip.preview.job"
+    code, e = srv.req("PUT", p, "[strip]\nbogus = 1\n")
+    assert code == 422 and "bogus" in e["error"]
+    moved = before.replace("window = 4.000 1.600", "window = 5.000 1.600", 1)
+    assert moved != before
+    assert srv.req("PUT", p, moved) == (200, {"ok": True})
+    assert (d / "strip.preview.job").read_text() == moved
