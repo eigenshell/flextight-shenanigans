@@ -71,6 +71,18 @@ function ints(n, f) {
   }
 }
 
+// fn(w, frame, edge, &w, &h) -> {w, h, rgba}
+function rgbaOf(fn, f, edge) {
+  const p = X.ftw_alloc(8);
+  try {
+    ok(fn(w, f, edge, p, p + 4));
+    const d = new Int32Array(M.buffer, p, 2);
+    return { w: d[0], h: d[1], rgba: out() };
+  } finally {
+    X.ftw_release(p);
+  }
+}
+
 const ops = {
   emulsions: () => (ok(X.ftw_emulsions(w)), JSON.parse(text())),
   // ppis -> [{ppi, mp, px, dmax}]
@@ -137,26 +149,10 @@ const ops = {
                             faul ? faul.length : 0, pm, meta.length)));
   },
   measure: () => (ok(X.ftw_measure(w)), text()),
-  display(f, edge) {
-    const p = X.ftw_alloc(8);
-    try {
-      ok(X.ftw_display(w, f, edge, p, p + 4));
-      const d = new Int32Array(M.buffer, p, 2);
-      return { w: d[0], h: d[1], rgba: out() };
-    } finally {
-      X.ftw_release(p);
-    }
-  },
-  previewDisplay(f, edge) {
-    const p = X.ftw_alloc(8);
-    try {
-      ok(X.ftw_preview_display(w, f, edge, p, p + 4));
-      const d = new Int32Array(M.buffer, p, 2);
-      return { w: d[0], h: d[1], rgba: out() };
-    } finally {
-      X.ftw_release(p);
-    }
-  },
+  display: (f, edge) => rgbaOf(X.ftw_display, f, edge),
+  previewDisplay: (f, edge) => rgbaOf(X.ftw_preview_display, f, edge),
+  previewPrint: (f, edge) => rgbaOf(X.ftw_preview_print, f, edge),
+  previewPx: () => X.ftw_preview_px(),
   // raw preview lines (bytes, whole lines) -> {w, h, rgba} for the live bar
   liveRows(raw, px, neg, first) {
     return withPut([raw], p => {

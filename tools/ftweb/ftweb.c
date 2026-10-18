@@ -1085,7 +1085,9 @@ static int preview_measure(ftw *w, const ft_emulsion *em)
     return 0;
 }
 
-int ftw_preview_display(ftw *w, int frame, int long_edge, int *pw, int *ph)
+/* a preview frame printed; with_print: strip.print's clicks and turn */
+static int preview_rgba(ftw *w, int frame, int long_edge, int with_print,
+                        int *pw, int *ph)
 {
     static const ft_cmyd none;
     const ft_emulsion *em;
@@ -1100,9 +1102,27 @@ int ftw_preview_display(ftw *w, int frame, int long_edge, int *pw, int *ph)
     if (!(em = emulsion(w)) || preview_measure(w, em) ||
         fit(w, &w->pv[i].im, long_edge, &d))
         return -1;
-    rc = rgba_out(w, em, &w->pv_roll, &w->pv_pfr[i], none, &d, 0, pw, ph);
+    rc = rgba_out(w, em, &w->pv_roll, &w->pv_pfr[i],
+                  with_print ? ft_print_file_clicks(&w->pf, frame) : none, &d,
+                  with_print ? ft_print_file_rotation(&w->pf, frame) : 0, pw,
+                  ph);
     ft_image_free(&d);
     return rc;
+}
+
+int ftw_preview_display(ftw *w, int frame, int long_edge, int *pw, int *ph)
+{
+    return preview_rgba(w, frame, long_edge, 0, pw, ph);
+}
+
+int ftw_preview_print(ftw *w, int frame, int long_edge, int *pw, int *ph)
+{
+    return preview_rgba(w, frame, long_edge, 1, pw, ph);
+}
+
+int ftw_preview_px(void)
+{
+    return FT_PREVIEW_PX;
 }
 
 /* a frame's JPEG in the zip: its name, else <base>_frameNN */

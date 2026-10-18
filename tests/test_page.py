@@ -340,6 +340,37 @@ def test_worker_positive_preview(built, tmp_path):
     assert "standard preview" in rep[11]["err"]
 
 
+def test_worker_preview_print(built, tmp_path):
+    """the review shows a frame as it will print before it is scanned:
+    the preview frame with strip.print's clicks and turn (previewDisplay
+    stays without them); the standard preview's px for the live bar"""
+    pytest.importorskip("numpy")
+    pv = (FIX / "preview.job").read_text()
+    meta = "px=666\nx=2\nbin=12\n"
+    boxes = worker(tmp_path, [{"op": "job", "a": [pv]},
+                              {"op": "jobJson", "a": [meta]}])[1]["r"]["frames"]
+    raw, cal, txt = preview_files(tmp_path, boxes)
+    files = [{"file": str(raw)}, {"file": str(cal)}, meta, None]
+    rep = worker(tmp_path, [
+        {"op": "printNew", "a": ["generic-neg"]},
+        {"op": "job", "a": [pv]},
+        {"op": "previewLoad", "a": files},
+        {"op": "previewPrint", "a": [1, 300], "out": str(tmp_path / "a")},
+        {"op": "clicks", "a": [1, [0, 0, 0, 6]]},
+        {"op": "previewPrint", "a": [1, 300], "out": str(tmp_path / "b")},
+        {"op": "previewDisplay", "a": [1, 300], "out": str(tmp_path / "c")},
+        {"op": "rotate", "a": [1, 90]},
+        {"op": "previewPrint", "a": [1, 300]},
+        {"op": "previewPx"},
+    ])
+    a, b, c = ((tmp_path / n).read_bytes() for n in "abc")
+    assert a == c                             # no clicks yet: the same
+    assert b != a and sum(b) < sum(a)         # D + 6: a darker print
+    w, h = rep[3]["r"]["w"], rep[3]["r"]["h"]
+    assert (rep[8]["r"]["w"], rep[8]["r"]["h"]) == (h, w)
+    assert rep[9]["r"] == 666
+
+
 def run_page(built, tmp_path):
     """the page in Chromium: new strip, preview, taps (3: 6MP, 4: ARC,
     5: skip), frame 2 turned on the strip, pos, scan, clicks c c M and a

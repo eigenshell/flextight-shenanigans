@@ -122,6 +122,11 @@ int ftw_preview_load(ftw *w, const unsigned short *raw, size_t raw_n,
                      const char *faul, size_t faul_n, const char *meta,
                      size_t meta_n);
 int ftw_preview_display(ftw *w, int frame, int long_edge, int *pw, int *ph);
+/* the same with strip.print's clicks and turn: the review's view of a
+ * frame before it is scanned */
+int ftw_preview_print(ftw *w, int frame, int long_edge, int *pw, int *ph);
+/* the standard preview's px per line (strip.raw's lines while it scans) */
+int ftw_preview_px(void);
 /* the live bar while the preview scans: whole raw lines (px x 3 samples
  * each, as strip.raw holds them) -> out: RGBA rows, one per line; the
  * line count. first: these lines start a preview, their brightest sample
