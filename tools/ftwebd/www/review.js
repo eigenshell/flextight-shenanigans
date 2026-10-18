@@ -78,7 +78,7 @@ const emOf=()=>info.emulsion||(ems.find(e=>e.mode==="negative")||ems[0]).id;
 // the strip's files -> frames, decisions, prints
 async function load(){const s=cur;
  const pj=await get(F("strip.preview.job"))||await get(S("strip.job"));if(s!==cur)return;
- if(!pj){$("again").hidden=!!(task&&task.state==="running");return st("no preview yet")}
+ if(!pj){$("again").hidden=!!(task&&task.state==="running");if(!$("rst").classList.contains("err"))st("no preview yet");return}
  try{await ft("job",pj);const j=await get(S("strip.job"));if(j)await ft("planLoad",j)}catch(e){return st(e.message,1)}
  const p=await get(S("strip.print"));
  try{if(p)await ft("printLoad",p);else await ft("printNew",emOf())}catch(e){st("strip.print: "+e.message,1);await ft("printNew",emOf())}
@@ -88,10 +88,14 @@ async function load(){const s=cur;
  if(s!==cur)return;
  if(raw&&cal&&meta){pv=[raw,cal,meta,faul];try{await ft("previewLoad",...pv)}catch(e){pv=null;st("preview: "+e.message,1)}}
  pvImg=await img(F("strip.png")+"?t="+Date.now());
- const l=await api(S("files")).catch(()=>[]);
- for(const n of winFiles(l.map(x=>x.name)))await cut(n,1);
- await reprint();drawStrip();thumbs();jobs();
- const first=frames.find(f=>stateOf(f)==="pending")||frames[0];if(first)await pick(first.n);st("")}
+ // the frames from the preview at once; scanned windows (tens of MB each)
+ // are cut after, each frame redrawn as its print lands
+ drawStrip();jobs();const first=frames.find(f=>stateOf(f)==="pending")||frames[0];
+ await thumbs();if(first)await pick(first.n);st("");
+ const l=await api(S("files")).catch(()=>[]),wins=winFiles(l.map(x=>x.name));
+ for(const[i,n]of wins.entries())landQ=landQ.then(async()=>{if(s!==cur)return;st("loading scanned window "+(i+1)+"/"+wins.length+" …");
+  const before=landed.slice();await cut(n,1);const nw=landed.filter(x=>!before.includes(x));if(s!==cur)return;
+  await reprint();await thumbs(landed.slice());jobs();drawStrip();if(landed.includes(sel))await pick(sel);if(i===wins.length-1)st("")})}
 const img=src=>new Promise(y=>{const i=new Image();i.onload=()=>y(i);i.onerror=()=>y(null);i.src=src});
 // window scans, earlier runs first (strip_rK_winNN), the latest last
 function winFiles(names){const k=n=>{const m=n.match(/^strip_(?:r(\d+)_)?win(\d\d)\.raw$/);return m?[m[1]?+m[1]:1e9,+m[2]]:null};
@@ -138,7 +142,10 @@ async function drawBig(){const c=$("big"),f=frame(sel);if(!f){c.width=c.height=0
  const x=c.getContext("2d");x.fillStyle="#000";x.fillRect(0,0,c.width,c.height);
  x.setTransform(1,0,0,1,0,0);x.translate(G.cx,G.cy);x.rotate(r*Math.PI/180);x.scale(k,k);x.translate(-G.vx,-G.vy);
  if(I){x.globalAlpha=.4;x.drawImage(I,V.x,V.y,V.w,V.h,V.x,V.y,V.w,V.h);x.globalAlpha=1}x.setTransform(1,0,0,1,0,0);
- const S=toScreen(drag?drag.box:f);if(!drag||!bigPrint)bigPrint=await paintTo(document.createElement("canvas"),f.n,Math.round(Math.max(S.w,S.h)));
+ // the thumbnail stands in at once; the print at full size replaces it
+ const S=toScreen(drag?drag.box:f),tc=$("th"+f.n)&&$("th"+f.n).querySelector("canvas");
+ if(!bigPrint&&tc&&tc.width>1)x.drawImage(tc,S.x,S.y,S.w,S.h);
+ if(!bigPrint){const n=f.n;bigPrint=await paintTo(document.createElement("canvas"),n,Math.round(Math.max(S.w,S.h)));if(sel!==n)return}
  if(bigPrint)x.drawImage(bigPrint,S.x,S.y,S.w,S.h);
  x.strokeStyle=started(f)&&!rescan.has(f.n)?"#7fd17f":"#ff9a1f";x.lineWidth=2*dpr;x.strokeRect(S.x,S.y,S.w,S.h);x.fillStyle=x.strokeStyle;
  const h=7*dpr;for(const[px,py]of[[0,0],[.5,0],[1,0],[0,.5],[1,.5],[0,1],[.5,1],[1,1]])x.fillRect(S.x+px*S.w-h/2,S.y+py*S.h-h/2,h,h)}
@@ -237,7 +244,8 @@ let landQ=Promise.resolve();
 const land=n=>landQ=landQ.then(async()=>{const before=landed.slice();await cut(n);const nw=landed.filter(x=>!before.includes(x)||queued.has(x));
  for(const x of nw){queued.delete(x);scanning.delete(x)}await reprint();thumbs(nw);jobs();if(nw.includes(sel))pick(sel)});
 async function done(code){busy(false);const op=task&&task.op;if(task)task.state="done";scanning.clear();queued.clear();
- if(code!==0&&!/stopped|ok/.test($("rst").textContent))st("failed (exit "+code+"); see the log",1);
+ if(code!==0&&/SCSI Loader/.test($("log").textContent))st("the scanner is in its loader (after a power-up): upload its microcode first (ftpoc upload MICROCOD.3XX), then try again",1);
+ else if(code!==0&&!/stopped|ok/.test($("rst").textContent))st("failed (exit "+code+"); see the log",1);
  await landQ;if(!task||task.strip!==cur)return;if(op==="preview")await load();else{for(const f of frames)badge(f);jobs();maybeStart()}}
 
 // focus: ftpoc's crops as the status, the frame and a sharpness plot

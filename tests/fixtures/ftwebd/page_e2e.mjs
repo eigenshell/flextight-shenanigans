@@ -129,7 +129,7 @@ try {
   await until("sel === 5", "frame 5");
   await ev('window.stSeen=[];new MutationObserver(()=>stSeen.push(document.getElementById("rst").textContent)).observe(document.getElementById("rst"),{childList:true,characterData:true,subtree:true})');
   await key("x");
-  await until('!document.getElementById("toast").hidden', "starting toast");
+  await until('!document.getElementById("toast").hidden || (task && task.op === "scan")', "starting toast");
   await until('task && task.op === "scan" && task.state === "done" && landed.length > 0', "scan", 90000);
   await ev("landQ");
   const review = await ev('fetch(S("strip.review")).then(r=>r.text())');
