@@ -115,14 +115,20 @@ try {
   await until('fetch(S("strip.preview.job")).then(r=>r.text()).then(t=>t!==' + JSON.stringify(before) + ')', "crop kept");
   const after = await ev('fetch(S("strip.preview.job")).then(r=>r.text())');
   await key("Enter");
-  // 4 and 5 skipped (x), 6 confirmed: none pending, the scan starts
   await until("sel === 4", "frame 4");
+  // frame 6 (partial) is under construction: Enter refused
+  await ev("pick(6)");
+  await until("sel === 6", "frame 6");
+  const uc = await ev('document.getElementById("th6").querySelector(".b").textContent');
+  await key("Enter");
+  const ucSaid = await ev('document.getElementById("rst").textContent');
+  // 4 and 5 skipped (x): none pending, the scan starts
+  await ev("pick(4)");
+  await until("sel === 4", "back to 4");
   await key("x");
   await until("sel === 5", "frame 5");
-  await key("x");
-  await until("sel === 6", "frame 6");
   await ev('window.stSeen=[];new MutationObserver(()=>stSeen.push(document.getElementById("rst").textContent)).observe(document.getElementById("rst"),{childList:true,characterData:true,subtree:true})');
-  await key("Enter");
+  await key("x");
   await until('!document.getElementById("toast").hidden', "starting toast");
   await until('task && task.op === "scan" && task.state === "done" && landed.length > 0', "scan", 90000);
   await ev("landQ");
@@ -152,7 +158,7 @@ try {
     ' notes: document.getElementById("notes").textContent, print: await fetch(S("strip.print")).then(r=>r.text()),' +
     ' files: (await api(S("files"))).map(f=>f.name), job2: await fetch(S("strip.job")).then(r=>r.text())}))()');
   console.log(JSON.stringify(Object.assign({ strip, res, holder, recent, scanFile, before, after, review,
-    job1, landed1, states, ppin, question, keymapText }, out)));
+    job1, landed1, states, ppin, uc, ucSaid, question, keymapText }, out)));
 } catch (e) {
   console.error(String(e && e.stack || e));
   process.exitCode = 1;

@@ -426,29 +426,32 @@ def test_page_end_to_end(built, tmp_path):
                             "cmyd = 2 -1 0 0\nrotate = 90\n\n[frame 2]\n"
                             "name = dog\ncmyd = 0 0 0 1\nrotate = 90\n")
     assert out["review"] == ("1 confirmed\n2 confirmed\n3 confirmed\n"
-                             "4 skipped\n5 skipped\n6 confirmed\n")
+                             "4 skipped\n5 skipped\n6 skipped\n")
+    # partial frames wait for per-frame resolution: under construction
+    assert out["uc"] == "under construction"
+    assert out["ucSaid"] == ("frame 6 (partial): under construction: "
+                             "partial frames wait for per-frame resolution")
     # the crop: frame 3's window shorter, the rest as detected
     w0 = re.findall(r"window = (\S+) (\S+) (\S+)", out["before"])
     w1 = re.findall(r"window = (\S+) (\S+) (\S+)", out["after"])
     assert w1[:2] == w0[:2] and w1[3:] == w0[3:]
     assert float(w1[2][2]) < float(w0[2][2]) - 1
-    # the scan started by itself: confirmed frames in, skipped out; the
-    # partial frame 6 raises the ppi, and the page says so
+    # the scan started by itself: confirmed frames in, skipped and
+    # partial out; the cropped frame 3 raises the ppi, and the page says so
     j1 = out["job1"]
     inc = re.findall(r"\[frame (\d)\]\ntype = \w+\ninclude = (\w+)", j1)
     assert inc == [("1", "yes"), ("2", "yes"), ("3", "yes"), ("4", "no"),
-                   ("5", "no"), ("6", "yes")]
+                   ("5", "no"), ("6", "no")]
     assert "share = 3472" in j1
-    assert out["ppin"].startswith("note: this scan runs at 3615 ppi, not "
-                                  "2450: every frame gets 3472 px on its long "
-                                  "side, and frames 3, 6 (partial or cropped)")
-    assert out["landed1"] == [1, 6]           # one fake frame per window
+    assert out["ppin"] == ("note: this scan runs at 2617 ppi, not 2450: "
+                           "every frame gets 3472 px on its long side, and "
+                           "frame 3 (cropped) needs more ppi for that")
+    assert out["landed1"] == [1]              # one window, one fake frame
     assert out["states"] == ["done", "confirmed", "confirmed", "skipped",
-                             "skipped", "done"]
+                             "skipped", "under construction"]
     seen = "\n".join(out["seen"])
-    assert "window 1/2 · focusing frame 1 · crop 1 at -500" in seen
-    assert "window 1/2 · focus +250 (measured)" in seen
-    assert "window 2/2 · focus +250 carried: no crops" in seen
+    assert "window 1/1 · focusing frame 1 · crop 1 at -500" in seen
+    assert "window 1/1 · focus +250 (measured)" in seen
     assert out["plot"]
     # a crop on a scanned frame asked; R rescanned it in a run of its own,
     # the first run's windows kept beside it
@@ -457,8 +460,7 @@ def test_page_end_to_end(built, tmp_path):
     log = [json.loads(l) for l in (box / "fake_ftpoc.log").read_text()
            .splitlines()]
     assert [a[0] for a in log] == ["frames", "scan", "scan"]
-    assert {"strip_r1_win01.raw", "strip_r1_win02.raw",
-            "strip_win01.raw"} <= set(out["files"])
+    assert {"strip_r1_win01.raw", "strip_win01.raw"} <= set(out["files"])
     assert 1 in out["landed"]
     # the keymap overlay lists the dvorak keys
     assert "'" in out["keymapText"] and "turn right" in out["keymapText"]
@@ -468,8 +470,7 @@ def test_page_end_to_end(built, tmp_path):
     for w in sorted(strip.glob("strip_r1_win*.raw")):
         subprocess.run([str(FTDEV), "cut", str(w)], check=True,
                        capture_output=True)
-    dngs = [str(strip / "strip_r1_frame01.dng"),
-            str(strip / "strip_r1_frame06.dng")]
+    dngs = [str(strip / "strip_r1_frame01.dng")]
     r = subprocess.run([str(FTDEV), "print", *dngs, "--roll",
                         str(strip / "strip.print"), "--job", str(job)],
                        capture_output=True, text=True)
@@ -482,8 +483,7 @@ def test_page_end_to_end(built, tmp_path):
     assert "\nrotate=90\n" in page.with_suffix(".jpg.txt").read_text()
     with zipfile.ZipFile(dl / (s + ".zip")) as z:
         assert z.testzip() is None
-        assert z.namelist() == [s + "_frame01.jpg", s + "_frame01.jpg.txt",
-                                s + "_frame06.jpg", s + "_frame06.jpg.txt"]
+        assert z.namelist() == [s + "_frame01.jpg", s + "_frame01.jpg.txt"]
         for n in z.namelist():
             assert z.read(n) == \
                 (strip / ("strip_r1" + n[len(s):])).read_bytes(), n

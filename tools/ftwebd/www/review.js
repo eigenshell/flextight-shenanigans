@@ -16,7 +16,7 @@ const CSS=`#rv .bar{background:linear-gradient(#262019,#120f0d);border-block:1px
 .th{position:relative;flex:none;border:2px solid transparent;background:#000;cursor:pointer;padding:0;min-height:0}
 .th canvas{display:block;height:84px}.th.sel{border-color:var(--amber)}
 .th span{position:absolute;left:3px;font-size:10px;line-height:1.3;padding:0 4px;background:#000b}.th .n{top:3px}.th .b{bottom:3px}
-.b.confirmed,.b.queued{color:var(--amber)}.b.scanning{color:#ffd04a}.b.done{color:var(--ok)}.b.skipped{color:var(--dim)}
+.b.confirmed,.b.queued{color:var(--amber)}.b.scanning{color:#ffd04a}.b.done{color:var(--ok)}.b.skipped,.b.under{color:var(--dim)}
 .view{display:grid;grid-template-columns:1fr 260px;gap:14px;align-items:start}
 @media (max-width:760px){.view{grid-template-columns:1fr}}
 #bw{background:#000;text-align:center;overflow:hidden}#bw.z{overflow:auto;max-height:80vh;text-align:left}
@@ -54,7 +54,11 @@ let frames=[],dec={},landed=[],sel=0,task=null,es=null,run={kind:"",n:1,i:1},sca
 let pv=null,pvImg=null,kk={},queued=new Set(),scanning=new Set(),rescan=new Set(),cropped=new Set(),groups={},zoomed=0;
 const NN=n=>String(n).padStart(2,"0"),frame=n=>frames.find(f=>f.n===n);
 const autoName=n=>cur+"_frame"+NN(n);
-function stateOf(f){return scanning.has(f.n)?"scanning":queued.has(f.n)?"queued":landed.includes(f.n)&&!rescan.has(f.n)?"done":dec[f.n]||"pending"}
+// partial and half frames: under construction. A window keeps one pixel
+// count, so their shorter long side would raise the ppi of their whole
+// run; they wait for per-frame resolution
+const UC="under construction",blocked=f=>f.type==="partial"||f.type==="half";
+function stateOf(f){return blocked(f)?UC:scanning.has(f.n)?"scanning":queued.has(f.n)?"queued":landed.includes(f.n)&&!rescan.has(f.n)?"done":dec[f.n]||"pending"}
 const started=f=>/queued|scanning|done/.test(stateOf(f));
 
 // ---------------------------------------------------------------- screen
@@ -112,7 +116,7 @@ async function liveGrow(n){if(lv.bad||lv.busy||Date.now()-lv.at<900)return;lv.bu
   const x=c.getContext("2d");x.setTransform(0,1,1,0,0,0);x.drawImage(o,0,lv.line);x.setTransform(1,0,0,1,0,0);lv.line+=d.h}
  catch(e){lv.bad=1}finally{lv.busy=0}}
 function drawStrip(){const c=$("live"),i=pvImg;if(!i)return;c.width=i.naturalWidth;c.height=i.naturalHeight;const x=c.getContext("2d");x.drawImage(i,0,0);
- for(const f of frames){const s=stateOf(f);x.lineWidth=f.n===sel?8:4;x.strokeStyle=f.n===sel?"#ff9a1f":s==="done"?"#7fd17f":s==="skipped"?"#5a4e44":"#fff8";x.strokeRect(f.x,f.y,f.w,f.h)}}
+ for(const f of frames){const s=stateOf(f);x.lineWidth=f.n===sel?8:4;x.strokeStyle=f.n===sel?"#ff9a1f":s==="done"?"#7fd17f":s==="skipped"||blocked(f)?"#5a4e44":"#fff8";x.strokeRect(f.x,f.y,f.w,f.h)}}
 
 // thumbnails: each frame as it will print (scanned: the scan's print)
 async function thumbs(only){const t=$("thumbs");if(!only){t.innerHTML="";for(const f of frames){const b=document.createElement("button");b.className="th";b.id="th"+f.n;
@@ -156,6 +160,7 @@ async function onUp(){if(!drag)return;const d=drag,f=frame(sel);drag=null;if(!d.
 // a crop: the job's window, kept (strip.preview.job); a frame already in a
 // scan asks first
 async function crop(f,b){
+ if(blocked(f)){st("frame "+f.n+" ("+f.type+"): "+UC,1);return drawBig()}
  if(started(f)&&!rescan.has(f.n)){const a=await ask("Frame "+f.n+" is already "+(stateOf(f)==="done"?"scanned":stateOf(f))+". A new crop needs a rescan.");
   if(a!=="rescan")return drawBig();rescan.add(f.n);dec[f.n]="confirmed";saveReview()}
  try{const t=await ft("frameBox",f.n,[b.x,b.y,b.w,b.h],meta);await api(S("strip.preview.job"),{method:"PUT",body:t});
@@ -182,9 +187,10 @@ const turn=d=>serial(async()=>{const n=sel;if(!n)return;await ft("rotate",n,((aw
 let putT=0;
 function savePrint(){clearTimeout(putT);putT=setTimeout(async()=>{try{await api(S("strip.print"),{method:"PUT",body:await ft("printText")})}catch(e){st(e.message,1)}},300)}
 let revT=0;
-function saveReview(){clearTimeout(revT);revT=setTimeout(async()=>{try{await api(S("strip.review"),{method:"PUT",body:frames.map(f=>f.n+" "+(dec[f.n]||"pending")).join("\n")+"\n"})}catch(e){st(e.message,1)}},200)}
+function saveReview(){clearTimeout(revT);revT=setTimeout(async()=>{try{await api(S("strip.review"),{method:"PUT",body:frames.map(f=>f.n+" "+(blocked(f)?"skipped":dec[f.n]||"pending")).join("\n")+"\n"})}catch(e){st(e.message,1)}},200)}
 async function setName(){const n=sel,v=$("name").value.trim();try{await ft("setName",n,v===autoName(n)?"":v);savePrint();st("")}catch(e){st(e.message,1)}}
 function decide(d){const f=frame(sel);if(!f)return;
+ if(blocked(f))return st("frame "+f.n+" ("+f.type+"): "+UC+": "+f.type+" frames wait for per-frame resolution",1);
  if(started(f)&&d==="pending")return st("frame "+f.n+" is "+stateOf(f)+": its decision stays",1);
  dec[f.n]=d;saveReview();badge(f);jobs();drawStrip();
  if(d!=="pending"){const i=frames.indexOf(f),nx=frames.slice(i+1).concat(frames.slice(0,i)).find(g=>stateOf(g)==="pending");if(nx)pick(nx.n);else pick(f.n)}
@@ -197,7 +203,7 @@ function jobs(){const t=$("jobs");t.innerHTML="<tr><th>Frame</th><th>Name</th><t
   ft("name",f.n).then(v=>{if(v)r.cells[1].textContent=v}).catch(()=>{})}}
 let startT=0;
 function maybeStart(){if(task&&task.state==="running")return;if(!frames.length||frames.some(f=>stateOf(f)==="pending"))return;
- const todo=frames.filter(f=>dec[f.n]==="confirmed"&&(!landed.includes(f.n)||rescan.has(f.n))).map(f=>f.n);if(!todo.length||startT)return;
+ const todo=frames.filter(f=>!blocked(f)&&dec[f.n]==="confirmed"&&(!landed.includes(f.n)||rescan.has(f.n))).map(f=>f.n);if(!todo.length||startT)return;
  if(!scanPx)return st("no resolution for this strip (strip.scan)",1);
  $("tt").textContent="starting the scan of "+todo.length+" frame"+(todo.length>1?"s":"")+" …";$("toast").hidden=false;
  startT=setTimeout(()=>{startT=0;$("toast").hidden=true;scanFrames(todo)},3000)}
@@ -206,10 +212,10 @@ async function scanFrames(todo){try{const r=await ft("plan",frames.map(f=>todo.i
  const j=await ft("jobJson",meta);groups={};for(const f of j.frames)if(f.group)groups[f.n]=f.group;
  // one pixel count per window: a cropped or partial frame needs more ppi
  // for it, and its window scans at that; said, not hidden
- const top=Math.max(...j.frames.map(f=>f.ppi)),why=frames.filter(f=>todo.includes(f.n)&&(f.type!=="full"||cropped.has(f.n))).map(f=>f.n);
+ const top=Math.max(...j.frames.map(f=>f.ppi)),why=frames.filter(f=>todo.includes(f.n)&&cropped.has(f.n)).map(f=>f.n);
  queued=new Set(todo);await start({op:"scan",share:1});jobs();for(const f of frames)badge(f);
  $("ppin").textContent=top>+info.ppi+1?"note: this scan runs at "+top+" ppi, not "+info.ppi+": every frame gets "+scanPx+
-  " px on its long side"+(why.length?", and frame"+(why.length>1?"s ":" ")+why.join(", ")+" (partial or cropped) need"+(why.length>1?"":"s")+" more ppi for that":""):""}
+  " px on its long side"+(why.length?", and frame"+(why.length>1?"s ":" ")+why.join(", ")+" (cropped) need"+(why.length>1?"":"s")+" more ppi for that":""):""}
  catch(e){queued.clear();st(e.message,1)}}
 
 // tasks: start, follow (SSE), stop

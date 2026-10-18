@@ -38,8 +38,10 @@ Every preset: ← → frames, Home End, Enter confirm, X skip, Backspace back
 to pending, 0 reset C/M/Y/D, Esc.
 
 A window keeps one pixel count (the strip's ppi on a 36 mm long side):
-a partial or cropped frame needs more ppi for it, and its run scans at
-that; the page says so under the job list.
+a cropped frame needs more ppi for it, and its run scans at that; the
+page says so under the job list. Partial and half frames would raise it
+for their whole run: they show "under construction" (skipped, Confirm
+refused) until per-frame resolution.
 
 The box does no image or planning work. The page does, in C compiled to
 wasm (`tools/ftweb`, `ftweb.wasm` in a worker): it plans the share
