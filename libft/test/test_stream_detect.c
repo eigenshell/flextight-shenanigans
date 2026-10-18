@@ -259,6 +259,21 @@ int main(void)
         expect_box(i, 21 + 38.0 * i, 36, &s, 0.15);
     CHECK_NEAR(F[4].y1, 208.5 + FT_SDET_PAD_MM, 0.15);
 
+    /* a thin leader (0.3 mm of base, under the gap's length) before
+     * frame 1, and 1 mm of edge after a thin gap at the film's end
+     * (hardware 2026-10-18): the frames' edges, not part of them */
+    synth_default(&s, FT_FILM_NEGATIVE);
+    s.open_outside = 1;
+    s.film_y0 = 20;
+    s.film_y1 = 209.6;
+    for (i = 0; i < 5; i++)
+        synth_add(&s, 20.3 + 38.0 * i, 36, 0);
+    synth_add(&s, 208.6, 1.0, 0);
+    run(&s);
+    expect_types("FFFFF");
+    for (i = 0; i < 5; i++)
+        expect_box(i, 20.3 + 38.0 * i, 36, &s, 0.15);
+
     /* the strip's end seals the open run: not sealed before ft_sdet_end
      * (a stopped preview drops it) */
     synth_default(&s, FT_FILM_NEGATIVE);

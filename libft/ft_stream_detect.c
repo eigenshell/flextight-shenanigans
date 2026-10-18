@@ -23,6 +23,7 @@
 #define GROW_GAP_MM 0.4     /* across: unexposed columns crossed at most */
 #define BINS        80
 #define STEP        0.05    /* density per bin: 0..4 */
+#define BLOCK       4       /* px averaged for the line statistics */
 #define D_OF(t)     (-log10((t) > 1e-4f ? (double)(t) : 1e-4))
 
 enum { L_NOFILM, L_GAP, L_FRAME };
@@ -75,18 +76,20 @@ int ft_sdet_init(ft_sdet *d, const ft_axes *ax, int px, ft_film film,
     if (d->b1 > px) d->b1 = px;
     if (d->s0 < 0) d->s0 = 0;
     if (d->s1 > px) d->s1 = px;
-    if (d->b1 - d->b0 < 16)
+    if (d->b1 - d->b0 < 8 * BLOCK)
         return ft_fail(e, "stream detect: the holder's image band is not "
                           "on the line");
     if (d->s0 > d->b0) d->s0 = d->b0;
     if (d->s1 < d->b1) d->s1 = d->b1;
     d->gap_lines = (int)ceil(FT_SDET_GAP_MM / ym - 1e-9);
+    d->weak_lines = d->gap_lines / 2 < 3 ? 3 : d->gap_lines / 2;
     d->grid_lines = (int)floor(FULL_HI / ym + 1e-9);
     d->cut_lines = (int)floor(GRID_MM / ym + 0.5);
     d->ring_cap = (int)floor(BASE_MM / ym + 0.5);
     if (d->ring_cap < 8) d->ring_cap = 8;
     if (d->ring_cap > FT_SDET_RING) d->ring_cap = FT_SDET_RING;
     d->run_s = -1;
+    d->weak_s = d->weak_e = -1;
     d->hist = calloc((size_t)px * 3 * BINS, sizeof *d->hist);
     d->valid = calloc((size_t)px, sizeof *d->valid);
     d->scratch = malloc((size_t)(d->s1 - d->s0) * 3 * sizeof *d->scratch);
@@ -188,6 +191,13 @@ static int seal(ft_sdet *d, long s, long e, int ts, int te, int grid)
     ft_sdet_frame *f;
     ft_frame_type type;
 
+    /* the film's end just after a short gap: the frame ended there */
+    if (!te && !grid && d->weak_s > s &&
+        (e - d->weak_e) * ym < SLIVER_MM) {
+        e = d->weak_s;
+        te = 1;
+        len = (e - s) * ym;
+    }
     if (e <= s || (!grid && len < SLIVER_MM) || d->nframes == FT_MAX_FRAMES)
         return 0;
     if (grid)
@@ -268,10 +278,21 @@ static int classify(ft_sdet *d, const float *t)
     if (nopen >= NOFILM_OPEN * nb ||
         (d->film != FT_FILM_SLIDE && ndark >= METAL_FRAC * nb))
         return L_NOFILM;
+    /* the band in blocks of BLOCK px: sensor noise on a dense base (blue
+     * T ~0.05) would otherwise spread a gap line past FLAT_D */
+    nb /= BLOCK;
+    lo = nb * 3 / 100;
+    hi = nb - 1 - nb * 3 / 100;
     for (k = 0; k < 3; k++) {
         float *w = v + (size_t)k * nb;
-        for (c = 0; c < nb; c++)
-            w[c] = (float)D_OF(t[(size_t)(d->b0 + c) * 3 + k]);
+        for (c = 0; c < nb; c++) {
+            const float *p = t + (size_t)(d->b0 + c * BLOCK) * 3 + k;
+            float s = 0;
+            int i;
+            for (i = 0; i < BLOCK; i++)
+                s += p[i * 3];
+            w[c] = (float)D_OF(s / BLOCK);
+        }
         p03[k] = kth(w, nb, lo);
         p97[k] = kth(w, nb, hi);
         p50[k] = kth(w, nb, nb / 2);
@@ -333,9 +354,19 @@ int ft_sdet_line(ft_sdet *d, const float *t)
         }
         return n;
     }
+    if (d->run_s >= 0 && d->gap_n >= d->weak_lines) {
+        if (!d->run_trusted &&
+            (d->gap_s - d->run_s) * d->ax.y_mm_per_line < SLIVER_MM) {
+            d->run_s = -1;            /* the film's start: the frame's edge */
+        } else {
+            d->weak_s = d->gap_s;
+            d->weak_e = l;
+        }
+    }
     if (d->run_s < 0) {
+        d->run_trusted = d->after_gap || d->gap_n >= d->weak_lines;
         d->run_s = l;
-        d->run_trusted = d->after_gap;
+        d->weak_s = d->weak_e = -1;
         run_reset(d);
     }
     d->gap_n = 0;

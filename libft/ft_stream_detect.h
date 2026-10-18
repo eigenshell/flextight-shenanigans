@@ -16,7 +16,10 @@
  *            full, 15.5..21 mm half, anything else partial; at the film's
  *            start or end (or the strip's) within 1.5 mm of 36 / 18 full
  *            / half, else partial. Shorter than 3 mm: dropped. A run
- *            past 39.5 mm with no gap is cut at 36 mm (the holder grid)
+ *            past 39.5 mm with no gap is cut at 36 mm (the holder grid).
+ *            A short gap (half that many lines) within 3 mm of the
+ *            film's start or end is the frame's edge: the film's cut
+ *            edge or a thin leader beyond it is not frame
  *   across   each frame's extent from its own lines: the image band grown
  *            outward over exposed columns (>= 30 % of the run's lines
  *            off the base), within the holder's img_* limits
@@ -53,7 +56,7 @@ typedef struct {
     const ft_holder *h;
     int b0, b1;                 /* band columns [b0, b1) */
     int s0, s1;                 /* columns the image may lie in */
-    int gap_lines, grid_lines, cut_lines, ring_cap;
+    int gap_lines, weak_lines, grid_lines, cut_lines, ring_cap;
     /* state */
     long line;                  /* lines fed */
     int have_base;
@@ -67,6 +70,7 @@ typedef struct {
     int run_trusted;            /* it started at a gap (or grid cut) */
     long gap_s;                 /* the current gap streak */
     int gap_n;
+    long weak_s, weak_e;        /* the open run's last short gap, -1 none */
     unsigned short *hist;       /* the open run: px x 3 density bins */
     unsigned short *valid;      /* per column: lines on film */
     float *scratch;             /* the band's densities, 3 x band */
