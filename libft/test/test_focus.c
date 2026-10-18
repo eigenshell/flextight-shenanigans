@@ -339,6 +339,26 @@ int main(void)
         CHECK(strcmp(e.msg, "focus file line 1: too long") == 0);
     }
 
+    /* the 95 % depth of field: the survey's fit, K pinned; against the
+     * survey's measured widths (2026-10-15/16, bin 1) within 10 % (the
+     * law is a fit: 651 / 3431 / 5474 here); bin scales it */
+    CHECK(FT_DOF95_K == 980.0);
+    CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 6300, 1), 636, 63.6);
+    CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 2000, 1), 3651, 365.1);
+    CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 1500, 1), 5653, 565.3);
+    CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 6300, 1), 650.9, 0.5);
+    CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 3150, 2),
+               2 * ft_lens_dof95(&ft_lens_default, 3150, 1), 1e-9);
+    CHECK(ft_lens_dof95(&ft_lens_default, 3150, 0) ==
+          ft_lens_dof95(&ft_lens_default, 3150, 1));
+    {
+        ft_lens l = ft_lens_default;
+        double m = 2 * l.p * 3000;
+        l.p *= 2;                       /* the lens' p, not the default's */
+        CHECK_NEAR(ft_lens_dof95(&l, 3000, 1), 980 * (1 + m) / (m * m),
+                   1e-9);
+    }
+
     /* fit converges from a start 20 % off, and keeps *l on failure */
     {
         double M[8] = { 3807, 4000, 4309, 4787, 5384, 5678, 5947, 6230 };

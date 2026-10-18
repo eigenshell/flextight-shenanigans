@@ -11,6 +11,10 @@
  * there. Then every frame: <base>_frameNN.jpg and .jpg.txt (base: the
  * first window's name without .raw and _winNN, as ftdev cut), and
  * <base>.zip; --display: the screen copy of frame N as display.rgba.
+ *
+ *   ftweb_cli [--lens focus.txt] --dof95 scale bin
+ *
+ * ftw_dof95 on that lens (default: libft's), printed as %.6f.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,12 +66,16 @@ static int save(const char *path, const void *b, size_t n)
 static void usage(void)
 {
     fprintf(stderr, "usage: ftweb_cli --print strip.print [--job strip.job]"
-                    " -o outdir [--display N px] window.raw...\n");
+                    " -o outdir [--display N px] window.raw...\n"
+                    "       ftweb_cli [--lens focus.txt] --dof95 scale"
+                    " bin\n");
 }
 
 int main(int argc, char **argv)
 {
-    const char *print = NULL, *job = NULL, *outdir = NULL;
+    const char *print = NULL, *job = NULL, *outdir = NULL, *lens = NULL;
+    double dof_scale = 0;
+    int dof_bin = 0, dof = 0;
     const char *wins[64];
     char base[512], path[1024];
     int nw = 0, i, disp = 0, disp_px = 0, frames[64], nf, rc = 1;
@@ -80,6 +88,13 @@ int main(int argc, char **argv)
             print = argv[++i];
         else if (strcmp(argv[i], "--job") == 0 && i + 1 < argc)
             job = argv[++i];
+        else if (strcmp(argv[i], "--lens") == 0 && i + 1 < argc)
+            lens = argv[++i];
+        else if (strcmp(argv[i], "--dof95") == 0 && i + 2 < argc) {
+            dof = 1;
+            dof_scale = atof(argv[++i]);
+            dof_bin = atoi(argv[++i]);
+        }
         else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
             outdir = argv[++i];
         else if (strcmp(argv[i], "--display") == 0 && i + 2 < argc) {
@@ -91,6 +106,22 @@ int main(int argc, char **argv)
             usage();
             return 2;
         }
+    }
+    if (lens) {
+        size_t n;
+        char *t = load(lens, &n);
+        if (!t || ftw_lens(w, t, n)) {
+            fprintf(stderr, "ftweb_cli: %s: %s\n", lens,
+                    t ? ftw_error(w) : "cannot read");
+            free(t);
+            goto out;
+        }
+        free(t);
+    }
+    if (dof) {
+        printf("%.6f\n", ftw_dof95(w, dof_scale, dof_bin));
+        rc = 0;
+        goto out;
     }
     if (!print || !outdir || nw == 0) {
         usage();

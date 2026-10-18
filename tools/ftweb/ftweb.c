@@ -2,6 +2,7 @@
 /* ftweb.h. Browser tier: heap and snprintf, no files. The steps follow
  * tools/ftdev (cut: share.c ftdev_cut; print: print.c ftdev_print) call
  * for call, with the files replaced by what they would hold. */
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -248,6 +249,11 @@ int ftw_lens(ftw *w, const char *text, size_t n)
     return ft_lens_parse(&w->lens, text, n, &e) ? fail_e(w, &e) : 0;
 }
 
+double ftw_dof95(const ftw *w, double scale, int bin)
+{
+    return ft_lens_dof95(&w->lens, scale, bin);
+}
+
 static int job_parse(ftw *w, const char *text, size_t n, ft_job *to)
 {
     static ft_job j;
@@ -331,15 +337,17 @@ int ftw_job_json(ftw *w, const char *preview_txt, size_t n)
     rc = rc ? rc : outf(w, ",\"windows\":%d,\"frames\":[", ng);
     for (i = 0; !rc && i < j->nframes; i++) {
         const ft_job_frame *f = &j->f[i], *c = NULL;
-        double px = 0;
+        double px = 0, dof = 0;
         for (g = 0; p && g < p->nframes; g++)
             if (p->f[g].index == f->index)
                 c = &p->f[g];
         if (c && c->include && p->share > 0)
             px = ft_job_share_px(p, c);
+        if (px > 0)
+            dof = ftw_dof95(w, c->ppi * ft_job_bin(c), ft_job_bin(c));
         rc = outf(w, "%s{\"n\":%d,\"type\":\"%s\",\"low\":%s,"
                      "\"x\":%.1f,\"y\":%.1f,\"w\":%.1f,\"h\":%.1f,"
-                     "\"px\":%g,\"group\":%d,\"done\":%s}",
+                     "\"px\":%g,\"group\":%d,\"done\":%s,\"dof\":%.0f}",
                   i ? "," : "", f->index,
                   (unsigned)f->type <= 3 ? TYPES[f->type] : "full",
                   f->confidence_low ? "true" : "false",
@@ -347,7 +355,8 @@ int ftw_job_json(ftw *w, const char *preview_txt, size_t n)
                   (f->x0 - ax.x_mm0) / ax.x_mm_per_px,
                   f->len / ax.y_mm_per_line, f->width / ax.x_mm_per_px, px,
                   px > 0 ? c->group : 0, px > 0 && c->done ? "true"
-                                                           : "false");
+                                                           : "false",
+                  isfinite(dof) ? dof : 0);
     }
     return rc ? rc : outf(w, "]}");
 }

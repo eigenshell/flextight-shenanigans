@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_ftweb import NODE, WASI_SDK, make
+from tests.test_ftweb import LENS_2P, LENS_P, NODE, WASI_SDK, dof95, make
 from tests.test_ftwebd import Server
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -110,6 +110,34 @@ def test_worker_lens(built, tmp_path):
     ])
     assert rep[0] == {"err": "focus file: needs film, w, fl and p"}
     assert rep[1] == {"r": None}
+
+
+def test_worker_dof95(built, tmp_path):
+    """the depth of field the page shows: ftw_dof95 (libft's law) on the
+    box's lens; jobJson's dof per planned frame at its ppi and bin"""
+    pv = (FIX / "preview.job").read_text()
+    rep = worker(tmp_path, [
+        {"op": "dof95", "a": [6300, 1]},
+        {"op": "dof95", "a": [3150, 2]},
+        {"op": "job", "a": [pv]},
+        {"op": "plan", "a": [[2450, 2450, 3000, 0, 0, 0]]},
+        {"op": "jobJson", "a": [None]},
+        {"op": "lens", "a": [LENS_2P]},
+        {"op": "dof95", "a": [3000, 1]},
+    ])
+    assert rep[0]["r"] == pytest.approx(dof95(6300, 1), abs=1e-9)
+    assert rep[1]["r"] == pytest.approx(dof95(3150, 2), abs=1e-9)
+    assert rep[6]["r"] == pytest.approx(dof95(3000, 1, 2 * LENS_P),
+                                        abs=1e-9)
+    text = rep[3]["r"]["text"]
+    secs = text.split("\n[frame ")[1:]
+    fr = rep[4]["r"]["frames"]
+    for f, s in zip(fr, secs):
+        ppi = float(s.split("\nppi = ")[1].split()[0])
+        b = int(s.split("\nbin = ")[1].split()[0])
+        want = round(dof95(ppi * b, b)) if f["px"] else 0
+        assert f["dof"] == want, (f, ppi, b)
+    assert [f["dof"] > 0 for f in fr] == [True] * 3 + [False] * 3
 
 
 def test_worker_print_file(built, tmp_path):
@@ -292,6 +320,25 @@ def test_page_end_to_end(built, tmp_path):
         ["scan", "--job", arc + ".job", "--progress"]]
     job = (strip / "strip.job").read_text()
     assert "share_px = 3000" in job and "done = yes" in job
+    # the depth of field: each share frame's on the strip (from the plan,
+    # ftw_dof95), the window's peak shaded +-DOF95/2 and said
+    lab = out["labels"]
+    assert [l.split(" ")[0] for l in lab] == \
+        ["4MP", "4MP", "6MP", "ARC", "—", "—"]
+    assert lab[3:] == ["ARC", "—", "—"]
+    h = [int(l.split("±")[1]) for l in lab[:3]]
+    want = []
+    for sec in job.split("\n[frame ")[1:4]:
+        ppi = float(sec.split("\nppi = ")[1].split()[0])
+        b = int(sec.split("\nbin = ")[1].split()[0])
+        want.append(round(round(dof95(ppi * b, b)) / 2))
+    assert h == want, job
+    assert "window 1/2 · focus +250 (measured) · DOF ±%d steps |band %d" \
+        % (h[0], h[0]) in seen
+    assert "window 2/2 · focus +250 carried: no crops · DOF ±%d steps " \
+        "|band %d" % (h[2], h[2]) in seen
+    # the ARC's own job (after its frames --detail): not strip.job's
+    assert "window 1/1 · focus +250 (measured) |band 0" in seen
     # the CLI on the same strip folder
     for w in sorted(strip.glob("strip_win*.raw")):
         subprocess.run([str(FTDEV), "cut", str(w)], check=True,

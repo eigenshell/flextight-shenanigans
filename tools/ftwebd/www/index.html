@@ -107,14 +107,14 @@ async function load(){await PR;pvReset();const sv=$("sv");sv.innerHTML="";frames
 async function layout(){const t=await get(F("strip.raw.txt")),j=await ft("jobJson",t),arc=(ls("arc:"+cur)||"").split(",");
  const o=frames;$("film").value=j.film;frames=j.frames;for(const f of frames)f.el=(o.find(x=>x.n===f.n)||{}).el,f.b=arc.includes(""+f.n)?3:PX.indexOf(f.px)>0?PX.indexOf(f.px):f.px?1:0;
  $("plan").textContent=j.windows?j.windows+" window"+(j.windows>1?"s":""):""}
-function paint(fr){const b=fr.el;if(!b)return;b.className="fr"+(fr.b?" on":"")+(fr.b==2?" big":"")+(fr.b==3?" arc":"")+(fr.done?" done":"")+(fr.low?" low":"");
- b.querySelector(".s").textContent=B[fr.b];b.title="frame "+fr.n+" ("+fr.type+")"}
-function cycle(fr){if(task&&task.state==="running")return;fr.b=(fr.b+1)%4;paint(fr);clearTimeout(planT);planT=setTimeout(()=>planP=plan(),350)}
+function paint(fr){const b=fr.el,d=PX[fr.b]&&fr.dof?" DOF ±"+Math.round(fr.dof/2):"";if(!b)return;b.className="fr"+(fr.b?" on":"")+(fr.b==2?" big":"")+(fr.b==3?" arc":"")+(fr.done?" done":"")+(fr.low?" low":"");
+ b.querySelector(".s").textContent=B[fr.b]+d;b.title="frame "+fr.n+" ("+fr.type+")"+(d&&" ·"+d+" focus steps")}
+function cycle(fr){if(task&&task.state==="running")return;fr.b=(fr.b+1)%4;fr.dof=0;paint(fr);clearTimeout(planT);planT=setTimeout(()=>planP=plan(),350)}
 const arcs=()=>frames.filter(f=>f.b==3).map(f=>f.n);
 async function plan(){planT=0;ls("arc:"+cur,arcs().join(","));if(!frames.some(f=>PX[f.b]))return $("plan").textContent=arcs().length?"archive only":"",1;
  try{const r=await ft("plan",frames.map(f=>PX[f.b]));await api(S("strip.job"),{method:"PUT",body:r.text});
   const j=await ft("jobJson",await get(F("strip.raw.txt")));$("plan").textContent=r.windows+" window"+(r.windows>1?"s":"")+(arcs().length?" + archive":"");
-  for(const f of j.frames){const g=frames.find(x=>x.n===f.n);if(g){g.done=f.done;paint(g)}}st("");return 1}catch(e){$("plan").textContent="";st(e.message,1)}}
+  for(const f of j.frames){const g=frames.find(x=>x.n===f.n);if(g){g.done=f.done;g.dof=f.dof;g.group=f.group;paint(g)}}st("");return 1}catch(e){$("plan").textContent="";st(e.message,1)}}
 async function files(){try{const l=await api(S("files"));$("files").innerHTML="";
  for(const f of l.sort((a,b)=>a.name<b.name?-1:1)){const li=document.createElement("li");
   li.innerHTML='<a download href="'+F(f.name)+'">'+f.name+'</a> '+(f.size/1048576).toFixed(1)+' MB';$("files").append(li)}}catch(e){}}
@@ -122,9 +122,9 @@ let ems=[];const emFor=film=>(ems.find(e=>e.mode===(film==="slide"?"slide":"nega
 function busy(b){for(const id of["preview","scan","new","strip","film"])$(id).disabled=b;$("stop").disabled=!b}
 let run={n:1,i:1};
 function onLine(t){const lg=$("log");lg.textContent+=t+"\n";if(lg.textContent.length>2e4)lg.textContent=lg.textContent.slice(-15e3);lg.scrollTop=1e9;
- const w=t.split(" ");if(w[0]!=="progress"){if(t.startsWith("ftwebd exit"))done(+w[2]);return}
+ const w=t.split(" ");if(w[0]!=="progress"){if(t.startsWith("ftwebd exit"))done(+w[2]);else if(/ frames --detail /.test(t))task.arc=1;return}
  if(w[1]==="begin"){run={kind:w[2],n:+w[3]||1,i:1};fzReset();st(w[2]+" …")}
- else if(w[1]==="unit"){run.i=+w[3];fzReset();st(run.kind+" "+run.i+"/"+run.n)}
+ else if(w[1]==="unit"){run.i=+w[3];run.g=+w[4];fzReset();st(run.kind+" "+run.i+"/"+run.n)}
  else if(w[1]==="lines"){fzFrame(0);const[k,n]=w[2].split("/").map(Number);$("pb").style.width=((run.i-1+k/n)/run.n*100).toFixed(1)+"%";st(run.kind+" "+run.i+"/"+run.n+" · line "+k+"/"+n)}
  else if(/^(focus|focused|sharp)$/.test(w[1]))onFocus(w);else if(w[1]==="file"){files();const m=t.match(/[\\/]([^\\/]+)[\\/](strip_win\d\d\.raw)$/);if(m&&m[1]===cur&&task.op==="scan")land(m[2])}
  else if(w[1]==="end"){if(w[2]==="ok")$("pb").style.width="100%";st(run.kind+" "+w[2],w[2]!=="ok")}}

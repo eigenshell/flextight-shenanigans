@@ -90,18 +90,22 @@ async function turned(n,r){const f=frames.find(x=>x.n===n);if(f){f.rot=r;await f
 $("pn").onclick=()=>{pos=!pos;ls("pos",pos?"1":"0");paintStrip()};
 // focus: ftpoc's crops (progress focus K frame F at O, sharp O S, focused
 // O how) as the status, the frame pulsing on the strip and a plot of
-// sharpness against the offset with the offset taken
+// sharpness against the offset with the offset taken; a share window's
+// peak shaded +-DOF95/2 (its frames' dof, ftw_dof95): how far it may
+// drift (or be carried) and stay at >= 95 % sharpness. Not for an ARC's
+// job (task.arc: after its frames --detail step): not strip.job's windows
 let fz=[],fzAt=null;
 function fzFrame(n){for(const f of frames)if(f.el)f.el.toggleAttribute("data-fz",f.n===n)}
 function fzReset(){fz=[];fzAt=null;fzFrame(0);$("fz").hidden=true}
 function onFocus(w){const u=run.kind+" "+run.i+"/"+run.n+" · ";
  if(w[1]==="focus"){fzFrame(+w[4]||0);st(u+"focusing"+(w[4]?" frame "+w[4]:"")+" · crop "+w[2]+(w[6]?" at "+w[6]:""))}
  else if(w[1]==="sharp"){fz.push([+w[2],+w[3]]);plot()}
- else{fzAt=[+w[2],w[2]+" "+w[3]];fzFrame(0);st(u+(w[3]==="carried"?"focus "+w[2]+" carried: no crops":w[3]==="none"?"no focus peak: "+w[2]+" as it was":"focus "+w[2]+" ("+w[3]+")"),w[3]==="none");plot()}}
+ else{const g=run.kind==="window"&&!task.arc&&w[3]!=="none"&&frames.find(f=>f.group===run.g&&f.dof),h=g?Math.round(g.dof/2):0;
+  fzAt=[+w[2],w[2]+" "+w[3],h];fzFrame(0);st(u+(w[3]==="carried"?"focus "+w[2]+" carried: no crops":w[3]==="none"?"no focus peak: "+w[2]+" as it was":"focus "+w[2]+" ("+w[3]+")")+(h?" · DOF ±"+h+" steps":""),w[3]==="none");plot()}}
 function plot(){const c=$("fz"),d=devicePixelRatio,W=240*d,H=64*d,P=8*d;c.hidden=false;c.width=W;c.height=H;const x=c.getContext("2d"),
- os=fz.map(p=>p[0]).concat(fzAt?[fzAt[0]]:[]),lo=Math.min(...os)-250,hi=Math.max(...os)+250,ss=fz.map(p=>p[1]),a=Math.min(...ss),b=Math.max(...ss),
+ h=fzAt?fzAt[2]:0,os=fz.map(p=>p[0]).concat(fzAt?[fzAt[0]-h,fzAt[0]+h]:[]),lo=Math.min(...os)-250,hi=Math.max(...os)+250,ss=fz.map(p=>p[1]),a=Math.min(...ss),b=Math.max(...ss),
  X=o=>P+(o-lo)/(hi-lo)*(W-2*P),Y=v=>H-P-(b>a?(v-a)/(b-a):.5)*(H-3*P);
- x.fillStyle="#171311";x.fillRect(0,0,W,H);x.lineWidth=d;x.strokeStyle="#ff9a1f88";x.beginPath();
+ x.fillStyle="#171311";x.fillRect(0,0,W,H);if(h){x.fillStyle="#7fd17f26";x.fillRect(X(fzAt[0]-h),P,X(fzAt[0]+h)-X(fzAt[0]-h),H-2*P)}x.lineWidth=d;x.strokeStyle="#ff9a1f88";x.beginPath();
  [...fz].sort((p,q)=>p[0]-q[0]).forEach((p,i)=>i?x.lineTo(X(p[0]),Y(p[1])):x.moveTo(X(p[0]),Y(p[1])));x.stroke();x.fillStyle="#ff9a1f";
  for(const p of fz){x.beginPath();x.arc(X(p[0]),Y(p[1]),2.5*d,0,7);x.fill()}
  x.font=10*d+"px "+getComputedStyle(document.body).fontFamily;x.fillStyle="#8a7d70";x.fillText(fz.length?"sharpness":"no crops",P,P+4*d);

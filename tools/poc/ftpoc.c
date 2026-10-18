@@ -3629,13 +3629,12 @@ static int share_request(const ft_job *j, const ft_holder *h, int g,
 
 #define SHARE_FOCUS_TRIES 2  /* frames of a window tried for a peak */
 
-/* The 95 % depth of field in tandem steps at an optical scale and bin:
- * ~980 (1+m)/m^2 x bin (focus survey 2026-10-15/16, RESULTS.md 4: 636
- * at 6300, 3651 at 2000, 5653 at 1500, bin 1). */
+/* The 95 % depth of field in tandem steps at an optical scale and bin
+ * (ft_lens_dof95: ~980 (1+m)/m^2 x bin, focus survey 2026-10-15/16,
+ * RESULTS.md 4: 636 at 6300, 3651 at 2000, 5653 at 1500, bin 1). */
 static double focus_dof95(double scale, int bin)
 {
-    double m = g_lens.p * scale;
-    return 980.0 * (1 + m) / (m * m) * (bin > 0 ? bin : 1);
+    return ft_lens_dof95(&g_lens, scale, bin);
 }
 
 /* A share bracket's step: half the depth of field (5 crops span +-1

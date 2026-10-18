@@ -63,6 +63,14 @@ double ft_lens_correction(const ft_lens *l, double scale);
 #define FT_GAP_BOTTOM 1000L
 #define FT_GAP_MIN    150000L
 
+/* The 95 % depth of field (tandem steps across which sharpness stays
+ * >= 95 % of its peak) at an optical scale (ppi x bin) and bin: ~K
+ * (1+m)/m^2 x bin, m = p x scale (bin < 1 counts as 1). A fit to the
+ * focus survey 2026-10-15/16 (notes/hw/focusmap/RESULTS.md 4: measured
+ * 636 at 6300, 3651 at 2000, 5653 at 1500, bin 1; within ~10 %). */
+#define FT_DOF95_K 980.0
+double ft_lens_dof95(const ft_lens *l, double scale, int bin);
+
 int ft_bin_for_ppi(double ppi);          /* -1 if ppi > 6300 */
 int ft_ppi_supported(double ppi);        /* 1 = crop can scan it in focus */
 /* 0 ok; -1 (outputs not written) for scale outside range / NaN or an
