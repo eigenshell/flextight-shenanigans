@@ -108,6 +108,8 @@ const ops = {
   clicks: (f, k) => (ok(X.ftw_print_clicks(w, f, k[0], k[1], k[2], k[3])), null),
   rotate: (f, deg) => (ok(X.ftw_print_rotate(w, f, deg)), null),
   rotation: f => ok(X.ftw_print_rotation(w, f)),
+  name: f => (ok(X.ftw_print_name(w, f)), text()),
+  setName: (f, n) => withPut([n], p => (ok(X.ftw_print_set_name(w, f, p)), null)),
   printText: () => (ok(X.ftw_print_text(w)), text()),
   // one window: its raw, .cal, .txt and .faul (or null) as bytes
   cut(raw, cal, meta, faul) {

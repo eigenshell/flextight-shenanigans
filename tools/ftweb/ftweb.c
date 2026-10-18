@@ -520,6 +520,24 @@ int ftw_print_rotate(ftw *w, int frame, int deg)
     return 0;
 }
 
+int ftw_print_name(ftw *w, int frame)
+{
+    if (!w->has_print)
+        return fail(w, "no strip.print");
+    out_reset(w);
+    return outf(w, "%s", ft_print_file_name(&w->pf, frame));
+}
+
+int ftw_print_set_name(ftw *w, int frame, const char *name)
+{
+    ft_err e;
+    if (!w->has_print)
+        return fail(w, "no strip.print");
+    if (ft_print_file_set_name(&w->pf, frame, name, &e))
+        return fail_e(w, &e);
+    return 0;
+}
+
 int ftw_print_rotation(ftw *w, int frame)
 {
     if (!w->has_print)
@@ -1049,6 +1067,17 @@ int ftw_preview_display(ftw *w, int frame, int long_edge, int *pw, int *ph)
     return rc;
 }
 
+/* a frame's JPEG in the zip: its name, else <base>_frameNN */
+static void zip_name(const ftw *w, const char *base, int frame, char *name,
+                     size_t cap)
+{
+    const char *nm = w->has_print ? ft_print_file_name(&w->pf, frame) : "";
+    if (nm[0])
+        snprintf(name, cap, "%s.jpg", nm);
+    else
+        snprintf(name, cap, "%.120s_frame%02d.jpg", base, frame);
+}
+
 int ftw_zip(ftw *w, const char *base)
 {
     ft_zip z;
@@ -1067,16 +1096,14 @@ int ftw_zip(ftw *w, const char *base)
             ft_zip_free(&z);
             return -1;
         }
-        snprintf(name, sizeof name, "%.120s_frame%02d.jpg", base,
-                 w->f[i].frame);
+        zip_name(w, base, w->f[i].frame, name, sizeof name);
         if (ft_zip_add(&z, name, jpg, n, &e)) {
             free(jpg);
             ft_zip_free(&z);
             return fail_e(w, &e);
         }
         free(jpg);
-        snprintf(name, sizeof name, "%.120s_frame%02d.jpg.txt", base,
-                 w->f[i].frame);
+        snprintf(name + strlen(name), sizeof name - strlen(name), ".txt");
         if (ft_zip_add(&z, name, w->text, strlen(w->text), &e)) {
             ft_zip_free(&z);
             return fail_e(w, &e);

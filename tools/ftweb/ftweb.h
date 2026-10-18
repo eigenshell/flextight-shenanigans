@@ -74,6 +74,11 @@ int ftw_print_get(ftw *w, int frame, int *cmyd);
 int ftw_print_clicks(ftw *w, int frame, int c, int m, int y, int d);
 int ftw_print_rotate(ftw *w, int frame, int deg);
 int ftw_print_rotation(ftw *w, int frame);
+/* a frame's name, its files' name without extension ("" = none: the
+ * zip's <base>_frameNN): ftw_print_name -> out; ftw_print_set_name (""
+ * clears; file-safe characters only). The zip names frames by it. */
+int ftw_print_name(ftw *w, int frame);
+int ftw_print_set_name(ftw *w, int frame, const char *name);
 int ftw_print_text(ftw *w);
 
 /* one window scan (ftpoc scan --job): its raw lines, the .cal, the .faul

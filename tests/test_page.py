@@ -151,6 +151,27 @@ def test_worker_print_file(built, tmp_path):
                             "rotate = 270\n")
 
 
+def test_worker_frame_names(built, tmp_path):
+    """a frame's name through the worker: set, read, cleared, refused"""
+    rep = worker(tmp_path, [
+        {"op": "printNew", "a": ["generic-neg"]},
+        {"op": "name", "a": [3]},
+        {"op": "setName", "a": [3, "2026-10-18_a_03"]},
+        {"op": "name", "a": [3]},
+        {"op": "printText"},
+        {"op": "setName", "a": [3, "no way"]},
+        {"op": "setName", "a": [3, ""]},
+        {"op": "printText"},
+    ])
+    assert rep[1]["r"] == ""
+    assert rep[3]["r"] == "2026-10-18_a_03"
+    assert rep[4]["r"] == ("emulsion = generic-neg\n\n[frame 3]\n"
+                           "name = 2026-10-18_a_03\n")
+    assert rep[5] == {"err": "name: 'no way' is not 1..64 of A-Z a-z 0-9 "
+                             ". _ - (not starting with .)"}
+    assert rep[7]["r"] == "emulsion = generic-neg\n"
+
+
 def test_worker_resolutions_and_holders(built, tmp_path):
     """the landing page's choices come from C: MP and the planner's px per
     ppi (36x24 geometry; Dmax not estimated yet: null, shown #N/A), a ppi
