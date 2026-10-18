@@ -469,6 +469,33 @@ def test_worker_stream(built, tmp_path):
     assert rep[17]["r"]["windows"] >= 1
 
 
+def test_worker_stream_grid(built, tmp_path):
+    """frames touching (no gap on the strip): the holder grid cuts them
+    every 36 mm, said ("grid") so the page can tell; flagged low"""
+    pytest.importorskip("numpy")
+    pv = (FIX / "preview.job").read_text()
+    for a, b in (("42.000", "40.000"), ("80.000", "76.000"),
+                 ("118.000", "112.000"), ("156.000", "148.000"),
+                 ("194.000 1.600 20.000", "184.000 1.600 36.000")):
+        pv = pv.replace("window = " + a, "window = " + b)
+    meta = "px=666\nx=2\nbin=12\n"
+    boxes = worker(tmp_path, [{"op": "job", "a": [pv]},
+                              {"op": "jobJson", "a": [meta]}])[1]["r"]["frames"]
+    raw, cal, txt = preview_files(tmp_path, boxes)
+    rep = worker(tmp_path, [
+        {"op": "streamBegin", "a": [{"file": str(cal)}, meta, None, False]},
+        {"op": "streamFeed", "a": [{"file": str(raw)}]},
+        {"op": "streamEnd"},
+    ])
+    r = rep[1]["r"]
+    assert r["grid"] and rep[2]["r"]["grid"]
+    fr = r["frames"] + rep[2]["r"]["frames"]
+    assert [f["type"] for f in fr] == ["full"] * 6
+    assert [f["low"] for f in fr] == [True] * 5 + [False]
+    for f, b in zip(fr, boxes):
+        assert abs(f["x"] - (b["x"] - 6.2)) < 4
+
+
 class Proxy:
     """a TCP pipe in front of ftwebd (one request per connection, as
     ftwebd answers), the box's slow Wi-Fi breaking: rule(head) -> None
@@ -542,13 +569,16 @@ class Proxy:
         self.ls.close()
 
 
-def run_page(built, tmp_path, rule=None, mode="full"):
+def run_page(built, tmp_path, rule=None, mode="full", preview_delay=0.12):
     """the page in Chromium: landing (2450 ppi), SCAN, the live bar, the
-    review by keys (qwerty on frame 1, dvorak on frame 2 with a name), a
-    crop dragged on frame 3, 4 and 5 skipped, 6 confirmed: the scan
+    review by keys while the preview streams (qwerty on frame 1, confirmed
+    before the preview ends; dvorak on frame 2 with a name), a crop
+    dragged on frame 3, 4 and 5 skipped, 6 (half) refused: the scan
     starts by itself; Download and All; then a crop on a scanned frame:
     the dialog, R, its rescan. rule: a Proxy's between page and box;
-    mode "fail": the scan's window does not come, then does"""
+    mode "fail": the scan's window does not come, then does; "replay": a
+    reload and Stop while the preview runs. preview_delay: seconds per
+    preview progress line (96 lines)"""
     pytest.importorskip("numpy")
     meta = "px=666\nx=2\nbin=12\n"
     boxes = worker(tmp_path, [
@@ -566,7 +596,8 @@ def run_page(built, tmp_path, rule=None, mode="full"):
     dl.mkdir()
     srv = Server(ROOT / "tools" / "ftwebd" / "ftwebd", box, 0.03,
                  env={"FAKE_FTPOC_WINDOW": str(win),
-                      "FAKE_FTPOC_PREVIEW": str(tmp_path / "pv" / "strip")})
+                      "FAKE_FTPOC_PREVIEW": str(tmp_path / "pv" / "strip"),
+                      "FAKE_FTPOC_PREVIEW_DELAY": str(preview_delay)})
     px = Proxy(srv.port, rule) if rule else None
     try:
         r = subprocess.run([NODE, "--no-warnings", str(FIX / "page_e2e.mjs"),
@@ -586,6 +617,26 @@ def run_page(built, tmp_path, rule=None, mode="full"):
 @pytest.mark.skipif(CHROME is None, reason="needs Chromium")
 def test_page_end_to_end(built, tmp_path):
     check_end_to_end(tmp_path, *run_page(built, tmp_path))
+
+
+@pytest.mark.skipif(CHROME is None, reason="needs Chromium")
+def test_page_stream_replays_and_stops(built, tmp_path):
+    """frame 1 clicked and confirmed while the preview runs; the page
+    reloaded mid-preview replays the raw from its start: the same frame 1,
+    its decision and click re-attached by number; Stop: the sealed frames
+    stay (the open run dropped) and strip.job holds them; the box keeps
+    no strip.preview.job of a stopped preview"""
+    out, box, _ = run_page(built, tmp_path, mode="replay", preview_delay=0.25)
+    assert out["mid"]["running"] and out["confirmedMid"]
+    assert out["f1After"] == out["f1Mid"]
+    assert out["state1"] == "confirmed" and out["clicks1"] == [1, 0, 0, 0]
+    assert 2 <= out["nf"] < 6 and out["thumbsN"] == out["nf"]
+    assert re.findall(r"^\[frame (\d+)\]", out["job"], re.M) == \
+        [str(n) for n in range(1, out["nf"] + 1)]
+    assert out["pvJob"] == 404
+    log = [json.loads(l) for l in (box / "fake_ftpoc.log").read_text()
+           .splitlines()]
+    assert [a[0] for a in log] == ["frames"]
 
 
 WIN = re.compile(r"GET /api/strips/[^/ ]+/files/strip_win01\.raw ")
@@ -654,16 +705,25 @@ def check_end_to_end(tmp_path, out, box, dl):
     assert out["recent"] == "coming soon"
     assert re.match(r"type = quick\nppi = 2450\nholder = 24x217\n"
                     r"emulsion = generic-neg\ncreated = ", out["scanFile"])
+    # the streamed preview: frame 1 shown and confirmed while it ran, the
+    # same frame (locked) at its end; strip.job the page's, the box's
+    # strip.preview.job (ft_detect's) untouched beside it
+    assert out["mid"]["running"] and out["mid"]["frames"] < 6
+    assert out["confirmedMid"]
+    assert out["f1End"] == out["f1Mid"] and out["state1"] == "confirmed"
+    assert out["previewJob"] == (FIX / "preview.job").read_text()
     # the review: keys (qwerty, then dvorak), a name, decisions kept
     assert out["print"] == ("emulsion = generic-neg\n\n[frame 1]\n"
                             "cmyd = 2 -1 0 0\nrotate = 90\n\n[frame 2]\n"
                             "name = dog\ncmyd = 0 0 0 1\nrotate = 90\n")
     assert out["review"] == ("1 confirmed\n2 confirmed\n3 confirmed\n"
                              "4 skipped\n5 skipped\n6 skipped\n")
-    # partial frames wait for per-frame resolution: under construction
+    # half (and partial) frames wait for per-frame resolution: under
+    # construction (the streaming detector: frame 6, 20 mm between gaps,
+    # is half)
     assert out["uc"] == "under construction"
-    assert out["ucSaid"] == ("frame 6 (partial): under construction: "
-                             "partial frames wait for per-frame resolution")
+    assert out["ucSaid"] == ("frame 6 (half): under construction: "
+                             "half frames wait for per-frame resolution")
     # the crop: frame 3's window shorter, the rest as detected
     w0 = re.findall(r"window = (\S+) (\S+) (\S+)", out["before"])
     w1 = re.findall(r"window = (\S+) (\S+) (\S+)", out["after"])
@@ -676,9 +736,13 @@ def check_end_to_end(tmp_path, out, box, dl):
     assert inc == [("1", "yes"), ("2", "yes"), ("3", "yes"), ("4", "no"),
                    ("5", "no"), ("6", "no")]
     assert "share = 3472" in j1
-    assert out["ppin"] == ("note: this scan runs at 2617 ppi, not 2450: "
+    # the window's ppi, from the job the page planned (frame 3 cropped
+    # shorter needs more for its 3472 px)
+    top = max(int(m) for m in re.findall(r"^ppi = (\d+)", j1, re.M))
+    assert top > 2450 + 1
+    assert out["ppin"] == ("note: this scan runs at %d ppi, not 2450: "
                            "every frame gets 3472 px on its long side, and "
-                           "frame 3 (cropped) needs more ppi for that")
+                           "frame 3 (cropped) needs more ppi for that" % top)
     assert out["landed1"] == [1]              # one window, one fake frame
     assert out["states"] == ["done", "confirmed", "confirmed", "skipped",
                              "skipped", "under construction"]
@@ -689,7 +753,9 @@ def check_end_to_end(tmp_path, out, box, dl):
     sec = j1.split("\n[frame 1]")[1]
     ppi = float(sec.split("\nppi = ")[1].split()[0])
     b = int(sec.split("\nbin = ")[1].split()[0])
-    h = round(round(dof95(ppi * b, b)) / 2)
+    # the engine's %.0f, then the page's Math.round (halves up, not
+    # Python's to even)
+    h = int(round(dof95(ppi * b, b)) / 2 + 0.5)
     assert "window 1/1 · focus +250 (measured) · DOF ±%d steps |band %d" \
         % (h, h) in seen, seen
     assert out["plot"]

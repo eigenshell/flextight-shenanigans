@@ -4,11 +4,13 @@
 // ftwebd + the fake ftpoc, the downloads saved to a folder.
 // tests/test_page.py checks them.
 //
-//   node page_e2e.mjs <chromium> <http://127.0.0.1:port/> <download dir> [fail]
+//   node page_e2e.mjs <chromium> <http://127.0.0.1:port/> <download dir> [fail|replay]
 //
 // Prints one JSON line: {strip, res, live, landed, ...}. fail: the scan's
 // window does not come (a proxy in front of ftwebd drops it until the
 // page asks GET /_proxy/open); then it lands as a later window would.
+// replay: frame 1 confirmed while the preview runs, the page reloaded
+// (the preview replayed), then Stop.
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -73,7 +75,7 @@ async function dragRight(dx) {
 }
 const fileHas = (f, re) => 'fetch(S(' + JSON.stringify(f) + ')).then(r=>r.text()).then(t=>' + re + '.test(t))';
 
-try {
+try { main: {
   await connect();
   const { targetId } = await cdp("Target.createTarget", { url: "about:blank" });
   ({ sessionId: sid } = await cdp("Target.attachToTarget", { targetId, flatten: true }));
@@ -91,16 +93,46 @@ try {
   await ev('document.getElementById("scan").click()');
   await until('location.hash.startsWith("#s=")', "review");
   const strip = await ev("cur");
-  // the live bar fills while the preview scans, then the frames
+  // the live bar fills while the preview scans; frame 1 shows (and can be
+  // judged) while the preview still runs
   await until('typeof lv === "object" && lv.line > 0', "live rows", 30000);
-  await until('document.querySelectorAll(".th").length === 6 && sel === 1 && document.getElementById("big").width > 0', "frames");
+  await until('frames.length >= 1 && sel === 1 && document.getElementById("big").width > 0', "first frame", 30000);
+  const mid = await ev('({running: task.op === "preview" && task.state === "running", frames: frames.length})');
+  const f1Mid = await ev("JSON.stringify(frame(1))");
   const scanFile = await ev('fetch(S("files/strip.scan")).then(r=>r.text())');
+  if (mode === "replay") {
+    await key("w");
+    await until(fileHas("strip.print", '/\\[frame 1\\]\\ncmyd = 1 0 0 0\\n/'), "frame 1 clicked");
+    await key("Enter");
+    await until(fileHas("strip.review", '/^1 confirmed$/m'), "frame 1 confirmed");
+    const confirmedMid = await ev('task.op === "preview" && task.state === "running"');
+    // a reload while the preview runs: the raw replayed from its start
+    await cdp("Page.reload", {}, sid);
+    await sleep(300);
+    await until('typeof frames === "object" && frames.length >= 2 && task && task.state === "running"', "replayed", 30000);
+    const f1After = await ev("JSON.stringify(frame(1))");
+    const state1 = await ev("stateOf(frame(1))");
+    const clicks1 = await ev('ft("printGet",1)');
+    // Stop: the frames sealed stay, the open run is dropped, strip.job
+    // holds the sealed frames
+    await ev('document.getElementById("stop").click()');
+    await until('task.state === "done" && jobPut', "stopped", 30000);
+    await sleep(300);
+    const nf = await ev("frames.length");
+    const job = await ev('fetch(S("strip.job")).then(r=>r.text())');
+    const pvJob = await ev('fetch(S("files/strip.preview.job")).then(r=>r.status)');
+    const thumbsN = await ev('document.querySelectorAll(".th").length');
+    console.log(JSON.stringify({ strip, mid, confirmedMid, f1Mid, f1After, state1, clicks1, nf, job, pvJob, thumbsN }));
+    break main;
+  }
   // frame 1 (qwerty): C + C + M - (w w d), turn right (g), confirm (Enter)
   for (const k of ["w", "w", "d"]) await key(k);
   await until('[...document.querySelectorAll("#keys b")].map(b=>b.textContent).join() === "+2,-1,0,0"', "clicks");
   await key("g");
   await until(fileHas("strip.print", '/\\[frame 1\\]\\ncmyd = 2 -1 0 0\\nrotate = 90\\n/'), "frame 1 saved");
   await key("Enter");
+  await until(fileHas("strip.review", '/^1 confirmed$/m'), "frame 1 confirmed");
+  const confirmedMid = await ev('task.op === "preview" && task.state === "running"');
   await until("sel === 2", "next frame");
   // frame 2 (dvorak): turn right (i), D + (') and a name, confirm
   await ev('localStorage.setItem("keys","dvorak")');
@@ -111,14 +143,20 @@ try {
   await until(fileHas("strip.print", '/\\[frame 2\\]\\nname = dog\\ncmyd = 0 0 0 1\\nrotate = 90\\n/'), "frame 2 saved");
   await key("Enter");
   await until("sel === 3", "frame 3");
+  // the preview's end: every frame, frame 1 as shown (locked), strip.job
+  // the page's own; the box's strip.preview.job beside it
+  await until('task.state === "done" && jobPut && document.querySelectorAll(".th").length === 6', "preview end", 60000);
+  const f1End = await ev("JSON.stringify(frame(1))");
+  const state1 = await ev("stateOf(frame(1))");
+  const previewJob = await ev('fetch(S("files/strip.preview.job")).then(r=>r.text())');
   // frame 3: a crop (its right edge dragged in), kept as the job's window
-  const before = await ev('fetch(S("strip.preview.job")).then(r=>r.text())');
+  const before = await ev('fetch(S("strip.job")).then(r=>r.text())');
   await dragRight(40);
-  await until('fetch(S("strip.preview.job")).then(r=>r.text()).then(t=>t!==' + JSON.stringify(before) + ')', "crop kept");
-  const after = await ev('fetch(S("strip.preview.job")).then(r=>r.text())');
+  await until('fetch(S("strip.job")).then(r=>r.text()).then(t=>t!==' + JSON.stringify(before) + ')', "crop kept");
+  const after = await ev('fetch(S("strip.job")).then(r=>r.text())');
   await key("Enter");
   await until("sel === 4", "frame 4");
-  // frame 6 (partial) is under construction: Enter refused
+  // frame 6 (half) is under construction: Enter refused
   await ev("pick(6)");
   await until("sel === 6", "frame 6");
   const uc = await ev('document.getElementById("th6").querySelector(".b").textContent');
@@ -192,9 +230,10 @@ try {
       ' notes: document.getElementById("notes").textContent, print: await fetch(S("strip.print")).then(r=>r.text()),' +
       ' files: (await api(S("files"))).map(f=>f.name), job2: await fetch(S("strip.job")).then(r=>r.text())}))()');
     console.log(JSON.stringify(Object.assign({ strip, res, holder, recent, scanFile, before, after, review,
-      job1, landed1, states, ppin, uc, ucSaid, question, keymapText }, out)));
+      job1, landed1, states, ppin, uc, ucSaid, question, keymapText, mid, f1Mid, f1End, state1, confirmedMid,
+      previewJob }, out)));
   }
-} catch (e) {
+} } catch (e) {
   console.error(String(e && e.stack || e));
   process.exitCode = 1;
 } finally {

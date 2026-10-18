@@ -76,14 +76,30 @@ put `MICROCOD.3XX` beside `ftpoc.exe`, or start ftwebd with
 `--microcode PATH` (e.g. `--microcode ..\poc\MICROCOD.3XX`), which it
 passes to every ftpoc task.
 
-Strips live in `strips\<name>\`: `strip.raw` + `strip.png` + `strip.job`
-from the preview, `strip.preview.job` (the preview's own job, crops
-included: every plan starts from it), `strip_winNN.raw` (+ `.cal`,
+Strips live in `strips\<name>\`: `strip.raw` (+ `.cal`, written first,
+and `.txt`) and `strip.png` from the preview, `strip.preview.job` (the
+box's own detection of the preview, ft_detect: kept beside the page's for
+comparison, not used for frames), `strip.job` (the page's: the frames its
+streaming detector found as the preview arrived, crops included, as
+planned; written when the preview ends, or stops with a frame, and on a
+crop or a scan), `strip_winNN.raw` (+ `.cal`,
 `.txt`) per scanned window (an earlier run's as `strip_rK_winNN.raw`: a
 rescan never overwrites them), `strip.scan` (the landing page's
 choices), `strip.review` (each frame's decision) and `strip.print`
 (emulsion, names, clicks and turns). Reloading the page restores the
-strip from these files (the windows are cut again in the browser).
+strip from these files: the preview replayed through the streaming
+detector gives the same frames, the edits re-attach by frame number, the
+windows are cut again in the browser.
+
+## Preview
+
+The page shows each frame as soon as the preview has passed the gap after
+it: the worker calibrates the raw lines the live bar reads
+(`strip.raw.cal` is written before them) and feeds them to the streaming
+detector (`libft/ft_stream_detect`); a sealed frame prints with its own
+balance and can be named, turned, nudged, cropped, confirmed or skipped
+at once; it stays as shown (later lines only add frames). The scan still
+starts when no frame is pending, after the preview.
 
 ## Scan
 

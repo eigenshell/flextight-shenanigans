@@ -1462,8 +1462,11 @@ int ftw_stream_windows(ftw *w, const char *text, size_t n)
             ft_job_frame *f = &w->job.f[k];
             if (f->index != j.f[i].index)
                 continue;
-            if (f->y0 != j.f[i].y0 || f->x0 != j.f[i].x0 ||
-                f->len != j.f[i].len || f->width != j.f[i].width) {
+            /* the job's text keeps 0.001 mm: closer is the same window */
+            if (fabs(f->y0 - j.f[i].y0) > 6e-4 ||
+                fabs(f->x0 - j.f[i].x0) > 6e-4 ||
+                fabs(f->len - j.f[i].len) > 6e-4 ||
+                fabs(f->width - j.f[i].width) > 6e-4) {
                 f->y0 = j.f[i].y0;
                 f->x0 = j.f[i].x0;
                 f->len = j.f[i].len;
