@@ -14,6 +14,7 @@
 #include "ft_holder.h"
 #include "ft_job.h"
 #include "ft_output.h"
+#include "ft_plan.h"
 #include "ft_pm.h"
 #include "ft_print.h"
 #include "ft_preview.h"
@@ -64,6 +65,7 @@ struct ftw {
     int pv_measured;
     ft_print_roll pv_roll;
     ft_print_frame pv_pfr[FT_MAX_FRAMES];
+    double live_white[3];       /* ftw_live_rows: the preview's white */
     int disp_frame;             /* the cached screen copy's frame, 0 none */
     int disp_edge;              /* and the long edge it was asked at */
     ft_image disp;
@@ -241,6 +243,42 @@ int ftw_emulsions(ftw *w)
     return rc ? rc : outf(w, "]");
 }
 
+int ftw_resolutions(ftw *w, const double *ppi, int n)
+{
+    int i, bins[6], rc;
+    for (i = 0; i < n; i++)
+        if (!ft_bins_for_ppi(ppi[i], bins)) {
+            snprintf(w->err, sizeof w->err,
+                     "%g ppi: out of the optics' range", ppi[i]);
+            return -1;
+        }
+    out_reset(w);
+    rc = outf(w, "[");
+    for (i = 0; i < n && !rc; i++) {
+        double in = FT_SHARE_FF_LONG_MM / 25.4, mp = ppi[i] * in *
+                    ppi[i] * in * 24.0 / FT_SHARE_FF_LONG_MM / 1e6;
+        rc = outf(w, "%s{\"ppi\":%g,\"mp\":%.1f,\"px\":%.0f,\"dmax\":null}",
+                  i ? "," : "", ppi[i], mp, ppi[i] * in);
+    }
+    return rc ? rc : outf(w, "]");
+}
+
+int ftw_holders(ftw *w)
+{
+    const ft_holder *h;
+    int i, rc;
+    out_reset(w);
+    rc = outf(w, "[");
+    for (i = 0; !rc && (h = ft_holder_at(i)) != NULL; i++) {
+        rc = outf(w, "%s{\"name\":", i ? "," : "");
+        rc = rc ? rc : out_str(w, h->name);
+        rc = rc ? rc : outf(w, ",\"label\":");
+        rc = rc ? rc : out_str(w, h->label);
+        rc = rc ? rc : outf(w, ",\"frames\":%d}", h->grid_frames);
+    }
+    return rc ? rc : outf(w, "]");
+}
+
 /* ------------------------------------------------------------ job */
 
 int ftw_lens(ftw *w, const char *text, size_t n)
@@ -347,18 +385,54 @@ int ftw_job_json(ftw *w, const char *preview_txt, size_t n)
             dof = ftw_dof95(w, c->ppi * ft_job_bin(c), ft_job_bin(c));
         rc = outf(w, "%s{\"n\":%d,\"type\":\"%s\",\"low\":%s,"
                      "\"x\":%.1f,\"y\":%.1f,\"w\":%.1f,\"h\":%.1f,"
-                     "\"px\":%g,\"group\":%d,\"done\":%s,\"dof\":%.0f}",
+                     "\"px\":%g,\"ppi\":%g,\"group\":%d,\"done\":%s,\"dof\":%.0f}",
                   i ? "," : "", f->index,
                   (unsigned)f->type <= 3 ? TYPES[f->type] : "full",
                   f->confidence_low ? "true" : "false",
                   (f->y0 - ax.y_mm0) / ax.y_mm_per_line,
                   (f->x0 - ax.x_mm0) / ax.x_mm_per_px,
                   f->len / ax.y_mm_per_line, f->width / ax.x_mm_per_px, px,
-                  px > 0 ? c->group : 0, px > 0 && c->done ? "true"
+                  px > 0 ? c->ppi : 0, px > 0 ? c->group : 0, px > 0 && c->done ? "true"
                                                            : "false",
                   isfinite(dof) ? dof : 0);
     }
     return rc ? rc : outf(w, "]}");
+}
+
+int ftw_frame_box(ftw *w, int frame, const double *box,
+                  const char *preview_txt, size_t n)
+{
+    static ft_job j;
+    long x = preview_x(preview_txt, n);
+    ft_axes ax;
+    ft_err e;
+    size_t len;
+    int i;
+    if (!w->has_job)
+        return fail(w, "no strip.job");
+    for (i = 0; i < w->job.nframes && w->job.f[i].index != frame; i++)
+        ;
+    if (i == w->job.nframes) {
+        snprintf(w->err, sizeof w->err, "frame %d is not in the job", frame);
+        return -1;
+    }
+    ft_preview_axes(ft_preview_find("standard"),
+                    x >= 0 ? x : FT_PREVIEW_X_OUT, &ax);
+    j = w->job;
+    j.f[i].y0 = ax.y_mm0 + box[0] * ax.y_mm_per_line;
+    j.f[i].x0 = ax.x_mm0 + box[1] * ax.x_mm_per_px;
+    j.f[i].len = box[2] * ax.y_mm_per_line;
+    j.f[i].width = box[3] * ax.x_mm_per_px;
+    if (ft_job_validate(&j, &w->lens, &e))
+        return fail_e(w, &e);
+    w->job = j;
+    len = ft_job_write_buf(&j, NULL, 0);
+    out_reset(w);
+    if (out_room(w, len))
+        return fail(w, "out of memory");
+    ft_job_write_buf(&j, (char *)w->out, len + 1);
+    w->nout = len;
+    return 0;
 }
 
 int ftw_plan(ftw *w, const double *px, int n)
@@ -488,6 +562,24 @@ int ftw_print_rotate(ftw *w, int frame, int deg)
     if (!w->has_print)
         return fail(w, "no strip.print");
     if (ft_print_file_set_rotation(&w->pf, frame, deg, &e))
+        return fail_e(w, &e);
+    return 0;
+}
+
+int ftw_print_name(ftw *w, int frame)
+{
+    if (!w->has_print)
+        return fail(w, "no strip.print");
+    out_reset(w);
+    return outf(w, "%s", ft_print_file_name(&w->pf, frame));
+}
+
+int ftw_print_set_name(ftw *w, int frame, const char *name)
+{
+    ft_err e;
+    if (!w->has_print)
+        return fail(w, "no strip.print");
+    if (ft_print_file_set_name(&w->pf, frame, name, &e))
         return fail_e(w, &e);
     return 0;
 }
@@ -1001,7 +1093,9 @@ static int preview_measure(ftw *w, const ft_emulsion *em)
     return 0;
 }
 
-int ftw_preview_display(ftw *w, int frame, int long_edge, int *pw, int *ph)
+/* a preview frame printed; with_print: strip.print's clicks and turn */
+static int preview_rgba(ftw *w, int frame, int long_edge, int with_print,
+                        int *pw, int *ph)
 {
     static const ft_cmyd none;
     const ft_emulsion *em;
@@ -1016,9 +1110,72 @@ int ftw_preview_display(ftw *w, int frame, int long_edge, int *pw, int *ph)
     if (!(em = emulsion(w)) || preview_measure(w, em) ||
         fit(w, &w->pv[i].im, long_edge, &d))
         return -1;
-    rc = rgba_out(w, em, &w->pv_roll, &w->pv_pfr[i], none, &d, 0, pw, ph);
+    rc = rgba_out(w, em, &w->pv_roll, &w->pv_pfr[i],
+                  with_print ? ft_print_file_clicks(&w->pf, frame) : none, &d,
+                  with_print ? ft_print_file_rotation(&w->pf, frame) : 0, pw,
+                  ph);
     ft_image_free(&d);
     return rc;
+}
+
+int ftw_preview_display(ftw *w, int frame, int long_edge, int *pw, int *ph)
+{
+    return preview_rgba(w, frame, long_edge, 0, pw, ph);
+}
+
+int ftw_preview_print(ftw *w, int frame, int long_edge, int *pw, int *ph)
+{
+    return preview_rgba(w, frame, long_edge, 1, pw, ph);
+}
+
+int ftw_preview_px(void)
+{
+    return FT_PREVIEW_PX;
+}
+
+/* a frame's JPEG in the zip: its name, else <base>_frameNN */
+static void zip_name(const ftw *w, const char *base, int frame, char *name,
+                     size_t cap)
+{
+    const char *nm = w->has_print ? ft_print_file_name(&w->pf, frame) : "";
+    if (nm[0])
+        snprintf(name, cap, "%s.jpg", nm);
+    else
+        snprintf(name, cap, "%.120s_frame%02d.jpg", base, frame);
+}
+
+int ftw_live_rows(ftw *w, const unsigned short *raw, size_t n, int px,
+                  int neg, int first)
+{
+    size_t i, lines = px > 0 ? n / ((size_t)px * 3) : 0;
+    unsigned char *o;
+    if (px <= 0 || n % ((size_t)px * 3) || !lines) {
+        snprintf(w->err, sizeof w->err, "live: not whole lines of %d px",
+                 px);
+        return -1;
+    }
+    if (first) {
+        w->live_white[0] = w->live_white[1] = w->live_white[2] = 1;
+        for (i = 0; i < n; i++)
+            if (raw[i] > w->live_white[i % 3])
+                w->live_white[i % 3] = raw[i];
+    } else if (!(w->live_white[0] > 0)) {
+        return fail(w, "live: no first lines yet");
+    }
+    out_reset(w);
+    if (out_room(w, lines * (size_t)px * 4))
+        return fail(w, "out of memory");
+    o = w->out;
+    for (i = 0; i < n; i++) {
+        double t = raw[i] / w->live_white[i % 3], v;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        v = pow(t, 1 / 2.2);
+        *o++ = (unsigned char)((neg ? 1 - v : v) * 255 + 0.5);
+        if (i % 3 == 2)
+            *o++ = 255;
+    }
+    w->nout = lines * (size_t)px * 4;
+    return (int)lines;
 }
 
 int ftw_zip(ftw *w, const char *base)
@@ -1039,16 +1196,14 @@ int ftw_zip(ftw *w, const char *base)
             ft_zip_free(&z);
             return -1;
         }
-        snprintf(name, sizeof name, "%.120s_frame%02d.jpg", base,
-                 w->f[i].frame);
+        zip_name(w, base, w->f[i].frame, name, sizeof name);
         if (ft_zip_add(&z, name, jpg, n, &e)) {
             free(jpg);
             ft_zip_free(&z);
             return fail_e(w, &e);
         }
         free(jpg);
-        snprintf(name, sizeof name, "%.120s_frame%02d.jpg.txt", base,
-                 w->f[i].frame);
+        snprintf(name + strlen(name), sizeof name - strlen(name), ".txt");
         if (ft_zip_add(&z, name, w->text, strlen(w->text), &e)) {
             ft_zip_free(&z);
             return fail_e(w, &e);

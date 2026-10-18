@@ -105,17 +105,29 @@ static int srb_exec(const BYTE *cdb, int cdb_len, BYTE dir,
  * whose INQUIRY names Imacon. Other indexes can be stale or foreign
  * devices that never answer. A fresh handle can fail its first few
  * INQUIRYs with ERROR_IO_DEVICE (FlexColor sees 2-4), so retry briefly. */
-/* First \\.\ScannerN that answers INQUIRY as Imacon (g_dev set), or
+/* The kept device's INQUIRY answer (g_inq_n bytes; 0: none yet). */
+static BYTE g_inq[96];
+static int g_inq_n;
+
+enum { PROBE_PREFER_MICROCODE, PROBE_MICROCODE_ONLY };
+
+/* The \\.\ScannerN that answers INQUIRY as Imacon (g_dev, g_inq set), or
  * INVALID_HANDLE_VALUE. The loader and the microcode can answer on
- * different N (seen: Scanner0 loader, Scanner4 microcode). */
-static HANDLE probe_scanner(void)
+ * different N (seen: Scanner0 loader, Scanner4 microcode), so the
+ * microcode wins: a loader is kept only while no later N answers with
+ * the microcode (PROBE_PREFER_MICROCODE), or never (PROBE_MICROCODE_ONLY,
+ * after an upload). */
+static HANDLE probe_scanner(int want)
 {
     static const BYTE inq[6] = { 0x12, 0, 0, 0, 0x60, 0 };
-    int i, attempt;
+    HANDLE loader = INVALID_HANDLE_VALUE;
+    BYTE loader_inq[96];
+    int i, attempt, loader_n = 0;
     char path[32];
 
     for (i = 0; i < 16; i++) {
         HANDLE h;
+        int keep = 0;
         sprintf(path, "\\\\.\\Scanner%d", i);
         h = CreateFileA(path, GENERIC_READ | GENERIC_WRITE,
                         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
@@ -125,26 +137,48 @@ static HANDLE probe_scanner(void)
         g_dev = h;
         for (attempt = 0; attempt < 8; attempt++) {
             BYTE buf[96];
+            int r;
             memset(buf, 0, sizeof buf);
-            if (srb_exec(inq, 6, 0x40, buf, sizeof buf, 3000) >= 0) {
+            r = srb_exec(inq, 6, 0x40, buf, sizeof buf, 3000);
+            if (r >= 0) {
                 printf("%s: %.8s %.16s %.4s\n", path, buf + 8, buf + 16,
                        buf + 32);
-                if (memcmp(buf + 8, "Imacon", 6) == 0)
+                if (memcmp(buf + 8, "Imacon", 6) != 0)
+                    break;
+                if (!ft_upload_is_loader(buf, (size_t)r)) {
+                    if (loader != INVALID_HANDLE_VALUE)
+                        CloseHandle(loader);
+                    memcpy(g_inq, buf, sizeof g_inq);
+                    g_inq_n = r;
                     return h;
+                }
+                if (want == PROBE_PREFER_MICROCODE &&
+                    loader == INVALID_HANDLE_VALUE) {
+                    loader = h;     /* unless the microcode answers later */
+                    memcpy(loader_inq, buf, sizeof loader_inq);
+                    loader_n = r;
+                    keep = 1;
+                }
                 break;
             }
         }
         if (attempt == 8)
             printf("%s: no INQUIRY answer, skipping\n", path);
-        CloseHandle(h);
+        if (!keep)
+            CloseHandle(h);
         g_dev = INVALID_HANDLE_VALUE;
     }
-    return INVALID_HANDLE_VALUE;
+    if (loader != INVALID_HANDLE_VALUE) {
+        g_dev = loader;
+        memcpy(g_inq, loader_inq, sizeof g_inq);
+        g_inq_n = loader_n;
+    }
+    return loader;
 }
 
 static HANDLE open_scanner(void)
 {
-    HANDLE h = probe_scanner();
+    HANDLE h = probe_scanner(PROBE_PREFER_MICROCODE);
     if (h != INVALID_HANDLE_VALUE)
         return h;
     fprintf(stderr,
@@ -408,6 +442,8 @@ static const long F3_Y[6] = { 50, 967, 1910, 2852, 3795, 4737 };
  * FT_OPTIC_MAX in libft/ft_focus.h. */
 #define F_CCD      56
 #define F_OPTIC    60
+typedef char F_CCD_is_libft[F_CCD == FT_DESC_CCD && F_OPTIC == FT_DESC_OPTIC
+                            ? 1 : -1];
 static long g_ccd = -1, g_optic = -1;     /* -1: keep the template's */
 
 /* With the CCD past the lens (1020000 / 997296) the calibration lines
@@ -576,7 +612,10 @@ static void pg_end(ft_pg_status s)
 /* The first scan of the process holds at least this long before its
  * calibration, whatever the caller asks (lamp warm-up); frames, scan --job
  * and calibrate-focus set it with -h, 0..120 s (e.g. 35 s after a cold
- * power-up). */
+ * power-up). An automatic microcode upload (a power-up: the lamp is
+ * cold) raises it to FIRST_HOLD_COLD; their -h, parsed later, still
+ * wins. */
+#define FIRST_HOLD_COLD 35000
 static DWORD g_first_hold = 10000;
 
 /* -h: hold before calibration, 0..120 s */
@@ -617,9 +656,9 @@ static int cmd_inquiry(void)
     for (i = 0; i < 36; i++) printf(" %02x", buf[i]);
     printf("\n");
     /* Loader identity means the microcode upload dance is required first. */
-    if (memcmp(buf + 16, "SCSI Loader", 11) == 0)
-        printf("  NOTE: loader firmware — run `upload MICROCOD.3XX` before "
-               "anything else.\n");
+    if (ft_upload_is_loader(buf, (size_t)r))
+        printf("  NOTE: loader firmware (after a power-up) — any other "
+               "command uploads MICROCOD.3XX first.\n");
     return 0;
 }
 
@@ -1574,8 +1613,10 @@ static int cmd_scan(const struct preset *p, long y, long keep,
  * + 4096 code bytes, then the 10-byte run trailer, then poll until idle.
  * Refused unless INQUIRY names the loader ("SCSI Loader"), as FlexColor
  * only uploads then: the resident microcode parses the same packets as
- * maintenance commands. */
-static int cmd_upload(const char *file)
+ * maintenance commands. Ends on the microcode's handle (await_microcode). */
+static int await_microcode(void);
+
+static int upload_microcode(const char *file)
 {
     static BYTE code[FT_UPLOAD_CHUNK], buf[FT_UPLOAD_CHUNK + 10];
     BYTE cdb[10], inq[96];
@@ -1653,10 +1694,12 @@ static int cmd_upload(const char *file)
              * loader did: after 2 s of failed polls, probe again */
             if (v < 0 && ++fails >= 10) {
                 fails = 0;
-                CloseHandle(g_dev);
+                if (g_dev != INVALID_HANDLE_VALUE)
+                    CloseHandle(g_dev);
                 g_dev = INVALID_HANDLE_VALUE;
-                if (probe_scanner() == INVALID_HANDLE_VALUE)
-                    printf("  no scanner answering yet\n");
+                if (probe_scanner(PROBE_MICROCODE_ONLY) ==
+                    INVALID_HANDLE_VALUE)
+                    printf("  no microcode answering yet\n");
                 last = 0x10000;
             } else if (v >= 0) {
                 fails = 0;
@@ -1668,8 +1711,116 @@ static int cmd_upload(const char *file)
             Sleep(200);
         }
     }
-    printf("device idle after %lu ms — upload complete. Don't upload again "
-           "until a power cycle\n", (unsigned long)(GetTickCount() - start));
+    printf("device idle after %lu ms\n",
+           (unsigned long)(GetTickCount() - start));
+    if (await_microcode())
+        return 1;
+    printf("upload complete. Don't upload again until a power cycle\n");
+    return 0;
+}
+
+/* After the commit the microcode, not the loader, must answer INQUIRY;
+ * it can come up on another \\.\ScannerN (seen: Scanner0 -> Scanner4),
+ * so probe again (INQUIRY only) for up to 30 s. 0: g_dev is the
+ * microcode's handle. */
+static int await_microcode(void)
+{
+    DWORD start = GetTickCount();
+    int r;
+    memset(g_inq, 0, sizeof g_inq);
+    r = g_dev == INVALID_HANDLE_VALUE ? -1 :
+        srb_exec(CDB_INQUIRY, 6, SRB_DIR_IN, g_inq, sizeof g_inq,
+                 TIMEOUT_MS);
+    g_inq_n = r < 0 ? 0 : r;
+    if (r >= 0 && memcmp(g_inq + 8, "Imacon", 6) == 0 &&
+        !ft_upload_is_loader(g_inq, (size_t)r)) {
+        printf("microcode: %.16s %.4s\n", g_inq + 16, g_inq + 32);
+        return 0;
+    }
+    printf("the microcode does not answer on this handle yet; probing\n");
+    for (;;) {
+        if (g_dev != INVALID_HANDLE_VALUE)
+            CloseHandle(g_dev);
+        g_dev = INVALID_HANDLE_VALUE;
+        if (probe_scanner(PROBE_MICROCODE_ONLY) != INVALID_HANDLE_VALUE)
+            return 0;
+        if (GetTickCount() - start > 30000)
+            break;
+        Sleep(1000);
+    }
+    fprintf(stderr,
+        "ftpoc: the microcode did not answer within 30 s of the upload\n"
+        "(only the loader, or nothing). Power the scanner off (>= 10 s) and\n"
+        "on, then retry.\n");
+    return 1;
+}
+
+/* --microcode PATH (NULL: beside ftpoc.exe, then the current directory) */
+static const char *g_microcode;
+
+/* The MICROCOD.3XX to upload (libft ft_upload_paths) into path; 0, or 1
+ * with the paths tried on stderr. Nothing else is ever tried. */
+static int find_microcode(char *path, size_t cap)
+{
+    static char cand[2][FT_UPLOAD_PATH];
+    char exe[MAX_PATH + 1];
+    DWORD n = GetModuleFileNameA(NULL, exe, MAX_PATH);
+    int i, k;
+    exe[n > 0 && n < MAX_PATH ? n : 0] = 0;
+    k = ft_upload_paths(g_microcode, exe, cand);
+    for (i = 0; i < k; i++) {
+        FILE *f = fopen(cand[i], "rb");
+        if (f && strlen(cand[i]) < cap) {
+            fclose(f);
+            strcpy(path, cand[i]);
+            return 0;
+        }
+        if (f)
+            fclose(f);
+    }
+    fprintf(stderr, "ftpoc: no microcode file. Tried:\n");
+    for (i = 0; i < k; i++)
+        fprintf(stderr, "  %s%s\n", cand[i],
+                i == k - 1 && !g_microcode ? " (current directory)" : "");
+    if (k == 0)
+        fprintf(stderr, "  (--microcode: empty or too long a path)\n");
+    fprintf(stderr, "Put %s beside ftpoc.exe or give --microcode PATH.\n",
+            FT_UPLOAD_FILE);
+    return 1;
+}
+
+static int cmd_upload(const char *file)
+{
+    char path[FT_UPLOAD_PATH];
+    if (!file) {
+        if (find_microcode(path, sizeof path))
+            return 1;
+        file = path;
+    }
+    return upload_microcode(file);
+}
+
+/* main, before every command but upload and inquiry: the scanner answers
+ * as its loader after a power-up; upload the microcode (as FlexColor
+ * does at its start) and carry on on the microcode's handle. */
+static int auto_upload(void)
+{
+    char path[FT_UPLOAD_PATH];
+    fflush(stdout);                 /* the probe's lines first in a pipe */
+    fprintf(stderr, "ftpoc: the scanner is in its loader (\"%.16s\", "
+                    "after a power-up): uploading its microcode first\n",
+            g_inq + 16);
+    if (find_microcode(path, sizeof path))
+        return 1;
+    fprintf(stderr, "ftpoc: microcode %s\n", path);
+    pg_begin(FT_PG_UPLOAD, 1);
+    if (upload_microcode(path)) {
+        fprintf(stderr, "ftpoc: the microcode upload failed (above); the "
+                        "command did not run\n");
+        return 1;
+    }
+    fprintf(stderr, "ftpoc: microcode running; carrying on\n");
+    g_first_hold = FIRST_HOLD_COLD;     /* after a power-up: lamp cold */
     return 0;
 }
 
@@ -2107,9 +2258,11 @@ static int crop_scan(const struct crop_req *r)
 }
 
 /* A whole-holder preview (libft/ft_preview.h). standard: FlexColor's
- * captured 525 ppi descriptor, as before. 1000/1500: synthesized over
- * the same window at the 6000 crop optics (bin 6 / 4), on the focus
- * curve: the fastest way to those resolutions. */
+ * captured 525 ppi descriptor with only the CCD/lens moved to the focus
+ * curve at 6300 (FlexColor's own pair is ~10000 CCD steps short of the
+ * peak and soft). o3150/1000/1500: synthesized over the same window at
+ * their optics (bin 6 / 6 / 4), on the focus curve: the fastest way to
+ * those resolutions. */
 static int preview_scan(const ft_preview *m, long keep, DWORD hold,
                         const char *out)
 {
@@ -2117,8 +2270,25 @@ static int preview_scan(const ft_preview *m, long keep, DWORD hold,
     double x0, w, len, scale = m->ppi * m->bin;
     long ccd, optic, x_out, px;
 
-    if (m->bin == 12)
-        return cmd_scan(&PRESETS[0], -1, keep, hold, out);
+    if (m->bin == 12) {
+        static BYTE pv[84];
+        static struct preset pp;
+        int rc;
+        if (ft_preview_std_desc(SCAN_WIN, &g_lens, pv, &ccd, &optic)) {
+            fprintf(stderr, "preview %s: no focus for optical scale %.0f\n",
+                    m->name, scale);
+            return CROP_REFUSED;
+        }
+        if (!pos_ok(ccd, optic))
+            return CROP_REFUSED;
+        pp = PRESETS[0];
+        pp.scan = pv;
+        g_ccd = ccd;             /* cmd_scan applies these to scan + end */
+        g_optic = optic;
+        rc = cmd_scan(&pp, -1, keep, hold, out);
+        g_ccd = g_optic = -1;
+        return rc ? 1 : 0;
+    }
     if (ft_optics_for(&g_lens, scale, &ccd, &optic)) {
         fprintf(stderr, "preview %s: no focus for optical scale %.0f\n",
                 m->name, scale);
@@ -4304,11 +4474,18 @@ int main(int argc, char **argv)
     const char *cmd;
     int rc = 0, i, k;
 
-    /* --progress anywhere: taken out before the commands parse argv */
+    /* --progress and --microcode PATH anywhere: taken out before the
+     * commands parse argv */
     for (i = k = 1; i < argc; i++)
         if (strcmp(argv[i], "--progress") == 0)
             g_progress = 1;
-        else
+        else if (strcmp(argv[i], "--microcode") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "ftpoc: --microcode needs a path\n");
+                return 2;
+            }
+            g_microcode = argv[++i];
+        } else
             argv[k++] = argv[i];
     argc = k;
     argv[argc] = NULL;
@@ -4382,14 +4559,22 @@ int main(int argc, char **argv)
             "                     one whitelisted microcode maintenance write or\n"
             "                     memory read, idle only; everything else is\n"
             "                     refused (README: Maintenance writes)\n"
-            "  upload <file>      MICROCOD.3XX upload (loader mode only!)\n"
+            "  upload [file]      MICROCOD.3XX upload (loader mode only!); file:\n"
+            "                     as --microcode\n"
             "  --progress         (frames, scan) machine-readable progress lines\n"
             "                     for the web server: progress begin|unit|lines|\n"
             "                     file|end ... (libft/ft_progress.h)\n"
+            "  --microcode PATH   the MICROCOD.3XX to upload (default: beside\n"
+            "                     ftpoc.exe, then the current directory)\n"
             "\n"
+            "After a power-up the scanner answers as its loader (\"SCSI Loader\"):\n"
+            "every command but inquiry and upload then uploads the microcode\n"
+            "first, finds it again (it can move to another \\\\.\\ScannerN) and\n"
+            "carries on.\n"
             "CLOSE FlexColor first. Motion is slow and clamped. The first scan of a\n"
-            "run holds at least 10 s, except that frames, scan --job and\n"
-            "calibrate-focus -h set that first hold (0..120 s). Ctrl+C: scans (scan,\n"
+            "run holds at least 10 s (35 s after an automatic microcode upload),\n"
+            "except that frames, scan --job and calibrate-focus -h set that first\n"
+            "hold (0..120 s). Ctrl+C: scans (scan,\n"
             "crop, frames, scan --job, calibrate-focus) stop at the next line read\n"
             "and send END; park and goto finish their current move (Ctrl+C is held\n"
             "until then); move stops before its next step. Nothing new starts.\n");
@@ -4416,7 +4601,11 @@ int main(int argc, char **argv)
             SetConsoleCtrlHandler(on_ctrl, TRUE);
 
         if (0) { }
-        else if (strcmp(cmd, "poll") == 0) {
+        else if (strcmp(cmd, "upload") != 0 &&
+                 ft_upload_is_loader(g_inq, (size_t)g_inq_n) &&
+                 (rc = auto_upload()) != 0) {
+            /* still the loader: the command does not run */
+        } else if (strcmp(cmd, "poll") == 0) {
             int n = argc > 2 ? atoi(argv[2]) : 10;
             rc = cmd_poll(n, n > 20);
         } else if (strcmp(cmd, "win") == 0) {
@@ -4448,8 +4637,8 @@ int main(int argc, char **argv)
             rc = scan_args(argc - 2, argv + 2);
         } else if (strcmp(cmd, "maint") == 0) {
             rc = cmd_maint(argc - 2, argv + 2);
-        } else if (strcmp(cmd, "upload") == 0 && argc > 2) {
-            rc = cmd_upload(argv[2]);
+        } else if (strcmp(cmd, "upload") == 0) {
+            rc = cmd_upload(argc > 2 ? argv[2] : g_microcode);
         } else {
             fprintf(stderr, "ftpoc: unknown command '%s' (try without args "
                             "for usage)\n", cmd);

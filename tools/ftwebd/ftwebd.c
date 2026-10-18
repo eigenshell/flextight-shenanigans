@@ -6,7 +6,11 @@
  * before they are kept.
  *
  *   ftwebd [--port 8080] [--strips strips] [--www www] [--ftpoc ftpoc.exe]
- *          [--archive dir] [--archive-ppi 3150|6300]
+ *          [--archive dir] [--archive-ppi 3150|6300] [--microcode file]
+ *
+ * --microcode is passed on to every ftpoc task (the MICROCOD.3XX ftpoc
+ * uploads when the scanner answers as its loader after a power-up);
+ * without it ftpoc looks beside its exe, then in the current directory.
  *
  * Run it from ftpoc's own directory: ftpoc reads focus.txt from its
  * current directory, and the page's planner gets it from here.
@@ -16,11 +20,20 @@
  *   GET  /api/focus.txt                   this scanner's focus fit (404:
  *                                         none, the built-in curve)
  *   GET  /api/strips                      [{name, job, png, print}]
- *   POST /api/strips  name=               create the folder
+ *   POST /api/strips  name=[&type=quick&ppi=&holder=&emulsion=]
+ *                                         create the folder; with the
+ *                                         landing page's choices, kept
+ *                                         as strip.scan (+ created =)
+ *   GET  /api/scans                       recent scans: [] (to come)
  *   GET  /api/strips/{s}/files            [{name, size}]
- *   GET  /api/strips/{s}/files/{f}        one file
+ *   GET  /api/strips/{s}/files/{f}        one file (Range: bytes=N-:
+ *                                         206 with what is there, 416
+ *                                         nothing new: the live bar)
  *   GET|PUT /api/strips/{s}/strip.job     whole file (PUT: validated)
  *   GET|PUT /api/strips/{s}/strip.print   whole file (PUT: validated)
+ *   GET|PUT /api/strips/{s}/strip.preview.job   (a crop; as strip.job)
+ *   GET|PUT /api/strips/{s}/strip.review  "<frame> pending|confirmed|
+ *                                         skipped" lines (PUT: checked)
  *   POST /api/tasks  op=preview&strip=&film=neg|slide
  *                    op=scan&strip=[&share=0|1][&arc=1,3-4&film=]
  *                                         202 {id} | 409 busy
@@ -48,8 +61,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
+#include <time.h>
+#include "ft_emulsion.h"
 #include "ft_focus.h"
+#include "ft_holder.h"
 #include "ft_job.h"
+#include "ft_plan.h"
 #include "ft_print_file.h"
 #include "http.h"
 #include "proc.h"
@@ -58,6 +75,7 @@
 static const char *g_strips = "strips", *g_www = "www";
 static ft_lens g_lens;
 static const char *g_archive, *g_archive_ppi = "6300";
+static const char *g_microcode;
 static pthread_mutex_t g_put_mu = PTHREAD_MUTEX_INITIALIZER;
 
 static void sock_close(sock_t s)
@@ -143,19 +161,67 @@ static void api_strips_list(sock_t s)
     free(b);
 }
 
+/* the landing page's choices (all four, or none: -> 0 with *text "")
+ * as strip.scan's text; -1 with msg on a bad one */
+static int scan_choices(const char *body, char *text, size_t cap,
+                        char *msg, size_t mcap)
+{
+    char type[16], ppi[16], holder[32], em[40], when[32], *end;
+    int have = !http_param(body, "type", type, sizeof type) +
+               !http_param(body, "ppi", ppi, sizeof ppi) +
+               !http_param(body, "holder", holder, sizeof holder) +
+               !http_param(body, "emulsion", em, sizeof em);
+    int bins[6];
+    double v;
+    time_t now = time(NULL);
+    text[0] = 0;
+    if (have == 0)
+        return 0;
+    if (have != 4)
+        return snprintf(msg, mcap, "type, ppi, holder and emulsion go "
+                                   "together"), -1;
+    if (strcmp(type, "quick") != 0)
+        return snprintf(msg, mcap, "type: only quick scans so far"), -1;
+    v = strtod(ppi, &end);
+    if (end == ppi || *end || !ft_bins_for_ppi(v, bins))
+        return snprintf(msg, mcap, "ppi: %s is out of the optics' range",
+                        ppi), -1;
+    if (!ft_holder_find(holder))
+        return snprintf(msg, mcap, "holder: no holder '%s'", holder), -1;
+    if (!ft_emulsion_find(em))
+        return snprintf(msg, mcap, "emulsion: no emulsion '%s'", em), -1;
+    strftime(when, sizeof when, "%Y-%m-%dT%H:%M:%S", localtime(&now));
+    snprintf(text, cap, "type = %s\nppi = %s\nholder = %s\nemulsion = %s\n"
+                        "created = %s\n", type, ppi, holder, em, when);
+    return 0;
+}
+
 static void api_strips_create(sock_t s, const http_req *r)
 {
-    char name[80], p[400], nm[160];
-    if (http_param(r->body ? r->body : "", "name", name, sizeof name) ||
-        !name_ok(name)) {
+    char name[80], p[400], nm[160], scan[300], msg[120];
+    const char *body = r->body ? r->body : "";
+    FILE *f;
+    if (http_param(body, "name", name, sizeof name) || !name_ok(name)) {
         http_error(s, 422, "a strip name is 1..64 of A-Z a-z 0-9 . _ - "
                            "(not starting with .)");
+        return;
+    }
+    if (scan_choices(body, scan, sizeof scan, msg, sizeof msg)) {
+        http_error(s, 422, msg);
         return;
     }
     snprintf(p, sizeof p, "%s/%s", g_strips, name);
     if (make_dir(p)) {
         http_error(s, 500, "cannot create the folder");
         return;
+    }
+    if (scan[0]) {
+        snprintf(p, sizeof p, "%s/%s/strip.scan", g_strips, name);
+        f = fopen(p, "wb");
+        if (!f || fputs(scan, f) < 0 || fclose(f)) {
+            http_error(s, 500, "cannot write strip.scan");
+            return;
+        }
     }
     json_esc(nm, sizeof nm, name);
     http_json(s, 200, "{\"name\":%s}", nm);
@@ -193,6 +259,35 @@ static void api_files(sock_t s, const char *dir)
     free(b);
 }
 
+/* strip.review: "<frame> pending|confirmed|skipped" lines; 0 or -1 with
+ * msg naming the line */
+static int review_ok(const char *b, size_t n, char *msg, size_t cap)
+{
+    size_t at = 0;
+    int ln = 0;
+    while (at < n) {
+        char line[64], word[16];
+        size_t len = 0;
+        int frame, k = -1;
+        ln++;
+        while (at < n && b[at] != '\n' && len + 1 < sizeof line)
+            line[len++] = b[at++];
+        line[len] = 0;
+        if (at < n && b[at] != '\n')
+            return snprintf(msg, cap, "line %d: too long", ln), -1;
+        at++;
+        if (!len)
+            continue;
+        if (sscanf(line, "%d %15s%n", &frame, word, &k) != 2 ||
+            (size_t)k != len || frame < 0 || frame > 9999 ||
+            (strcmp(word, "pending") && strcmp(word, "confirmed") &&
+             strcmp(word, "skipped")))
+            return snprintf(msg, cap, "line %d: '%.40s' is not <frame> "
+                            "pending|confirmed|skipped", ln, line), -1;
+    }
+    return 0;
+}
+
 /* the body checked by the C that reads the file (the job also against
  * this scanner's optics: ftpoc moves by it), then kept as dir/name */
 static void api_put(sock_t s, const char *dir, const char *name,
@@ -206,7 +301,9 @@ static void api_put(sock_t s, const char *dir, const char *name,
     FILE *f;
     int rc;
     pthread_mutex_lock(&g_put_mu);
-    if (strcmp(name, "strip.job") == 0
+    if (strcmp(name, "strip.review") == 0
+            ? review_ok(body, r->nbody, e.msg, sizeof e.msg)
+        : strcmp(name, "strip.print") != 0
             ? ft_job_parse(&j, body, r->nbody, &e) ||
               ft_job_validate(&j, &g_lens, &e)
             : ft_print_file_parse(body, r->nbody, &pf, &e)) {
@@ -310,6 +407,14 @@ static void api_events(sock_t s, int id, const http_req *r)
     free(buf);
 }
 
+/* the files the page writes (PUT, checked) */
+static int kept_file(const char *f)
+{
+    return strcmp(f, "strip.job") == 0 || strcmp(f, "strip.print") == 0 ||
+           strcmp(f, "strip.preview.job") == 0 ||
+           strcmp(f, "strip.review") == 0;
+}
+
 /* path split on '/': seg[0..n) point into a copy */
 static int split(const char *path, char *copy, size_t cap, char **seg,
                  int max)
@@ -347,6 +452,10 @@ static void route(http_req *r)
         http_file(s, "focus.txt");
         return;
     }
+    if (n == 2 && strcmp(seg[1], "scans") == 0 && get) {
+        http_json(s, 200, "[]");
+        return;
+    }
     if (strcmp(seg[1], "strips") == 0) {
         if (n == 2 && get) {
             api_strips_list(s);
@@ -370,13 +479,11 @@ static void route(http_req *r)
         else if (n == 5 && strcmp(seg[3], "files") == 0 && get &&
                  name_ok(seg[4])) {
             snprintf(p, sizeof p, "%s/%s", dir, seg[4]);
-            http_file(s, p);
-        } else if (n == 4 && (strcmp(seg[3], "strip.job") == 0 ||
-                              strcmp(seg[3], "strip.print") == 0) && get) {
+            http_file_from(s, p, r->range_from);
+        } else if (n == 4 && kept_file(seg[3]) && get) {
             snprintf(p, sizeof p, "%s/%s", dir, seg[3]);
             http_file(s, p);
-        } else if (n == 4 && (strcmp(seg[3], "strip.job") == 0 ||
-                              strcmp(seg[3], "strip.print") == 0) && put)
+        } else if (n == 4 && kept_file(seg[3]) && put)
             api_put(s, dir, seg[3], r);
         else
             http_error(s, 404, "not found");
@@ -436,7 +543,7 @@ static void usage(void)
     fprintf(stderr, "usage: ftwebd [--port 8080] [--strips strips] "
                     "[--www www] [--ftpoc ftpoc]\n"
                     "              [--archive dir] [--archive-ppi 3150|6300]"
-                    "\n");
+                    " [--microcode file]\n");
 }
 
 static void load_lens(void)
@@ -484,6 +591,8 @@ int main(int argc, char **argv)
             ftpoc = argv[++i];
         else if (strcmp(argv[i], "--archive") == 0)
             g_archive = argv[++i];
+        else if (strcmp(argv[i], "--microcode") == 0)
+            g_microcode = argv[++i];
         else if (strcmp(argv[i], "--archive-ppi") == 0) {
             g_archive_ppi = argv[++i];
             if (strcmp(g_archive_ppi, "3150") && strcmp(g_archive_ppi, "6300")) {
@@ -504,6 +613,16 @@ int main(int argc, char **argv)
         fprintf(stderr, "ftwebd: no ftpoc at %s (--ftpoc)\n", ftpoc);
         return 1;
     }
+    if (g_microcode) {
+        FILE *f = strlen(g_microcode) < 300 ? fopen(g_microcode, "rb")
+                                             : NULL;   /* task.c's args */
+        if (!f) {
+            fprintf(stderr, "ftwebd: no microcode at %s (--microcode)\n",
+                    g_microcode);
+            return 1;
+        }
+        fclose(f);
+    }
     if (make_dir(g_strips)) {
         fprintf(stderr, "ftwebd: cannot create %s\n", g_strips);
         return 1;
@@ -513,6 +632,7 @@ int main(int argc, char **argv)
     cfg.strips = g_strips;
     cfg.archive = g_archive;
     cfg.archive_ppi = g_archive_ppi;
+    cfg.microcode = g_microcode;
     task_init(&cfg);
 
 #ifdef _WIN32

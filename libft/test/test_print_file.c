@@ -217,5 +217,34 @@ int main(void)
             at += (size_t)sprintf(buf + at, "[frame %d]\n", i);
         fails(buf, "line 66: more than 64 frames");
     }
+    /* names: a section may hold only a name; written first, byte-stable;
+     * set and cleared; file-safe characters only */
+    {
+        static const char *NAMED =
+            "emulsion = generic-neg\n\n[frame 2]\nname = beach_01\n"
+            "\n[frame 4]\nname = dog\ncmyd = 1 0 0 0\nrotate = 90\n";
+        ft_err e;
+        CHECK(parse(NAMED, &e) == 0);
+        CHECK(strcmp(ft_print_file_name(&pf, 2), "beach_01") == 0);
+        CHECK(strcmp(ft_print_file_name(&pf, 3), "") == 0);
+        CHECK(ft_print_file_write(&pf, buf, sizeof buf) == strlen(NAMED));
+        CHECK(strcmp(buf, NAMED) == 0);
+        CHECK(ft_print_file_set_name(&pf, 2, "", &e) == 0);
+        CHECK(pf.nframes == 1);                 /* frame 2 said nothing */
+        CHECK(ft_print_file_set_name(&pf, 7, "x-7.a", &e) == 0);
+        CHECK(ft_print_file_set_rotation(&pf, 4, 0, &e) == 0);
+        ft_print_file_write(&pf, buf, sizeof buf);
+        CHECK(strcmp(buf, "emulsion = generic-neg\n\n[frame 4]\nname = dog\n"
+                          "cmyd = 1 0 0 0\n\n[frame 7]\nname = x-7.a\n") == 0);
+        CHECK(ft_print_file_set_name(&pf, 7, "a b", &e) == -1);
+        CHECK(strcmp(e.msg, "name: 'a b' is not 1..64 of A-Z a-z 0-9 . _ - "
+                            "(not starting with .)") == 0);
+        CHECK(ft_print_file_set_name(&pf, 7, ".x", &e) == -1);
+    }
+    fails("emulsion = generic-neg\n[frame 2]\nname = a/b\n",
+          "line 3: name: 'a/b' is not 1..64 of A-Z a-z 0-9 . _ - (not "
+          "starting with .)");
+    fails("emulsion = generic-neg\n[frame 2]\nname = a\nname = b\n",
+          "line 4: name: set twice");
     return TEST_DONE();
 }

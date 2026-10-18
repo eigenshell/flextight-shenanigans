@@ -71,8 +71,32 @@ function ints(n, f) {
   }
 }
 
+// fn(w, frame, edge, &w, &h) -> {w, h, rgba}
+function rgbaOf(fn, f, edge) {
+  const p = X.ftw_alloc(8);
+  try {
+    ok(fn(w, f, edge, p, p + 4));
+    const d = new Int32Array(M.buffer, p, 2);
+    return { w: d[0], h: d[1], rgba: out() };
+  } finally {
+    X.ftw_release(p);
+  }
+}
+
 const ops = {
   emulsions: () => (ok(X.ftw_emulsions(w)), JSON.parse(text())),
+  // ppis -> [{ppi, mp, px, dmax}]
+  resolutions(ppis) {
+    const p = X.ftw_alloc(ppis.length * 8);
+    try {
+      new Float64Array(M.buffer, p, ppis.length).set(ppis);
+      ok(X.ftw_resolutions(w, p, ppis.length));
+      return JSON.parse(text());
+    } finally {
+      X.ftw_release(p);
+    }
+  },
+  holders: () => (ok(X.ftw_holders(w)), JSON.parse(text())),
   lens: t => load(X.ftw_lens)(t),
   dof95: (scale, bin) => X.ftw_dof95(w, scale, bin),
   job: t => load(X.ftw_job_load)(t),
@@ -90,6 +114,16 @@ const ops = {
     }
   },
   jobJson: t => withPut([t || null], p => (ok(X.ftw_job_json(w, p, t ? enc.encode(t).length : 0)), JSON.parse(text()))),
+  // a crop: box [x, y, w, h] in the preview's pixels -> the base job's text
+  frameBox(f, box, meta) {
+    const p = X.ftw_alloc(32);
+    try {
+      new Float64Array(M.buffer, p, 4).set(box);
+      return withPut([meta || null], pm => (ok(X.ftw_frame_box(w, f, p, pm, meta ? enc.encode(meta).length : 0)), text()));
+    } finally {
+      X.ftw_release(p);
+    }
+  },
   printLoad: t => load(X.ftw_print_load)(t),
   printNew: id => withPut([id], p => (ok(X.ftw_print_new(w, p)), null)),
   printEmulsion: id => withPut([id], p => ok(X.ftw_print_emulsion(w, p))),
@@ -97,6 +131,8 @@ const ops = {
   clicks: (f, k) => (ok(X.ftw_print_clicks(w, f, k[0], k[1], k[2], k[3])), null),
   rotate: (f, deg) => (ok(X.ftw_print_rotate(w, f, deg)), null),
   rotation: f => ok(X.ftw_print_rotation(w, f)),
+  name: f => (ok(X.ftw_print_name(w, f)), text()),
+  setName: (f, n) => withPut([n], p => (ok(X.ftw_print_set_name(w, f, p)), null)),
   printText: () => (ok(X.ftw_print_text(w)), text()),
   // one window: its raw, .cal, .txt and .faul (or null) as bytes
   cut(raw, cal, meta, faul) {
@@ -114,25 +150,16 @@ const ops = {
                             faul ? faul.length : 0, pm, meta.length)));
   },
   measure: () => (ok(X.ftw_measure(w)), text()),
-  display(f, edge) {
-    const p = X.ftw_alloc(8);
-    try {
-      ok(X.ftw_display(w, f, edge, p, p + 4));
-      const d = new Int32Array(M.buffer, p, 2);
-      return { w: d[0], h: d[1], rgba: out() };
-    } finally {
-      X.ftw_release(p);
-    }
-  },
-  previewDisplay(f, edge) {
-    const p = X.ftw_alloc(8);
-    try {
-      ok(X.ftw_preview_display(w, f, edge, p, p + 4));
-      const d = new Int32Array(M.buffer, p, 2);
-      return { w: d[0], h: d[1], rgba: out() };
-    } finally {
-      X.ftw_release(p);
-    }
+  display: (f, edge) => rgbaOf(X.ftw_display, f, edge),
+  previewDisplay: (f, edge) => rgbaOf(X.ftw_preview_display, f, edge),
+  previewPrint: (f, edge) => rgbaOf(X.ftw_preview_print, f, edge),
+  previewPx: () => X.ftw_preview_px(),
+  // raw preview lines (bytes, whole lines) -> {w, h, rgba} for the live bar
+  liveRows(raw, px, neg, first) {
+    return withPut([raw], p => {
+      const h = ok(X.ftw_live_rows(w, p, raw.length >> 1, px, neg ? 1 : 0, first ? 1 : 0));
+      return { w: px, h, rgba: out() };
+    });
   },
   jpeg: f => (ok(X.ftw_jpeg(w, f)), { jpg: out(), text: cstr(X.ftw_text(w)) }),
   zip: base => withPut([base], p => (ok(X.ftw_zip(w, p)), out())),

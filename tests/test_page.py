@@ -5,8 +5,11 @@ headless Chromium against ftwebd and the fake ftpoc: the JPEGs it
 downloads are ftdev cut + ftdev print --roll's, byte for byte. Skipped
 without the wasi-sdk, node >= 22 (and Chromium for the end-to-end)."""
 import json
+import re
 import shutil
+import socket
 import subprocess
+import threading
 import zipfile
 from pathlib import Path
 
@@ -75,6 +78,8 @@ def test_worker_plans_as_ftdev(built, tmp_path):
     fr = j["frames"]
     assert [f["n"] for f in fr] == [1, 2, 3, 4, 5, 6]
     assert [f["px"] for f in fr] == [2450, 2450, 3000, 0, 2450, 0]
+    # each frame's planned ppi (the review says when a frame raises it)
+    assert [f["ppi"] for f in fr] == [1729, 1729, 2117, 0, 1729, 0]
     assert fr[0]["group"] == fr[1]["group"] != fr[2]["group"]
     assert fr[5]["type"] == "partial" and not any(f["done"] for f in fr)
     # boxes in strip.png pixels (525 ppi), along the strip in order
@@ -99,6 +104,72 @@ def test_worker_job_from_the_box(built, tmp_path):
     assert fr[0]["done"] and not fr[1]["done"]
     assert fr[0]["px"] == 2450
     assert "bogus" in rep[4]["err"]
+
+
+def test_worker_frame_box(built, tmp_path):
+    """a crop: the frame's box in the preview's pixels (as jobJson gives
+    it) moves the base job's window; the base job's text comes back for
+    strip.preview.job; plans start from the new box; a box outside the
+    holder and an unknown frame are refused"""
+    pv = (FIX / "preview.job").read_text()
+    meta = "px=666\nx=2\nbin=12\n"
+    rep = worker(tmp_path, [
+        {"op": "job", "a": [pv]},
+        {"op": "jobJson", "a": [meta]},
+    ])
+    f1 = rep[1]["r"]["frames"][0]
+    box = [f1["x"] + 10, f1["y"] + 5, f1["w"] - 20, f1["h"] - 10]
+    rep = worker(tmp_path, [
+        {"op": "job", "a": [pv]},
+        {"op": "frameBox", "a": [1, box, meta]},
+        {"op": "jobJson", "a": [meta]},
+        {"op": "plan", "a": [[2452, 0, 0, 0, 0, 0]]},
+        {"op": "frameBox", "a": [1, [box[0], -500, box[2], box[3]], meta]},
+        {"op": "frameBox", "a": [42, box, meta]},
+    ])
+    assert "[frame 1]" in rep[1]["r"] and "window = " in rep[1]["r"]
+    assert "window = 4.000 1.600" not in rep[1]["r"]
+    g = rep[2]["r"]["frames"][0]
+    assert [round(g[k], 1) for k in "xywh"] == [round(v, 1) for v in box]
+    assert rep[3]["r"]["windows"] == 1
+    assert "window outside the holder" in rep[4]["err"]
+    assert rep[5] == {"err": "frame 42 is not in the job"}
+
+
+def test_worker_live_rows(built, tmp_path):
+    """the live bar: raw preview lines as they arrive -> RGBA rows; the
+    first chunk's brightest sample per channel is the white for the whole
+    preview (rows painted earlier never change), negatives inverted,
+    gamma 1/2.2; chunks of whole lines only"""
+    import numpy as np
+    px = 4
+
+    first = np.zeros((2, px, 3), "<u2")
+    first[0] = (14000, 12000, 10000)           # open light, per channel
+    first[1] = (7000, 6000, 5000)              # half of each white
+    later = np.full((1, px, 3), 0, "<u2")
+    later[0] = (3500, 3000, 2500)              # a quarter
+    for n, a in (("a", first), ("b", later)):
+        (tmp_path / n).write_bytes(a.tobytes())
+    rep = worker(tmp_path, [
+        {"op": "liveRows", "a": [{"file": str(tmp_path / "a")}, px, 1, 1],
+         "out": str(tmp_path / "a.rgba")},
+        {"op": "liveRows", "a": [{"file": str(tmp_path / "b")}, px, 1, 0],
+         "out": str(tmp_path / "b.rgba")},
+        {"op": "liveRows", "a": [{"file": str(tmp_path / "b")}, px, 0, 0],
+         "out": str(tmp_path / "c.rgba")},
+        {"op": "liveRows", "a": [{"file": str(tmp_path / "b")}, 5, 1, 0]},
+    ])
+    a = np.frombuffer((tmp_path / "a.rgba").read_bytes(), "u1")
+    assert rep[0]["r"]["h"] == 2 and rep[0]["r"]["w"] == px
+    a = a.reshape(2, px, 4)
+    assert a[0, 0].tolist() == [0, 0, 0, 255]
+    assert a[1, 0].tolist() == [69, 69, 69, 255]
+    b = np.frombuffer((tmp_path / "b.rgba").read_bytes(), "u1")
+    assert b.reshape(px, 4)[0].tolist() == [119, 119, 119, 255]
+    c = np.frombuffer((tmp_path / "c.rgba").read_bytes(), "u1")
+    assert c.reshape(px, 4)[0].tolist() == [136, 136, 136, 255]
+    assert rep[3] == {"err": "live: not whole lines of 5 px"}
 
 
 def test_worker_lens(built, tmp_path):
@@ -177,6 +248,50 @@ def test_worker_print_file(built, tmp_path):
     assert rep[13]["r"] == 2                  # both frames' clicks dropped
     assert rep[14]["r"] == ("emulsion = generic-bw\n\n[frame 2]\n"
                             "rotate = 270\n")
+
+
+def test_worker_frame_names(built, tmp_path):
+    """a frame's name through the worker: set, read, cleared, refused"""
+    rep = worker(tmp_path, [
+        {"op": "printNew", "a": ["generic-neg"]},
+        {"op": "name", "a": [3]},
+        {"op": "setName", "a": [3, "2026-10-18_a_03"]},
+        {"op": "name", "a": [3]},
+        {"op": "printText"},
+        {"op": "setName", "a": [3, "no way"]},
+        {"op": "setName", "a": [3, ""]},
+        {"op": "printText"},
+    ])
+    assert rep[1]["r"] == ""
+    assert rep[3]["r"] == "2026-10-18_a_03"
+    assert rep[4]["r"] == ("emulsion = generic-neg\n\n[frame 3]\n"
+                           "name = 2026-10-18_a_03\n")
+    assert rep[5] == {"err": "name: 'no way' is not 1..64 of A-Z a-z 0-9 "
+                             ". _ - (not starting with .)"}
+    assert rep[7]["r"] == "emulsion = generic-neg\n"
+
+
+def test_worker_resolutions_and_holders(built, tmp_path):
+    """the landing page's choices come from C: MP and the planner's px per
+    ppi (36x24 geometry; Dmax not estimated yet: null, shown #N/A), a ppi
+    no bin reaches refused; the holders with their labels"""
+    rep = worker(tmp_path, [
+        {"op": "resolutions", "a": [[1220, 1730, 2450, 3000, 3460, 4000]]},
+        {"op": "resolutions", "a": [[500]]},
+        {"op": "holders"},
+    ])
+    assert rep[0]["r"] == [
+        {"ppi": 1220, "mp": 2.0, "px": 1729, "dmax": None},
+        {"ppi": 1730, "mp": 4.0, "px": 2452, "dmax": None},
+        {"ppi": 2450, "mp": 8.0, "px": 3472, "dmax": None},
+        {"ppi": 3000, "mp": 12.1, "px": 4252, "dmax": None},
+        {"ppi": 3460, "mp": 16.0, "px": 4904, "dmax": None},
+        {"ppi": 4000, "mp": 21.4, "px": 5669, "dmax": None}]
+    assert rep[1] == {"err": "500 ppi: out of the optics' range"}
+    assert rep[2]["r"] == [{
+        "name": "24x217", "frames": 6,
+        "label": "Filmchrome 24x36x6 (25.2 x 226.8 mm), 6 frames 35 mm "
+                 "with borders"}]
 
 
 BASE_D = (0.21, 0.40, 0.60)          # an orange mask: D r g b
@@ -258,11 +373,117 @@ def test_worker_positive_preview(built, tmp_path):
     assert "standard preview" in rep[11]["err"]
 
 
-def run_page(built, tmp_path):
-    """the page in Chromium: new strip, preview, taps (3: 6MP, 4: ARC,
-    5: skip), frame 2 turned on the strip, pos, scan, clicks c c M and a
-    turn (r) on frame 1, zooms (z, a tap, the strip's +), Download and
-    All"""
+def test_worker_preview_print(built, tmp_path):
+    """the review shows a frame as it will print before it is scanned:
+    the preview frame with strip.print's clicks and turn (previewDisplay
+    stays without them); the standard preview's px for the live bar"""
+    pytest.importorskip("numpy")
+    pv = (FIX / "preview.job").read_text()
+    meta = "px=666\nx=2\nbin=12\n"
+    boxes = worker(tmp_path, [{"op": "job", "a": [pv]},
+                              {"op": "jobJson", "a": [meta]}])[1]["r"]["frames"]
+    raw, cal, txt = preview_files(tmp_path, boxes)
+    files = [{"file": str(raw)}, {"file": str(cal)}, meta, None]
+    rep = worker(tmp_path, [
+        {"op": "printNew", "a": ["generic-neg"]},
+        {"op": "job", "a": [pv]},
+        {"op": "previewLoad", "a": files},
+        {"op": "previewPrint", "a": [1, 300], "out": str(tmp_path / "a")},
+        {"op": "clicks", "a": [1, [0, 0, 0, 6]]},
+        {"op": "previewPrint", "a": [1, 300], "out": str(tmp_path / "b")},
+        {"op": "previewDisplay", "a": [1, 300], "out": str(tmp_path / "c")},
+        {"op": "rotate", "a": [1, 90]},
+        {"op": "previewPrint", "a": [1, 300]},
+        {"op": "previewPx"},
+    ])
+    a, b, c = ((tmp_path / n).read_bytes() for n in "abc")
+    assert a == c                             # no clicks yet: the same
+    assert b != a and sum(b) < sum(a)         # D + 6: a darker print
+    w, h = rep[3]["r"]["w"], rep[3]["r"]["h"]
+    assert (rep[8]["r"]["w"], rep[8]["r"]["h"]) == (h, w)
+    assert rep[9]["r"] == 666
+
+
+class Proxy:
+    """a TCP pipe in front of ftwebd (one request per connection, as
+    ftwebd answers), the box's slow Wi-Fi breaking: rule(head) -> None
+    (passed), or n: the answer cut after n bytes (0: the connection
+    dropped unanswered). GET /_proxy/open (from the page) sets .open"""
+    def __init__(self, port, rule):
+        self.up, self.rule, self.open, self.cut = port, rule, False, []
+        self.ls = socket.create_server(("127.0.0.1", 0))
+        self.port = self.ls.getsockname()[1]
+        threading.Thread(target=self.loop, daemon=True).start()
+
+    def loop(self):
+        while True:
+            try:
+                c, _ = self.ls.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.one, args=(c,), daemon=True).start()
+
+    def one(self, c):
+        data = b""
+        while b"\r\n\r\n" not in data:
+            d = c.recv(65536)
+            if not d:
+                return c.close()
+            data += d
+        head = data.split(b"\r\n\r\n")[0].decode("latin-1")
+        if head.startswith("GET /_proxy/open "):
+            self.open = True
+            c.sendall(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            return c.close()
+        n = self.rule(self, head)
+        if n is not None:
+            self.cut.append((head.split("\r\n")[0], n))
+        if n == 0:
+            return c.close()
+        u = socket.create_connection(("127.0.0.1", self.up))
+        u.sendall(data)
+
+        def up():                    # the rest of the request, if any
+            try:
+                while True:
+                    d = c.recv(65536)
+                    if not d:
+                        break
+                    u.sendall(d)
+            except OSError:
+                pass
+        threading.Thread(target=up, daemon=True).start()
+        sent = 0
+        try:
+            while True:
+                d = u.recv(65536)
+                if not d:
+                    break
+                if n is not None and sent + len(d) >= n:
+                    c.sendall(d[:n - sent])
+                    break
+                c.sendall(d)
+                sent += len(d)
+        except OSError:
+            pass
+        for x in (u, c):
+            try:
+                x.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            x.close()
+
+    def close(self):
+        self.ls.close()
+
+
+def run_page(built, tmp_path, rule=None, mode="full"):
+    """the page in Chromium: landing (2450 ppi), SCAN, the live bar, the
+    review by keys (qwerty on frame 1, dvorak on frame 2 with a name), a
+    crop dragged on frame 3, 4 and 5 skipped, 6 confirmed: the scan
+    starts by itself; Download and All; then a crop on a scanned frame:
+    the dialog, R, its rescan. rule: a Proxy's between page and box;
+    mode "fail": the scan's window does not come, then does"""
     pytest.importorskip("numpy")
     meta = "px=666\nx=2\nbin=12\n"
     boxes = worker(tmp_path, [
@@ -278,87 +499,166 @@ def run_page(built, tmp_path):
     box.mkdir()
     dl = tmp_path / "dl"
     dl.mkdir()
-    srv = Server(ROOT / "tools" / "ftwebd" / "ftwebd", box, 0.001,
-                 args=["--archive", box / "archive"],
+    srv = Server(ROOT / "tools" / "ftwebd" / "ftwebd", box, 0.03,
                  env={"FAKE_FTPOC_WINDOW": str(win),
                       "FAKE_FTPOC_PREVIEW": str(tmp_path / "pv" / "strip")})
+    px = Proxy(srv.port, rule) if rule else None
     try:
         r = subprocess.run([NODE, "--no-warnings", str(FIX / "page_e2e.mjs"),
-                            CHROME, "http://127.0.0.1:%d/" % srv.port,
-                            str(dl)], capture_output=True, text=True,
-                           timeout=240)
+                            CHROME, "http://127.0.0.1:%d/" %
+                            (px or srv).port, str(dl), mode],
+                           capture_output=True, text=True, timeout=300)
     finally:
+        if px:
+            px.close()
         srv.close()
     assert r.returncode == 0, r.stderr[-4000:]
-    return json.loads(r.stdout), box, dl
+    out = json.loads(r.stdout)
+    out["cut"] = px.cut if px else []
+    return out, box, dl
 
 
 @pytest.mark.skipif(CHROME is None, reason="needs Chromium")
 def test_page_end_to_end(built, tmp_path):
-    out, box, dl = run_page(built, tmp_path)
-    s = out["strip"]
-    strip = box / "strips" / s
-    assert out["landed"] == [1, 3]            # one fake frame per window
-    assert out["print"] == ("emulsion = generic-neg\n\n[frame 1]\n"
-                            "cmyd = 2 -1 0 0\nrotate = 90\n\n[frame 2]\n"
-                            "rotate = 90\n")
-    # pos: frame 1's dense half printed light (a positive, not strip.png)
-    assert sum(out["posPx"][:3]) > 3 * 150, out["posPx"]
-    # what focus did, as the status said it
-    seen = "\n".join(out["seen"])
-    assert "window 1/2 · focusing frame 1 · crop 1 at -500" in seen
-    assert "window 1/2 · focus +250 (measured)" in seen
-    assert "window 2/2 · focus +250 carried: no crops" in seen
-    assert out["plot"]
+    check_end_to_end(tmp_path, *run_page(built, tmp_path))
+
+
+WIN = re.compile(r"GET /api/strips/[^/ ]+/files/strip_win01\.raw ")
+
+
+def broken(px, head):
+    """the window's first GET (the whole file) cut after 3 MB, the next
+    (the resume) dropped unanswered; the rest through"""
+    if not WIN.match(head):
+        return None
+    px.n = getattr(px, "n", 0) + 1
+    return {1: 3 << 20, 2: 0}.get(px.n)
+
+
+@pytest.mark.skipif(CHROME is None, reason="needs Chromium")
+def test_page_resumes_a_broken_transfer(built, tmp_path):
+    """the box's Wi-Fi breaks while the page fetches a window (hundreds
+    of MB at ~100 KB/s on the box): the page goes on from the bytes it
+    has (Range), and its prints are the CLI's as before"""
+    out, box, dl = run_page(built, tmp_path, broken)
+    assert [n for _, n in out["cut"]] == [3 << 20, 0]
+    check_end_to_end(tmp_path, out, box, dl)
+
+
+def lost(px, head):
+    """the window does not come at all until the page opens the proxy"""
+    return 0 if WIN.match(head) and not px.open else None
+
+
+@pytest.mark.skipif(CHROME is None, reason="needs Chromium")
+def test_page_lost_window_does_not_wedge(built, tmp_path):
+    """a window that cannot be fetched: said, by name and how far it got;
+    no rescan started for it; a window landing after it still lands, its
+    frame's print the CLI's"""
+    out, box, dl = run_page(built, tmp_path, lost, "fail")
+    assert out["cut"] and all(n == 0 for _, n in out["cut"])
+    assert re.match(r"strip_win01\.raw: stopped at 0 MB: ", out["bad"]), \
+        out["bad"]
+    assert out["landedFail"] == [] and out["landed"] == [1]
+    assert not out["restarted"]
     log = [json.loads(l) for l in (box / "fake_ftpoc.log").read_text()
            .splitlines()]
-    arc = str(box / "archive" / s / "strip")
-    assert log[1:] == [
-        ["scan", "--job", "strips/%s/strip.job" % s, "--progress"],
-        ["frames", "--detail", "neg", "--ppi", "6300", "--film", "neg",
-         "--select", "4", "--progress", "-o", arc],
-        ["scan", "--job", arc + ".job", "--progress"]]
-    job = (strip / "strip.job").read_text()
-    assert "share_px = 3000" in job and "done = yes" in job
-    # the depth of field: each share frame's on the strip (from the plan,
-    # ftw_dof95), the window's peak shaded +-DOF95/2 and said
-    lab = out["labels"]
-    assert [l.split(" ")[0] for l in lab] == \
-        ["4MP", "4MP", "6MP", "ARC", "—", "—"]
-    assert lab[3:] == ["ARC", "—", "—"]
-    h = [int(l.split("±")[1]) for l in lab[:3]]
-    want = []
-    for sec in job.split("\n[frame ")[1:4]:
-        ppi = float(sec.split("\nppi = ")[1].split()[0])
-        b = int(sec.split("\nbin = ")[1].split()[0])
-        want.append(round(round(dof95(ppi * b, b)) / 2))
-    assert h == want, job
-    assert "window 1/2 · focus +250 (measured) · DOF ±%d steps |band %d" \
-        % (h[0], h[0]) in seen
-    assert "window 2/2 · focus +250 carried: no crops · DOF ±%d steps " \
-        "|band %d" % (h[2], h[2]) in seen
-    # the ARC's own job (after its frames --detail): not strip.job's
-    assert "window 1/1 · focus +250 (measured) |band 0" in seen
-    # the CLI on the same strip folder
-    for w in sorted(strip.glob("strip_win*.raw")):
+    assert [a[0] for a in log] == ["frames", "scan"]
+    assert out["badAfter"] == ""
+    s = out["strip"]
+    strip = box / "strips" / s
+    job = tmp_path / "job1.job"
+    job.write_text(out["job1"])
+    subprocess.run([str(FTDEV), "cut", str(strip / "strip_win01.raw")],
+                   check=True, capture_output=True)
+    r = subprocess.run([str(FTDEV), "print", str(strip / "strip_frame01.dng"),
+                        "--roll", str(strip / "strip.print"), "--job",
+                        str(job)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert (dl / (s + "_frame01.jpg")).read_bytes() == \
+        (strip / "strip_frame01.jpg").read_bytes()
+
+
+def check_end_to_end(tmp_path, out, box, dl):
+    s = out["strip"]
+    strip = box / "strips" / s
+    # the landing page: the engine's numbers, Dmax not estimated (#N/A)
+    assert out["res"][2] == "2450ppi · 8.0 MPDmax: #N/A"
+    assert all(r.endswith("Dmax: #N/A") for r in out["res"])
+    assert out["holder"].startswith("Filmchrome 24x36x6")
+    assert out["recent"] == "coming soon"
+    assert re.match(r"type = quick\nppi = 2450\nholder = 24x217\n"
+                    r"emulsion = generic-neg\ncreated = ", out["scanFile"])
+    # the review: keys (qwerty, then dvorak), a name, decisions kept
+    assert out["print"] == ("emulsion = generic-neg\n\n[frame 1]\n"
+                            "cmyd = 2 -1 0 0\nrotate = 90\n\n[frame 2]\n"
+                            "name = dog\ncmyd = 0 0 0 1\nrotate = 90\n")
+    assert out["review"] == ("1 confirmed\n2 confirmed\n3 confirmed\n"
+                             "4 skipped\n5 skipped\n6 skipped\n")
+    # partial frames wait for per-frame resolution: under construction
+    assert out["uc"] == "under construction"
+    assert out["ucSaid"] == ("frame 6 (partial): under construction: "
+                             "partial frames wait for per-frame resolution")
+    # the crop: frame 3's window shorter, the rest as detected
+    w0 = re.findall(r"window = (\S+) (\S+) (\S+)", out["before"])
+    w1 = re.findall(r"window = (\S+) (\S+) (\S+)", out["after"])
+    assert w1[:2] == w0[:2] and w1[3:] == w0[3:]
+    assert float(w1[2][2]) < float(w0[2][2]) - 1
+    # the scan started by itself: confirmed frames in, skipped and
+    # partial out; the cropped frame 3 raises the ppi, and the page says so
+    j1 = out["job1"]
+    inc = re.findall(r"\[frame (\d)\]\ntype = \w+\ninclude = (\w+)", j1)
+    assert inc == [("1", "yes"), ("2", "yes"), ("3", "yes"), ("4", "no"),
+                   ("5", "no"), ("6", "no")]
+    assert "share = 3472" in j1
+    assert out["ppin"] == ("note: this scan runs at 2617 ppi, not 2450: "
+                           "every frame gets 3472 px on its long side, and "
+                           "frame 3 (cropped) needs more ppi for that")
+    assert out["landed1"] == [1]              # one window, one fake frame
+    assert out["states"] == ["done", "confirmed", "confirmed", "skipped",
+                             "skipped", "under construction"]
+    seen = "\n".join(out["seen"])
+    assert "window 1/1 · focusing frame 1 · crop 1 at -500" in seen
+    # the depth of field: the window's peak shaded +-DOF95/2 (its frames'
+    # dof, ftw_dof95 at the planned ppi and bin) and said
+    sec = j1.split("\n[frame 1]")[1]
+    ppi = float(sec.split("\nppi = ")[1].split()[0])
+    b = int(sec.split("\nbin = ")[1].split()[0])
+    h = round(round(dof95(ppi * b, b)) / 2)
+    assert "window 1/1 · focus +250 (measured) · DOF ±%d steps |band %d" \
+        % (h, h) in seen, seen
+    assert out["plot"]
+    # a crop on a scanned frame asked; R rescanned it in a run of its own,
+    # the first run's windows kept beside it
+    assert out["question"] == ("Frame 1 is already scanned. A new crop "
+                               "needs a rescan.")
+    log = [json.loads(l) for l in (box / "fake_ftpoc.log").read_text()
+           .splitlines()]
+    assert [a[0] for a in log] == ["frames", "scan", "scan"]
+    assert {"strip_r1_win01.raw", "strip_win01.raw"} <= set(out["files"])
+    assert 1 in out["landed"]
+    # the keymap overlay lists the dvorak keys
+    assert "'" in out["keymapText"] and "turn right" in out["keymapText"]
+    # the downloads (after the first run) are the CLI's prints of it
+    job = tmp_path / "job1.job"
+    job.write_text(j1)
+    for w in sorted(strip.glob("strip_r1_win*.raw")):
         subprocess.run([str(FTDEV), "cut", str(w)], check=True,
                        capture_output=True)
-    dngs = [str(strip / "strip_frame01.dng"), str(strip / "strip_frame03.dng")]
+    dngs = [str(strip / "strip_r1_frame01.dng")]
     r = subprocess.run([str(FTDEV), "print", *dngs, "--roll",
-                        str(strip / "strip.print"), "--job",
-                        str(strip / "strip.job")], capture_output=True,
-                       text=True)
+                        str(strip / "strip.print"), "--job", str(job)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     page = dl / (s + "_frame01.jpg")
-    assert page.read_bytes() == (strip / "strip_frame01.jpg").read_bytes()
+    assert page.read_bytes() == (strip / "strip_r1_frame01.jpg").read_bytes()
     assert (dl / (s + "_frame01.jpg.txt")).read_bytes() == \
-        (strip / "strip_frame01.jpg.txt").read_bytes()
-    assert "\ncmyd=2 -1 0 0\n" in (strip / "strip_frame01.jpg.txt").read_text()
-    assert "\nrotate=90\n" in (strip / "strip_frame01.jpg.txt").read_text()
+        (strip / "strip_r1_frame01.jpg.txt").read_bytes()
+    assert "\ncmyd=2 -1 0 0\n" in page.with_suffix(".jpg.txt").read_text()
+    assert "\nrotate=90\n" in page.with_suffix(".jpg.txt").read_text()
     with zipfile.ZipFile(dl / (s + ".zip")) as z:
         assert z.testzip() is None
-        assert z.namelist() == [s + "_frame01.jpg", s + "_frame01.jpg.txt",
-                                s + "_frame03.jpg", s + "_frame03.jpg.txt"]
+        assert z.namelist() == [s + "_frame01.jpg", s + "_frame01.jpg.txt"]
         for n in z.namelist():
-            assert z.read(n) == (strip / ("strip" + n[len(s):])).read_bytes()
-    assert "note: 2 frames" in out["notes"]
+            assert z.read(n) == \
+                (strip / ("strip_r1" + n[len(s):])).read_bytes(), n

@@ -21,6 +21,7 @@ typedef struct {
     char query[512];            /* raw */
     char last_event_id[24];
     char if_none_match[48];
+    long range_from;            /* Range: bytes=N- ; -1 = none */
     char *body;                 /* NUL-terminated, malloc'd (or NULL) */
     size_t nbody;
 } http_req;
@@ -36,8 +37,13 @@ void http_send(sock_t s, int code, const char *type, const char *body,
 void http_json(sock_t s, int code, const char *fmt, ...);
 /* {"error": msg} */
 void http_error(sock_t s, int code, const char *msg);
-/* a whole file, its type from the extension; 404 if missing */
+/* a whole file, its type from the extension; 404 if missing. from >= 0
+ * (a Range: bytes=from- request): 206 with the bytes there now from
+ * there, at most HTTP_RANGE_MAX, or 416 when the file ends before it
+ * (a file still being written: nothing new yet) */
+#define HTTP_RANGE_MAX (1L << 20)
 void http_file(sock_t s, const char *path);
+void http_file_from(sock_t s, const char *path, long from);
 /* the page's own files (www): revalidated by ETag (size and mtime),
  * 304 when inm (the request's If-None-Match) still matches, so the
  * browser keeps ftweb.wasm and asks only whether it changed */

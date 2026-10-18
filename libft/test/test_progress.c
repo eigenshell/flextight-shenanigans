@@ -62,6 +62,10 @@ int main(void)
     both(&p, "progress begin frame 12\n");
     p.kind = FT_PG_PASS; p.n = 2;
     both(&p, "progress begin pass 2\n");
+    p.kind = FT_PG_UPLOAD; p.n = 1;     /* the microcode, before a run */
+    both(&p, "progress begin upload 1\n");
+    p.kind = (ft_pg_kind)(FT_PG_UPLOAD + 1);
+    CHECK(ft_progress_fmt(&p, buf, sizeof buf) == FT_PG_BAD);
     p.type = FT_PG_UNIT; p.kind = FT_PG_WINDOW; p.n = 2; p.label = 5;
     both(&p, "progress unit window 2 5\n");
     p.type = FT_PG_LINES; p.k = 812; p.total = 1890;

@@ -4,7 +4,10 @@
  *
  *   progress begin window 3        a run of 3 units (preview, window,
  *                                  frame or pass)
- *   progress unit window 2 5       unit 2 of the run: the job's window 5
+ *   progress begin upload 1        the scanner was in its loader: ftpoc
+ *                                  uploads the microcode first (before
+ *                                  the command's own run; no units)
+ *   progress unit window 2 5      unit 2 of the run: the job's window 5
  *   progress lines 812/1890        lines read of the current unit
  *   progress focus 2               focus crop 2 of the current unit
  *                                  (before its own scan; no lines)
@@ -28,7 +31,7 @@ typedef enum { FT_PG_BEGIN, FT_PG_UNIT, FT_PG_LINES, FT_PG_FILE,
                FT_PG_END, FT_PG_FOCUS, FT_PG_SHARP,
                FT_PG_FOCUSED } ft_pg_type;
 typedef enum { FT_PG_PREVIEW, FT_PG_WINDOW, FT_PG_FRAME,
-               FT_PG_PASS } ft_pg_kind;
+               FT_PG_PASS, FT_PG_UPLOAD } ft_pg_kind;
 typedef enum { FT_PG_OK, FT_PG_STOPPED, FT_PG_FAILED,
                FT_PG_REFUSED } ft_pg_status;
 typedef enum { FT_PG_MEASURED, FT_PG_CHECKED, FT_PG_CARRIED,

@@ -17,7 +17,7 @@ learn what the spec got wrong — cheaply.
 ```
 build.bat            REM cl or i686-w64-mingw32-gcc, see header
 
-ftpoc inquiry        identity; "SCSI Loader" means run `upload` first
+ftpoc inquiry        identity; "SCSI Loader": the next command uploads first
 ftpoc poll [n]       ScannerReady polls (00 00 idle, 08 00 motor, 04 00 busy)
 ftpoc win            one SetWindow exchange with the idle template, hexdump
 ftpoc park           rest: FlexColor's shutdown descriptor
@@ -62,9 +62,29 @@ ftpoc crop <ppi> <x> <y> <w> <h> [-b bin] [-n lines] [-h s] [-p ccd,lens]
                        crop 3150 13.0 130.4 7.6 11.4
                      6300 sliver across the frame:
                        crop 6300 4.8 135.65 24 0.9
-ftpoc upload MICROCOD.3XX   loader-mode firmware recovery only: refused
-                     unless INQUIRY says "SCSI Loader"; sends FlexColor's
+ftpoc upload [file]  loader-mode firmware upload only: refused unless
+                     INQUIRY says "SCSI Loader"; sends FlexColor's
                      packets (libft/ft_upload.h). Once per power-up.
+                     file: as --microcode (below). Every other command
+                     but inquiry does this by itself (below).
+--microcode PATH     (any command, any position) the MICROCOD.3XX to
+                     upload; default: beside ftpoc.exe, then the current
+                     directory. Nothing else is ever tried.
+```
+
+After a power-up the scanner answers INQUIRY as its loader (`Imacon
+SCSI Loader L302`). Every command but `inquiry` and `upload` then says
+so on stderr, uploads the microcode first (the same D800 page read, 16
+chunks and trailer as `upload`; `progress begin upload 1` with
+`--progress`), polls until idle, and finds the microcode again by
+INQUIRY (it can answer on another `\\.\ScannerN`: Scanner0 loader,
+Scanner4 microcode), waiting up to 30 s; then the command runs on that
+handle. No file, a failed upload or no microcode after 30 s: a clear
+error, exit 1, the command does not run. The probe prefers the
+microcode: a loader is used only when no `\\.\ScannerN` answers with the
+microcode, so a stale loader device never triggers a second upload.
+
+```
 ftpoc scanstop       0xdb (kHwiScanStop) — device rejects it (CHECK COND.)
 ftpoc busreset       IOCTL_STORAGE_RESET_BUS on the Imacon's HBA port only;
                      does NOT clear the scanner's scan state
@@ -91,13 +111,19 @@ excluded, orange = low confidence). Edit `strip.job` — `include`,
 across and ~232 mm along); if the job would still be refused, `frames`
 warns per frame and writes it anyway.
 
-`--preview` picks the preview (`scan preview`, `scan preview1000`,
-`scan preview1500` take it alone). Previews are for framing: all three
-use the fast, high-magnification optics.
+`--preview` picks the preview (`scan preview1000`, `scan preview1500`
+take it alone). Previews are for framing: all three use the fast,
+high-magnification optics, focused on the curve (offset 0). The
+standard one is FlexColor's captured 525 ppi descriptor with only its
+CCD/lens moved from FlexColor's 254935 / 1004246 (~10000 CCD steps
+short of the peak, soft) to the curve's pair at 6300 (built-in curve:
+259254 / 1005789); `scan preview` stays the byte-exact capture (`-p`
+sets the pair). The magnification is the same within the model
+(~0.06 %), so the preview's geometry is unchanged.
 
 | mode | ppi | optics / bin | time (strip) |
 |---|---|---|---|
-| standard | 525 | 6300 / 12 (FlexColor's) | ~40 s |
+| standard | 525 | 6300 / 12 (FlexColor's window) | ~40 s |
 | 1000 | 1000 | 6000 / 6 | ~2.7 min |
 | 1500 | 1500 | 6000 / 4 | ~5.7 min |
 
@@ -176,6 +202,8 @@ server; the rest of the output stays as it is:
 
 ```
 progress begin window 3        a run of 3 units (preview|window|frame|pass)
+progress begin upload 1        the scanner was in its loader: the microcode
+                               upload first (before the command's run)
 progress unit window 2 5       unit 2 of the run: the job's window 5
 progress lines 812/1890        lines read of that unit's scan
 progress focus 2 frame 4 at -500   focus crop 2 of that unit (before
@@ -270,7 +298,9 @@ frames marked `done = yes`, so a run stopped by Ctrl+C or a failed scan
 resumes where it left off.
 
 Hold: the first scan of a run holds at least 10 s before its
-calibration, whatever was asked, except that `-h` on `frames`,
+calibration (35 s when ftpoc uploaded the microcode itself earlier in
+the run: a power-up, the lamp is cold), whatever was asked, except
+that `-h` on `frames`,
 `scan --job` and `calibrate-focus` sets that first hold explicitly
 (0..120 s, e.g. `-h 35` after a cold power-up, `-h 0` when the lamp is
 already warm). Their later scans hold 3 s.
@@ -352,8 +382,8 @@ For files to keep and process later, not to edit on the box:
   reference) or `--bw rgb` (three channels, e.g. chromogenic films).
 - 8-bit outputs do not exist here: make them in post.
 
-`frames --detail` previews at the scan's **own optics** (6300:
-FlexColor's standard preview; 3150: 525 ppi at the 3150 optics, bin 6),
+`frames --detail` previews at the scan's **own optics** (6300: the
+standard preview; 3150: 525 ppi at the 3150 optics, bin 6),
 so the preview's light level and Dmax are the scan's. It then brackets
 focus on every selected frame at bin 1 (~1 min each; the film is not
 flat along a strip, ~1900 tandem steps measured) and groups the frames

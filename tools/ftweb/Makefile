@@ -35,12 +35,14 @@ WEB_UNITS = ft ft_curve ft_render ft_render_auto ft_density ft_dplan \
 	ft_dng ft_calib ft_develop ft_detect ft_preview ft_share_print
 WEB_OBJ = $(addprefix wasm/,$(addsuffix .o,$(WEB_UNITS)))
 EXPORTS = ftw_new ftw_free ftw_error ftw_out ftw_out_len ftw_text \
-	ftw_emulsions ftw_lens ftw_dof95 ftw_job_load ftw_plan_load ftw_job_json \
-	ftw_plan ftw_job_text \
+	ftw_emulsions ftw_resolutions ftw_holders ftw_lens ftw_dof95 ftw_job_load ftw_plan_load ftw_job_json \
+	ftw_plan ftw_job_text ftw_frame_box \
 	ftw_print_load ftw_print_new ftw_print_emulsion ftw_print_get \
-	ftw_print_clicks ftw_print_rotate ftw_print_rotation ftw_print_text ftw_cut \
+	ftw_print_clicks ftw_print_rotate ftw_print_rotation ftw_print_name \
+	ftw_print_set_name ftw_print_text ftw_cut \
 	ftw_frames ftw_measure ftw_jpeg ftw_display ftw_zip ftw_alloc \
-	ftw_preview_load ftw_preview_display \
+	ftw_preview_load ftw_preview_display ftw_preview_print \
+	ftw_preview_px ftw_live_rows \
 	ftw_release
 
 wasm: ftweb.wasm ftweb_cli.wasm

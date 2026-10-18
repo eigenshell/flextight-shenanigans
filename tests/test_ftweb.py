@@ -125,6 +125,27 @@ def test_engine_notes_are_the_cli_warnings(both):
 
 
 @needs_cc
+def test_engine_zip_names_frames(tools, tmp_path):
+    """a frame's name (strip.print) names its prints in the zip; the
+    others keep <base>_frameNN (ftdev's names); the bytes are the same"""
+    _, cli = tools
+    b = windows(tmp_path / "web")
+    pr = tmp_path / "web" / "strip.print"
+    pr.write_text(PRINT.replace("[frame 2]\n", "[frame 2]\nname = dog\n"))
+    out = tmp_path / "out"
+    out.mkdir()
+    r = subprocess.run([str(cli), "--print", str(pr), "-o", str(out),
+                        *map(str, b)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    with zipfile.ZipFile(out / "job.zip") as z:
+        assert z.namelist() == [
+            "job_frame01.jpg", "job_frame01.jpg.txt",
+            "dog.jpg", "dog.jpg.txt",
+            "job_frame03.jpg", "job_frame03.jpg.txt"]
+        assert z.read("dog.jpg") == (out / "job_frame02.jpg").read_bytes()
+
+
+@needs_cc
 def test_engine_zip_holds_every_print(both):
     cli, web, _, _ = both
     with zipfile.ZipFile(web / "job.zip") as z:

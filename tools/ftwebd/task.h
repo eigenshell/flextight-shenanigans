@@ -13,6 +13,8 @@ typedef struct {
     const char *strips;         /* strip folders, relative to the cwd */
     const char *archive;        /* ARC frames' folder (NULL: none) */
     const char *archive_ppi;    /* "3150" or "6300" */
+    const char *microcode;      /* ftpoc --microcode (NULL: ftpoc's
+                                   default, beside its exe) */
 } task_cfg;
 
 /* what the client asked for (checked by task_start) */

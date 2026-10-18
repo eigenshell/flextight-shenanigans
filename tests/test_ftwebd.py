@@ -216,6 +216,39 @@ def test_scan_chain_share_then_archive(arc):
     assert argv_log(arc)[-2][5:7] == ["--film", "slide"]
 
 
+def test_microcode_passed_to_every_step(binary, tmp_path):
+    mc = tmp_path / "fw" / "MICROCOD.3XX"
+    mc.parent.mkdir()
+    mc.write_bytes(b"\0" * 16)
+    s = Server(binary, tmp_path, 0.001,
+               args=["--archive", tmp_path / "nas", "--microcode", mc])
+    try:
+        previewed(s)
+        code, t = s.req("POST", "/api/tasks", {"op": "scan", "strip": "a",
+                                               "arc": "4", "film": "neg"})
+        assert code == 202 and s.wait(t["id"])["exit"] == 0
+        log = argv_log(s)
+        assert [a[0] for a in log] == ["frames", "scan", "frames", "scan"]
+        for a in log:
+            assert a[-2:] == ["--microcode", str(mc)]
+    finally:
+        s.close()
+
+
+def test_microcode_must_exist(binary, tmp_path):
+    r = subprocess.run([str(binary), "--port", str(free_port()), "--ftpoc",
+                        str(FAKE), "--microcode", str(tmp_path / "none")],
+                       cwd=tmp_path, capture_output=True, text=True,
+                       timeout=10)
+    assert r.returncode == 1
+    assert "no microcode at" in r.stderr
+
+
+def test_no_microcode_option_by_default(srv):
+    previewed(srv)
+    assert "--microcode" not in argv_log(srv)[0]
+
+
 @pytest.mark.parametrize("body, msg", [
     ({"arc": "4"}, "film must be neg or slide"),
     ({"arc": "4; rm", "film": "neg"}, "arc: frame numbers, e.g. 1,3-4"),
@@ -342,7 +375,7 @@ def head_of(s, path, inm=None):
         return e.code, dict(e.headers), e.read()
 
 
-@pytest.mark.parametrize("path", ["/", "/ftweb.js", "/print.js"])
+@pytest.mark.parametrize("path", ["/", "/ftweb.js", "/review.js"])
 def test_page_files_revalidate(srv, path):
     """the page's files: ETag + no-cache; 304 while unchanged, so the
     browser keeps ftweb.wasm and asks only whether it changed"""
@@ -398,6 +431,108 @@ def test_page_fits_the_first_packet(srv):
     code, page = srv.req("GET", "/", raw=True)
     assert code == 200 and page.startswith(b"<!doctype html>")
     assert len(page) < 14 * 1024
-    # the rest loads after the shell: the print stage, the worker
-    assert b'<script src="print.js" defer>' in page
+    # the rest loads after the shell: the review screen, the worker
+    assert b'<script src="review.js" defer>' in page
     assert b'new Worker("ftweb.js")' in page
+
+
+def ranged(s, path, start):
+    """GET with Range: bytes=start- -> (code, headers, body)"""
+    r = urllib.request.Request("http://127.0.0.1:%d%s" % (s.port, path))
+    r.add_header("Range", "bytes=%d-" % start)
+    try:
+        with urllib.request.urlopen(r, timeout=10) as f:
+            return f.status, dict(f.headers), f.read()
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read()
+
+
+def test_range_reads_a_growing_file(srv):
+    """the live bar reads strip.raw as ftpoc writes it: bytes=N- -> 206
+    with what is there now (at most 1 MB a reply), 416 when nothing new;
+    no Range: the whole file as before"""
+    srv.req("POST", "/api/strips", {"name": "a"})
+    raw = srv.cwd / "strips" / "a" / "strip.raw"
+    raw.write_bytes(bytes(range(256)) * 4)
+    p = "/api/strips/a/files/strip.raw"
+    code, h, body = ranged(srv, p, 1000)
+    assert code == 206 and body == (bytes(range(256)) * 4)[1000:]
+    assert h["Content-Range"] == "bytes 1000-1023/1024"
+    assert ranged(srv, p, 1024)[0] == 416
+    with raw.open("ab") as f:
+        f.write(b"\x01" * (3 << 20))
+    code, h, body = ranged(srv, p, 1024)
+    assert code == 206 and len(body) == 1 << 20
+    assert h["Content-Range"] == "bytes 1024-%d/%d" % ((1 << 20) + 1023,
+                                                       1024 + (3 << 20))
+    assert len(srv.req("GET", p, raw=True)[1]) == 1024 + (3 << 20)
+
+
+def test_recent_scans_placeholder(srv):
+    assert srv.req("GET", "/api/scans") == (200, [])
+
+
+def test_strip_with_choices(srv):
+    """the landing page's choices are kept with the strip (strip.scan);
+    bad ones refused, the folder not made"""
+    body = {"name": "b", "type": "quick", "ppi": "1730", "holder": "24x217",
+            "emulsion": "generic-neg"}
+    assert srv.req("POST", "/api/strips", body) == (200, {"name": "b"})
+    t = (srv.cwd / "strips" / "b" / "strip.scan").read_text()
+    assert re.fullmatch(r"type = quick\nppi = 1730\nholder = 24x217\n"
+                        r"emulsion = generic-neg\n"
+                        r"created = \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\n", t)
+    for k, v, msg in (("ppi", "500", "ppi: 500 is out of the optics' range"),
+                      ("holder", "nope", "holder: no holder 'nope'"),
+                      ("emulsion", "nope", "emulsion: no emulsion 'nope'"),
+                      ("type", "archive", "type: only quick scans so far")):
+        code, e = srv.req("POST", "/api/strips", dict(body, name="c", **{k: v}))
+        assert (code, e["error"]) == (422, msg)
+    assert not (srv.cwd / "strips" / "c").exists()
+
+
+def test_review_put_validated(srv):
+    srv.req("POST", "/api/strips", {"name": "a"})
+    p = "/api/strips/a/strip.review"
+    assert srv.req("GET", p, raw=True)[0] == 404
+    good = "1 confirmed\n2 skipped\n3 pending\n"
+    assert srv.req("PUT", p, good) == (200, {"ok": True})
+    assert srv.req("GET", p, raw=True) == (200, good.encode())
+    for bad, msg in (("1 maybe\n", "line 1: '1 maybe' is not <frame> "
+                                   "pending|confirmed|skipped"),
+                     ("x confirmed\n", "line 1: 'x confirmed' is not <frame> "
+                                       "pending|confirmed|skipped")):
+        code, e = srv.req("PUT", p, bad)
+        assert (code, e["error"]) == (422, msg)
+    assert srv.req("GET", p, raw=True) == (200, good.encode())
+
+
+def test_preview_job_put_validated(srv):
+    """a crop keeps the preview's job (the base of every plan)"""
+    previewed(srv)
+    d = srv.cwd / "strips" / "a"
+    before = (d / "strip.preview.job").read_text()
+    p = "/api/strips/a/strip.preview.job"
+    code, e = srv.req("PUT", p, "[strip]\nbogus = 1\n")
+    assert code == 422 and "bogus" in e["error"]
+    moved = before.replace("window = 4.000 1.600", "window = 5.000 1.600", 1)
+    assert moved != before
+    assert srv.req("PUT", p, moved) == (200, {"ok": True})
+    assert (d / "strip.preview.job").read_text() == moved
+
+
+def test_scan_keeps_earlier_runs(srv):
+    """a second scan of a strip (a rescan) numbers its windows from 1
+    again: the earlier run's window files move to strip_rK_winNN first,
+    so frames scanned before are not overwritten"""
+    previewed(srv)
+    d = srv.cwd / "strips" / "a"
+    for k in (1, 2):
+        code, t = srv.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
+        assert code == 202 and srv.wait(t["id"])["exit"] == 0
+    names = sorted(p.name for p in d.iterdir() if "win" in p.name)
+    assert "strip_win01.raw" in names and "strip_r1_win01.raw" in names
+    assert "strip_r1_win01.raw.txt" in names
+    code, t = srv.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
+    assert srv.wait(t["id"])["exit"] == 0
+    assert (d / "strip_r2_win01.raw").exists()

@@ -87,6 +87,23 @@ static int rotation_ok(int deg)
     return deg == 0 || deg == 90 || deg == 180 || deg == 270;
 }
 
+/* a frame name: [A-Za-z0-9._-], 1..64, no leading '.' (ftwebd's file
+ * names) */
+static int name_ok(const char *s)
+{
+    size_t i, n = strlen(s);
+    if (n < 1 || n >= FT_PRINT_NAME || s[0] == '.')
+        return 0;
+    for (i = 0; i < n; i++) {
+        char c = s[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'))
+            return 0;
+    }
+    return 1;
+}
+#define NAME_RULE "is not 1..64 of A-Z a-z 0-9 . _ - (not starting with .)"
+
 static int auto_clicks(ft_cmyd k)
 {
     return !k.c && !k.m && !k.y && !k.d;
@@ -95,7 +112,8 @@ static int auto_clicks(ft_cmyd k)
 /* frame i's section goes when it says nothing */
 static void drop_if_empty(ft_print_file *pf, int i)
 {
-    if (i < 0 || !auto_clicks(pf->f[i].k) || pf->f[i].rotate)
+    if (i < 0 || !auto_clicks(pf->f[i].k) || pf->f[i].rotate ||
+        pf->f[i].name[0])
         return;
     memmove(&pf->f[i], &pf->f[i + 1],
             (size_t)(pf->nframes - i - 1) * sizeof pf->f[0]);
@@ -126,7 +144,7 @@ int ft_print_file_parse(const char *text, size_t n, ft_print_file *pf,
                         ft_err *e)
 {
     const ft_emulsion *em = NULL;
-    int ln = 0, cur = -1, had_cmyd = 0, had_rot = 0, i;
+    int ln = 0, cur = -1, had_cmyd = 0, had_rot = 0, had_name = 0, i;
     size_t at = 0;
     char line[256];
     ft_err in;
@@ -170,7 +188,7 @@ int ft_print_file_parse(const char *text, size_t n, ft_print_file *pf,
                 return ft_fail(e, "line %d: more than %d frames", ln,
                                FT_MAX_FRAMES);
             pf->f[cur].line = ln;
-            had_cmyd = had_rot = 0;
+            had_cmyd = had_rot = had_name = 0;
             continue;
         }
         eq = find_char(s, '=');
@@ -188,6 +206,14 @@ int ft_print_file_parse(const char *text, size_t n, ft_print_file *pf,
             if (!em)
                 return list_ids(e, ln, val);
             memcpy(pf->emulsion, em->id, strlen(em->id) + 1);
+        } else if (strcmp(key, "name") == 0) {
+            if (had_name)
+                return ft_fail(e, "line %d: name: set twice", ln);
+            if (!name_ok(val))
+                return ft_fail(e, "line %d: name: '%.40s' " NAME_RULE, ln,
+                               val);
+            memcpy(pf->f[cur].name, val, strlen(val) + 1);
+            had_name = 1;
         } else if (strcmp(key, "rotate") == 0) {
             int v;
             if (had_rot)
@@ -271,7 +297,12 @@ size_t ft_print_file_write(const ft_print_file *pf, char *buf, size_t cap)
         put(&w, "\n[frame ");
         put_int(&w, pf->f[i].index);
         put(&w, "]\n");
-        if (!auto_clicks(*k) || !pf->f[i].rotate) {
+        if (pf->f[i].name[0]) {
+            put(&w, "name = ");
+            put(&w, pf->f[i].name);
+            put(&w, "\n");
+        }
+        if (!auto_clicks(*k) || (!pf->f[i].rotate && !pf->f[i].name[0])) {
             put(&w, "cmyd = ");
             put_int(&w, k->c);
             put(&w, " ");
@@ -339,6 +370,30 @@ int ft_print_file_set_rotation(ft_print_file *pf, int frame, int deg,
     if (i < 0 && (i = insert(pf, frame)) < 0)
         return ft_fail(e, "more than %d frames", FT_MAX_FRAMES);
     pf->f[i].rotate = deg;
+    drop_if_empty(pf, i);
+    return 0;
+}
+
+const char *ft_print_file_name(const ft_print_file *pf, int frame)
+{
+    int i = find(pf, frame);
+    return i < 0 ? "" : pf->f[i].name;
+}
+
+int ft_print_file_set_name(ft_print_file *pf, int frame, const char *name,
+                           ft_err *e)
+{
+    int i;
+    if (frame < 0 || frame > MAX_INDEX)
+        return ft_fail(e, "frame %d (0..%d)", frame, MAX_INDEX);
+    if (name[0] && !name_ok(name))
+        return ft_fail(e, "name: '%.40s' " NAME_RULE, name);
+    i = find(pf, frame);
+    if (i < 0 && !name[0])
+        return 0;
+    if (i < 0 && (i = insert(pf, frame)) < 0)
+        return ft_fail(e, "more than %d frames", FT_MAX_FRAMES);
+    memcpy(pf->f[i].name, name, strlen(name) + 1);
     drop_if_empty(pf, i);
     return 0;
 }
