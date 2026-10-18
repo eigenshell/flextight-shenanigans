@@ -31,6 +31,14 @@ const char *ftw_text(const ftw *w);
 /* the compiled-in emulsions -> out: [{"id","name","mode"}...] */
 int ftw_emulsions(ftw *w);
 
+/* the landing page's resolutions, one per ppi[i] -> out: [{"ppi","mp",
+ * "px","dmax"}]: mp = a 36x24 frame's megapixels (one decimal), px = its
+ * long side (the planner's target, FT_SHARE_FF_LONG_MM), dmax = null (no
+ * estimator yet: the page shows #N/A). -1 for a ppi no bin reaches. */
+int ftw_resolutions(ftw *w, const double *ppi, int n);
+/* the holders -> out: [{"name","label","frames"}] */
+int ftw_holders(ftw *w);
+
 /* the planner's focus fit: the box's focus.txt (default: libft's
  * built-in curve, ft_lens_default) */
 int ftw_lens(ftw *w, const char *text, size_t n);

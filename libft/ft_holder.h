@@ -12,8 +12,11 @@ typedef struct {
     double scan_len_mm, scan_width_mm;
     double grid_first_mm, grid_pitch_mm, grid_frame_mm;
     int grid_frames;
+    const char *label;          /* what the page shows */
 } ft_holder;
 
 const ft_holder *ft_holder_find(const char *name);
+/* the i-th holder (0..), NULL past the last */
+const ft_holder *ft_holder_at(int i);
 
 #endif

@@ -35,7 +35,7 @@ WEB_UNITS = ft ft_curve ft_render ft_render_auto ft_density ft_dplan \
 	ft_dng ft_calib ft_develop ft_detect ft_preview ft_share_print
 WEB_OBJ = $(addprefix wasm/,$(addsuffix .o,$(WEB_UNITS)))
 EXPORTS = ftw_new ftw_free ftw_error ftw_out ftw_out_len ftw_text \
-	ftw_emulsions ftw_lens ftw_job_load ftw_plan_load ftw_job_json \
+	ftw_emulsions ftw_resolutions ftw_holders ftw_lens ftw_job_load ftw_plan_load ftw_job_json \
 	ftw_plan ftw_job_text \
 	ftw_print_load ftw_print_new ftw_print_emulsion ftw_print_get \
 	ftw_print_clicks ftw_print_rotate ftw_print_rotation ftw_print_text ftw_cut \

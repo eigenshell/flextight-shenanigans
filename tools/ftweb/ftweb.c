@@ -13,6 +13,7 @@
 #include "ft_holder.h"
 #include "ft_job.h"
 #include "ft_output.h"
+#include "ft_plan.h"
 #include "ft_pm.h"
 #include "ft_print.h"
 #include "ft_preview.h"
@@ -236,6 +237,42 @@ int ftw_emulsions(ftw *w)
         rc = rc ? rc : outf(w, ",\"name\":");
         rc = rc ? rc : out_str(w, em->name);
         rc = rc ? rc : outf(w, ",\"mode\":\"%s\"}", MODE[em->mode]);
+    }
+    return rc ? rc : outf(w, "]");
+}
+
+int ftw_resolutions(ftw *w, const double *ppi, int n)
+{
+    int i, bins[6], rc;
+    for (i = 0; i < n; i++)
+        if (!ft_bins_for_ppi(ppi[i], bins)) {
+            snprintf(w->err, sizeof w->err,
+                     "%g ppi: out of the optics' range", ppi[i]);
+            return -1;
+        }
+    out_reset(w);
+    rc = outf(w, "[");
+    for (i = 0; i < n && !rc; i++) {
+        double in = FT_SHARE_FF_LONG_MM / 25.4, mp = ppi[i] * in *
+                    ppi[i] * in * 24.0 / FT_SHARE_FF_LONG_MM / 1e6;
+        rc = outf(w, "%s{\"ppi\":%g,\"mp\":%.1f,\"px\":%.0f,\"dmax\":null}",
+                  i ? "," : "", ppi[i], mp, ppi[i] * in);
+    }
+    return rc ? rc : outf(w, "]");
+}
+
+int ftw_holders(ftw *w)
+{
+    const ft_holder *h;
+    int i, rc;
+    out_reset(w);
+    rc = outf(w, "[");
+    for (i = 0; !rc && (h = ft_holder_at(i)) != NULL; i++) {
+        rc = outf(w, "%s{\"name\":", i ? "," : "");
+        rc = rc ? rc : out_str(w, h->name);
+        rc = rc ? rc : outf(w, ",\"label\":");
+        rc = rc ? rc : out_str(w, h->label);
+        rc = rc ? rc : outf(w, ",\"frames\":%d}", h->grid_frames);
     }
     return rc ? rc : outf(w, "]");
 }

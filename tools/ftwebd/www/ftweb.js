@@ -73,6 +73,18 @@ function ints(n, f) {
 
 const ops = {
   emulsions: () => (ok(X.ftw_emulsions(w)), JSON.parse(text())),
+  // ppis -> [{ppi, mp, px, dmax}]
+  resolutions(ppis) {
+    const p = X.ftw_alloc(ppis.length * 8);
+    try {
+      new Float64Array(M.buffer, p, ppis.length).set(ppis);
+      ok(X.ftw_resolutions(w, p, ppis.length));
+      return JSON.parse(text());
+    } finally {
+      X.ftw_release(p);
+    }
+  },
+  holders: () => (ok(X.ftw_holders(w)), JSON.parse(text())),
   lens: t => load(X.ftw_lens)(t),
   job: t => load(X.ftw_job_load)(t),
   planLoad: t => load(X.ftw_plan_load)(t),

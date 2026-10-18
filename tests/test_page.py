@@ -151,6 +151,29 @@ def test_worker_print_file(built, tmp_path):
                             "rotate = 270\n")
 
 
+def test_worker_resolutions_and_holders(built, tmp_path):
+    """the landing page's choices come from C: MP and the planner's px per
+    ppi (36x24 geometry; Dmax not estimated yet: null, shown #N/A), a ppi
+    no bin reaches refused; the holders with their labels"""
+    rep = worker(tmp_path, [
+        {"op": "resolutions", "a": [[1220, 1730, 2450, 3000, 3460, 4000]]},
+        {"op": "resolutions", "a": [[500]]},
+        {"op": "holders"},
+    ])
+    assert rep[0]["r"] == [
+        {"ppi": 1220, "mp": 2.0, "px": 1729, "dmax": None},
+        {"ppi": 1730, "mp": 4.0, "px": 2452, "dmax": None},
+        {"ppi": 2450, "mp": 8.0, "px": 3472, "dmax": None},
+        {"ppi": 3000, "mp": 12.1, "px": 4252, "dmax": None},
+        {"ppi": 3460, "mp": 16.0, "px": 4904, "dmax": None},
+        {"ppi": 4000, "mp": 21.4, "px": 5669, "dmax": None}]
+    assert rep[1] == {"err": "500 ppi: out of the optics' range"}
+    assert rep[2]["r"] == [{
+        "name": "24x217", "frames": 6,
+        "label": "Filmchrome 24x36x6 (25.2 x 226.8 mm), 6 frames 35 mm "
+                 "with borders"}]
+
+
 BASE_D = (0.21, 0.40, 0.60)          # an orange mask: D r g b
 
 
