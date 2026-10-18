@@ -13,8 +13,9 @@ FAKE_FTPOC_WINDOW: a window scan's base (libft/test/window_dump: <w>.raw,
 .raw.cal, .raw.txt); scan copies it as each window, the window's first
 frame as its share_frame, so the page can cut and print real pixels.
 Otherwise windows are 64 zero bytes. FAKE_FTPOC_PREVIEW: a preview's base
-(<p>.raw, .raw.cal, .raw.txt) frames copies as strip.raw (else 64 zero
-bytes). scan says what focus does: window 1 a bracket, the rest carry
+(<p>.raw, .raw.cal, .raw.txt) frames writes as strip.raw while it
+"scans" (each progress line a share of the bytes, as ftpoc writes the
+lines as they come), then the rest (else 64 zero bytes). scan says what focus does: window 1 a bracket, the rest carry
 it."""
 import json
 import os
@@ -62,10 +63,12 @@ def png(path, w, h, boxes):
         chunk(b"IDAT", raw) + chunk(b"IEND", b""))
 
 
-def lines(total):
+def lines(total, on=None):
     for k in range(50, total + 1, 50):
         if stopped:
             return False
+        if on:
+            on(k, total)
         say("progress lines %d/%d" % (k, total))
         time.sleep(DELAY)
     say("progress lines %d/%d" % (total, total))
@@ -76,12 +79,22 @@ def frames(args):
     base = args[args.index("-o") + 1]
     say("progress begin preview 1")
     say("progress unit preview 1 1")
-    if not lines(4795):
+    pv = os.environ.get("FAKE_FTPOC_PREVIEW")
+    data = Path(pv + ".raw").read_bytes() if pv else b""
+    out = open(base + ".raw", "wb") if pv else None
+
+    def grow(k, total):
+        out.write(data[out.tell():len(data) * k // total])
+        out.flush()
+    ok = lines(4795, grow if pv else None)
+    if out:
+        out.write(data[out.tell():])
+        out.close()
+    if not ok:
         say("progress end stopped")
         return 1
-    pv = os.environ.get("FAKE_FTPOC_PREVIEW")
     if pv:
-        for ext in (".raw", ".raw.cal", ".raw.txt"):
+        for ext in (".raw.cal", ".raw.txt"):
             shutil.copy(pv + ext, base + ext)
     else:
         Path(base + ".raw").write_bytes(b"\0" * 64)

@@ -51,10 +51,10 @@ int ftw_lens(ftw *w, const char *text, size_t n);
  * FT_SHARE_6MP, ...); the number of windows. ftw_job_text: the planned
  * job's text (else the base's) -> out. ftw_job_json -> out: {"film":
  * "neg|slide","holder","windows","frames":[{"n","type","low","x","y",
- * "w","h","px","group","done"}]}: the base's frames, their boxes in the
+ * "w","h","px","ppi","group","done"}]}: the base's frames, their boxes in the
  * preview image's pixels (strip.png; x = the "x=" line of the preview's
- * strip.raw.txt, NULL/0: the standard preview's), px/group/done from the
- * plan (0/0/false without one). */
+ * strip.raw.txt, NULL/0: the standard preview's), px/ppi/group/done from
+ * the plan (0/0/0/false without one). */
 int ftw_job_load(ftw *w, const char *text, size_t n);
 int ftw_plan_load(ftw *w, const char *text, size_t n);
 int ftw_plan(ftw *w, const double *px, int n);

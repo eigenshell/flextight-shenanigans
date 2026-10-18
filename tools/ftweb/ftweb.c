@@ -378,14 +378,14 @@ int ftw_job_json(ftw *w, const char *preview_txt, size_t n)
             px = ft_job_share_px(p, c);
         rc = outf(w, "%s{\"n\":%d,\"type\":\"%s\",\"low\":%s,"
                      "\"x\":%.1f,\"y\":%.1f,\"w\":%.1f,\"h\":%.1f,"
-                     "\"px\":%g,\"group\":%d,\"done\":%s}",
+                     "\"px\":%g,\"ppi\":%g,\"group\":%d,\"done\":%s}",
                   i ? "," : "", f->index,
                   (unsigned)f->type <= 3 ? TYPES[f->type] : "full",
                   f->confidence_low ? "true" : "false",
                   (f->y0 - ax.y_mm0) / ax.y_mm_per_line,
                   (f->x0 - ax.x_mm0) / ax.x_mm_per_px,
                   f->len / ax.y_mm_per_line, f->width / ax.x_mm_per_px, px,
-                  px > 0 ? c->group : 0, px > 0 && c->done ? "true"
+                  px > 0 ? c->ppi : 0, px > 0 ? c->group : 0, px > 0 && c->done ? "true"
                                                            : "false");
     }
     return rc ? rc : outf(w, "]}");

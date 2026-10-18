@@ -342,7 +342,7 @@ def head_of(s, path, inm=None):
         return e.code, dict(e.headers), e.read()
 
 
-@pytest.mark.parametrize("path", ["/", "/ftweb.js", "/print.js"])
+@pytest.mark.parametrize("path", ["/", "/ftweb.js", "/review.js"])
 def test_page_files_revalidate(srv, path):
     """the page's files: ETag + no-cache; 304 while unchanged, so the
     browser keeps ftweb.wasm and asks only whether it changed"""
@@ -398,8 +398,8 @@ def test_page_fits_the_first_packet(srv):
     code, page = srv.req("GET", "/", raw=True)
     assert code == 200 and page.startswith(b"<!doctype html>")
     assert len(page) < 14 * 1024
-    # the rest loads after the shell: the print stage, the worker
-    assert b'<script src="print.js" defer>' in page
+    # the rest loads after the shell: the review screen, the worker
+    assert b'<script src="review.js" defer>' in page
     assert b'new Worker("ftweb.js")' in page
 
 

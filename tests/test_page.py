@@ -5,6 +5,7 @@ headless Chromium against ftwebd and the fake ftpoc: the JPEGs it
 downloads are ftdev cut + ftdev print --roll's, byte for byte. Skipped
 without the wasi-sdk, node >= 22 (and Chromium for the end-to-end)."""
 import json
+import re
 import shutil
 import subprocess
 import zipfile
@@ -75,6 +76,8 @@ def test_worker_plans_as_ftdev(built, tmp_path):
     fr = j["frames"]
     assert [f["n"] for f in fr] == [1, 2, 3, 4, 5, 6]
     assert [f["px"] for f in fr] == [2450, 2450, 3000, 0, 2450, 0]
+    # each frame's planned ppi (the review says when a frame raises it)
+    assert [f["ppi"] for f in fr] == [1729, 1729, 2117, 0, 1729, 0]
     assert fr[0]["group"] == fr[1]["group"] != fr[2]["group"]
     assert fr[5]["type"] == "partial" and not any(f["done"] for f in fr)
     # boxes in strip.png pixels (525 ppi), along the strip in order
@@ -372,10 +375,11 @@ def test_worker_preview_print(built, tmp_path):
 
 
 def run_page(built, tmp_path):
-    """the page in Chromium: new strip, preview, taps (3: 6MP, 4: ARC,
-    5: skip), frame 2 turned on the strip, pos, scan, clicks c c M and a
-    turn (r) on frame 1, zooms (z, a tap, the strip's +), Download and
-    All"""
+    """the page in Chromium: landing (2450 ppi), SCAN, the live bar, the
+    review by keys (qwerty on frame 1, dvorak on frame 2 with a name), a
+    crop dragged on frame 3, 4 and 5 skipped, 6 confirmed: the scan
+    starts by itself; Download and All; then a crop on a scanned frame:
+    the dialog, R, its rescan"""
     pytest.importorskip("numpy")
     meta = "px=666\nx=2\nbin=12\n"
     boxes = worker(tmp_path, [
@@ -391,15 +395,14 @@ def run_page(built, tmp_path):
     box.mkdir()
     dl = tmp_path / "dl"
     dl.mkdir()
-    srv = Server(ROOT / "tools" / "ftwebd" / "ftwebd", box, 0.001,
-                 args=["--archive", box / "archive"],
+    srv = Server(ROOT / "tools" / "ftwebd" / "ftwebd", box, 0.03,
                  env={"FAKE_FTPOC_WINDOW": str(win),
                       "FAKE_FTPOC_PREVIEW": str(tmp_path / "pv" / "strip")})
     try:
         r = subprocess.run([NODE, "--no-warnings", str(FIX / "page_e2e.mjs"),
                             CHROME, "http://127.0.0.1:%d/" % srv.port,
                             str(dl)], capture_output=True, text=True,
-                           timeout=240)
+                           timeout=300)
     finally:
         srv.close()
     assert r.returncode == 0, r.stderr[-4000:]
@@ -411,48 +414,76 @@ def test_page_end_to_end(built, tmp_path):
     out, box, dl = run_page(built, tmp_path)
     s = out["strip"]
     strip = box / "strips" / s
-    assert out["landed"] == [1, 3]            # one fake frame per window
+    # the landing page: the engine's numbers, Dmax not estimated (#N/A)
+    assert out["res"][2] == "2450ppi · 8.0 MPDmax: #N/A"
+    assert all(r.endswith("Dmax: #N/A") for r in out["res"])
+    assert out["holder"].startswith("Filmchrome 24x36x6")
+    assert out["recent"] == "coming soon"
+    assert re.match(r"type = quick\nppi = 2450\nholder = 24x217\n"
+                    r"emulsion = generic-neg\ncreated = ", out["scanFile"])
+    # the review: keys (qwerty, then dvorak), a name, decisions kept
     assert out["print"] == ("emulsion = generic-neg\n\n[frame 1]\n"
                             "cmyd = 2 -1 0 0\nrotate = 90\n\n[frame 2]\n"
-                            "rotate = 90\n")
-    # pos: frame 1's dense half printed light (a positive, not strip.png)
-    assert sum(out["posPx"][:3]) > 3 * 150, out["posPx"]
-    # what focus did, as the status said it
+                            "name = dog\ncmyd = 0 0 0 1\nrotate = 90\n")
+    assert out["review"] == ("1 confirmed\n2 confirmed\n3 confirmed\n"
+                             "4 skipped\n5 skipped\n6 confirmed\n")
+    # the crop: frame 3's window shorter, the rest as detected
+    w0 = re.findall(r"window = (\S+) (\S+) (\S+)", out["before"])
+    w1 = re.findall(r"window = (\S+) (\S+) (\S+)", out["after"])
+    assert w1[:2] == w0[:2] and w1[3:] == w0[3:]
+    assert float(w1[2][2]) < float(w0[2][2]) - 1
+    # the scan started by itself: confirmed frames in, skipped out; the
+    # partial frame 6 raises the ppi, and the page says so
+    j1 = out["job1"]
+    inc = re.findall(r"\[frame (\d)\]\ntype = \w+\ninclude = (\w+)", j1)
+    assert inc == [("1", "yes"), ("2", "yes"), ("3", "yes"), ("4", "no"),
+                   ("5", "no"), ("6", "yes")]
+    assert "share = 3472" in j1
+    assert out["ppin"].startswith("note: this scan runs at 3615 ppi, not "
+                                  "2450: every frame gets 3472 px on its long "
+                                  "side, and frames 3, 6 (partial or cropped)")
+    assert out["landed1"] == [1, 6]           # one fake frame per window
+    assert out["states"] == ["done", "confirmed", "confirmed", "skipped",
+                             "skipped", "done"]
     seen = "\n".join(out["seen"])
     assert "window 1/2 · focusing frame 1 · crop 1 at -500" in seen
     assert "window 1/2 · focus +250 (measured)" in seen
     assert "window 2/2 · focus +250 carried: no crops" in seen
     assert out["plot"]
+    # a crop on a scanned frame asked; R rescanned it in a run of its own,
+    # the first run's windows kept beside it
+    assert out["question"] == ("Frame 1 is already scanned. A new crop "
+                               "needs a rescan.")
     log = [json.loads(l) for l in (box / "fake_ftpoc.log").read_text()
            .splitlines()]
-    arc = str(box / "archive" / s / "strip")
-    assert log[1:] == [
-        ["scan", "--job", "strips/%s/strip.job" % s, "--progress"],
-        ["frames", "--detail", "neg", "--ppi", "6300", "--film", "neg",
-         "--select", "4", "--progress", "-o", arc],
-        ["scan", "--job", arc + ".job", "--progress"]]
-    job = (strip / "strip.job").read_text()
-    assert "share_px = 3000" in job and "done = yes" in job
-    # the CLI on the same strip folder
-    for w in sorted(strip.glob("strip_win*.raw")):
+    assert [a[0] for a in log] == ["frames", "scan", "scan"]
+    assert {"strip_r1_win01.raw", "strip_r1_win02.raw",
+            "strip_win01.raw"} <= set(out["files"])
+    assert 1 in out["landed"]
+    # the keymap overlay lists the dvorak keys
+    assert "'" in out["keymapText"] and "turn right" in out["keymapText"]
+    # the downloads (after the first run) are the CLI's prints of it
+    job = tmp_path / "job1.job"
+    job.write_text(j1)
+    for w in sorted(strip.glob("strip_r1_win*.raw")):
         subprocess.run([str(FTDEV), "cut", str(w)], check=True,
                        capture_output=True)
-    dngs = [str(strip / "strip_frame01.dng"), str(strip / "strip_frame03.dng")]
+    dngs = [str(strip / "strip_r1_frame01.dng"),
+            str(strip / "strip_r1_frame06.dng")]
     r = subprocess.run([str(FTDEV), "print", *dngs, "--roll",
-                        str(strip / "strip.print"), "--job",
-                        str(strip / "strip.job")], capture_output=True,
-                       text=True)
+                        str(strip / "strip.print"), "--job", str(job)],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     page = dl / (s + "_frame01.jpg")
-    assert page.read_bytes() == (strip / "strip_frame01.jpg").read_bytes()
+    assert page.read_bytes() == (strip / "strip_r1_frame01.jpg").read_bytes()
     assert (dl / (s + "_frame01.jpg.txt")).read_bytes() == \
-        (strip / "strip_frame01.jpg.txt").read_bytes()
-    assert "\ncmyd=2 -1 0 0\n" in (strip / "strip_frame01.jpg.txt").read_text()
-    assert "\nrotate=90\n" in (strip / "strip_frame01.jpg.txt").read_text()
+        (strip / "strip_r1_frame01.jpg.txt").read_bytes()
+    assert "\ncmyd=2 -1 0 0\n" in page.with_suffix(".jpg.txt").read_text()
+    assert "\nrotate=90\n" in page.with_suffix(".jpg.txt").read_text()
     with zipfile.ZipFile(dl / (s + ".zip")) as z:
         assert z.testzip() is None
         assert z.namelist() == [s + "_frame01.jpg", s + "_frame01.jpg.txt",
-                                s + "_frame03.jpg", s + "_frame03.jpg.txt"]
+                                s + "_frame06.jpg", s + "_frame06.jpg.txt"]
         for n in z.namelist():
-            assert z.read(n) == (strip / ("strip" + n[len(s):])).read_bytes()
-    assert "note: 2 frames" in out["notes"]
+            assert z.read(n) == \
+                (strip / ("strip_r1" + n[len(s):])).read_bytes(), n

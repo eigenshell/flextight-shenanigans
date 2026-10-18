@@ -4,143 +4,90 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Flextight</title>
 <style>
-:root{--bg:#0d0b0a;--panel:#171311;--line:#2c2420;--ink:#e9e2d8;--dim:#8a7d70;--amber:#ff9a1f;--red:#e5482f;--mono:ui-monospace,"SF Mono","Cascadia Mono","DejaVu Sans Mono",Consolas,monospace}
+:root{--bg:#0d0b0a;--panel:#171311;--line:#2c2420;--ink:#e9e2d8;--dim:#8a7d70;--amber:#ff9a1f;--red:#e5482f;--ok:#7fd17f;--mono:ui-monospace,"SF Mono","Cascadia Mono","DejaVu Sans Mono",Consolas,monospace}
 *{box-sizing:border-box}
 body{margin:0;background:radial-gradient(120% 60% at 50% 0,#1d1512 0,var(--bg) 60%);color:var(--ink);font:15px/1.4 var(--mono);min-height:100vh}
-header{display:flex;gap:.8em;padding:14px 16px 6px;letter-spacing:.18em;text-transform:uppercase}
-header b{color:var(--amber);font-size:13px}header span{color:var(--dim);font-size:11px}
-.bar{display:flex;flex-wrap:wrap;gap:8px;padding:8px 16px;align-items:center}
+header{display:flex;gap:.8em;align-items:baseline;padding:14px 16px 6px;letter-spacing:.18em;text-transform:uppercase}
+header b{color:var(--amber);font-size:13px}header span{color:var(--dim);font-size:11px;flex:1}header a{color:var(--dim);font-size:11px}
+main{padding:0 16px 24px;max-width:1100px;margin:0 auto}
+h2{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim);font-weight:400;margin:18px 0 8px}
 select,input,button{font:inherit;font-size:14px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:8px 10px;min-height:40px}
-input{width:9.5em}
-button{cursor:pointer;letter-spacing:.08em;text-transform:uppercase;font-size:12px}
-.go{background:var(--amber);color:#1a0f00;border-color:var(--amber);font-weight:700}
-.stop{border-color:var(--red);color:var(--red)}
-button:disabled{opacity:.35;cursor:default}
-.box{margin:6px 16px;padding:10px 0;background:linear-gradient(#262019,#120f0d);border-block:1px solid var(--line);overflow-x:auto}
-.strip{position:relative;min-width:640px;margin:0 10px;line-height:0;background:#f3ede2}
-.strip img{width:100%}
-.strip:empty::after{content:"no preview yet";display:block;line-height:120px;text-align:center;color:#6b5e52;font-size:12px;letter-spacing:.2em}
-.fr{position:absolute;border:2px solid #fff4;color:var(--amber);cursor:pointer}
-.fr canvas{position:absolute;inset:0;width:100%;height:100%;display:none}
-.fr .t{position:absolute;right:3px;bottom:3px;min-height:0;padding:0 6px;line-height:1.4;font-size:14px;background:#000a;border:0}
-.fr[data-fz]{animation:fz .8s infinite alternate}@keyframes fz{to{border-color:#7fd17f;box-shadow:0 0 0 3px #7fd17f55}}
-.strip.pos>img{filter:brightness(.18)}
-#fz{display:block;margin:2px 16px;width:240px;height:64px}
-[aria-pressed=true]{color:var(--amber);border-color:var(--amber)}
-.fr span{position:absolute;left:4px;font-size:11px;line-height:1.2;background:#000a;padding:1px 4px}
-.fr .n{top:4px}.fr .s{bottom:4px}
-.fr.on{border-color:var(--amber);background:#ff9a1f14}
-.fr.big{border-color:#ffd04a}.fr.arc{border-color:#7fb3ff}.fr.arc .s{color:#7fb3ff}
-.fr.done::after{content:"✓";position:absolute;right:6px;top:2px;color:#7fd17f;line-height:1.2}
-.fr.low{border-style:dashed}
-.legend{padding:0 16px;color:var(--dim);font-size:12px}.legend i{color:var(--amber);font-style:normal}
-.prog{margin:12px 16px 4px;height:6px;background:var(--panel);border:1px solid var(--line);overflow:hidden}
-.prog div{height:100%;width:0;background:var(--amber);transition:width .3s}
-#st{padding:2px 16px;font-size:13px;min-height:1.4em}#st.err{color:var(--red)}
-#grid{display:flex;gap:6px;padding:4px 16px;overflow-x:auto}
-#grid canvas{height:72px;border:2px solid transparent;cursor:pointer;background:#000}
-#grid canvas.sel{border-color:var(--amber)}
-#bw{margin:6px 16px;text-align:center}#big{max-width:100%;max-height:70vh;background:#000;cursor:zoom-in;vertical-align:top}
-#bw.z{overflow:auto;max-height:85vh;text-align:left}#bw.z #big{max-width:none;max-height:none;cursor:zoom-out}
-.zm{float:right}.zm button{min-height:0;padding:0 10px;line-height:1.5}
-.k{display:inline-flex;align-items:center;gap:4px}.k button{min-width:40px;padding:8px 0}.k b{width:2.2em;text-align:center}
-#notes{padding:0 16px;color:var(--dim);font-size:12px;white-space:pre-wrap}
-details{margin:6px 16px;color:var(--dim);font-size:12px}
-pre{white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto;background:#0008;padding:8px}
-ul{list-style:none;padding:0}li a{color:var(--ink)}
+button{cursor:pointer}button:disabled{opacity:.4;cursor:default}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.card{flex:1 1 200px;text-align:left;padding:12px 14px}.card small{display:block;color:var(--dim);font-size:12px;margin-top:2px}
+[aria-pressed=true]{border-color:var(--amber);color:var(--amber)}
+.res{min-width:118px;text-align:left;padding:8px 12px}.res b{display:block;font-size:20px}.res small{display:block;color:var(--dim);font-size:11px}
+.res[aria-pressed=true] small{color:var(--ink)}
+label{display:inline-flex;gap:6px;align-items:center;font-size:13px;margin-right:14px}label.off{color:var(--dim)}
+.go{background:var(--amber);color:#1a0f00;border-color:var(--amber);font-weight:700;letter-spacing:.12em}
+#scan{width:100%;font-size:20px;padding:16px;margin-top:20px}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}th{color:var(--dim);font-weight:400}
+.note{color:var(--dim);font-size:12px}#st{min-height:1.4em;font-size:13px;padding:4px 0}#st.err{color:var(--red)}
+#rv{display:none}
 </style></head><body>
-<header><b>Flextight</b><span>strip → share</span></header>
-<div class="bar">
-<select id="strip" aria-label="Strip"></select>
-<input id="newname" aria-label="New strip name"><button id="new">New</button>
-<select id="film" aria-label="Film"><option value="neg">neg</option><option value="slide">slide</option></select>
-<button id="preview" class="go">Preview</button>
-</div>
-<div class="box"><div class="strip" id="sv"></div></div>
-<div class="legend"><span class="zm"><button id="pn" aria-pressed="false" title="the preview as prints (no clicks)" disabled>pos</button> <button id="zo" aria-label="Zoom out">−</button> <button id="zi" aria-label="Zoom in">+</button></span>tap a frame: <i>—</i> · <i>4MP</i> · <i>6MP</i> · <i>ARC</i> archive &nbsp; <span id="plan"></span></div>
-<div class="bar"><select id="em" aria-label="Emulsion"></select><button id="scan" class="go">Scan</button><button id="stop" class="stop" disabled>Stop</button></div>
-<div class="prog"><div id="pb"></div></div>
-<div id="st"></div><canvas id="fz" hidden></canvas>
-<div id="grid"></div>
-<div id="bw"><canvas id="big" width="0" height="0"></canvas></div>
-<div class="bar" id="keys"></div>
-<div class="bar"><button id="dl">Download</button><button id="all">All (zip)</button></div>
-<div id="notes"></div>
-<details><summary>Log</summary><pre id="log"></pre></details>
-<details><summary>Files</summary><ul id="files"></ul></details>
-<script src="print.js" defer></script>
+<header><b>Flextight</b><span id="crumb">quick scan</span><a href="#">new scan</a><a href="#settings">settings</a></header>
+<main id="landing">
+<h2>Scan</h2>
+<div class="row"><button class="card" aria-pressed="true">Quick scan<small>share-ready prints</small></button><button class="card" disabled>Scan to archive<small>currently unavailable</small></button></div>
+<h2>Resolution</h2><div class="row" id="res"></div>
+<h2>Film</h2>
+<div class="row"><select id="holder" aria-label="Holder"></select><select id="em" aria-label="Emulsion"></select></div>
+<h2>Output</h2>
+<div class="row"><label><input type="radio" name="out" checked> Local storage</label><label class="off"><input type="radio" name="out" disabled> Network location · under construction</label><label class="off"><input type="radio" name="out" disabled> Cloud · under construction</label></div>
+<button id="scan" class="go">SCAN</button>
+<div id="st"></div><div id="cont" class="note"></div>
+<h2>Recent scans</h2>
+<table><thead><tr><th>Date / time</th><th>Type</th><th>Holder</th><th>Emulsion</th></tr></thead><tbody id="recent"></tbody></table>
+</main>
+<main id="settings" hidden><h2>Settings &amp; maintenance</h2><p class="note">Under construction.</p></main>
+<main id="rv"></main>
+<script src="review.js" defer></script>
 <script>
 "use strict";
-const $=id=>document.getElementById(id),B=["—","4MP","6MP","ARC"],PX=[0,2450,3000,0];
+const $=id=>document.getElementById(id),PPI=[1220,1730,2450,3000,3460,4000];
 const PR=new Promise(r=>document.addEventListener("DOMContentLoaded",r));
-let cur="",frames=[],task=null,es=null,planT=0,planP=null,putT=0,sel=0,landed=[],kk={},shown=new Map();
 const W=new Worker("ftweb.js"),calls=new Map();let cid=0;
 W.onmessage=e=>{const c=calls.get(e.data.id);calls.delete(e.data.id);e.data.err!=null?c[1](new Error(e.data.err)):c[0](e.data.r)};
 const ft=(op,...a)=>new Promise((y,n)=>{calls.set(++cid,[y,n]);W.postMessage({id:cid,op,a})});
-function st(m,err){$("st").textContent=m;$("st").className=err?"err":""}
+function st(m,err){const s=location.hash.startsWith("#s=")&&$("rst")||$("st");s.textContent=m;s.classList.toggle("err",!!err)}
 async function api(p,o){const r=await fetch(p,o),t=await r.text();let j=null;try{j=JSON.parse(t)}catch(e){}
  if(!r.ok)throw new Error(j&&j.error?j.error:r.status+" "+r.statusText);return j}
 async function get(p,bin){const r=await fetch(p);if(!r.ok)return null;return bin?new Uint8Array(await r.arrayBuffer()):r.text()}
 const form=o=>({method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams(o)});
-const S=f=>"/api/strips/"+cur+"/"+f,F=f=>S("files/"+f);
 const ls=(k,v)=>{try{return v===undefined?localStorage.getItem(k):localStorage.setItem(k,v)}catch(e){return null}};
+let cur="",ems=[],res=[],choice={};
+const S=f=>"/api/strips/"+cur+"/"+f,F=f=>S("files/"+f);
 function today(){const d=new Date(),p=n=>String(n).padStart(2,"0");return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())}
-async function strips(s){const l=await api("/api/strips");l.sort((a,b)=>b.name<a.name?-1:1);
- $("strip").innerHTML="";for(const x of l)$("strip").append(new Option(x.name,x.name));
- let c=0;while(l.some(x=>x.name===today()+"_"+String.fromCharCode(97+c)))c++;
- $("newname").value=today()+"_"+String.fromCharCode(97+c%26);
- if(s)$("strip").value=s;cur=$("strip").value;await load()}
-async function load(){await PR;pvReset();const sv=$("sv");sv.innerHTML="";frames=[];landed=[];sel=0;shown.clear();$("grid").innerHTML="";$("plan").textContent="";$("notes").textContent="";draw(null);
- if(!cur)return;files();const s=cur,pv=await get(F("strip.preview.job"))||await get(S("strip.job"));if(!pv||s!==cur)return;
- try{await ft("job",pv);const j=await get(S("strip.job"));if(j)await ft("planLoad",j)}catch(e){return st(e.message,1)}
- await layout();const p=await get(S("strip.print"));
- try{if(p)await ft("printLoad",p);else await ft("printNew",$("em").value=emFor($("film").value))}catch(e){st("strip.print: "+e.message,1);await ft("printNew",emFor($("film").value))}
- $("em").value=(await ft("printText")).match(/emulsion = (\S+)/)[1];
- const img=new Image();img.alt="strip "+cur;img.src=F("strip.png")+"?t="+Date.now();
- img.onload=()=>{sv.innerHTML="";sv.append(img);const iw=img.naturalWidth,ih=img.naturalHeight;
-  for(const fr of frames){const b=document.createElement("div");b.className="fr";b.setAttribute("role","button");b.tabIndex=0;
-   Object.assign(b.style,{left:fr.x/iw*100+"%",top:fr.y/ih*100+"%",width:fr.w/iw*100+"%",height:fr.h/ih*100+"%"});
-   b.innerHTML='<canvas></canvas><span class="n">'+fr.n+'</span><span class="s"></span><button class="t" title="turn">↻</button>';
-   b.onclick=e=>e.target.closest(".t")?turnFrame(fr):cycle(fr);b.onkeydown=e=>{if(e.key==="Enter"&&e.target===b)cycle(fr)};fr.el=b;sv.append(b);paint(fr)}paintStrip()};
- const l=await api(S("files")).catch(()=>[]);pvOk=["strip.raw","strip.raw.cal"].every(n=>l.some(x=>x.name===n));paintStrip();for(const f of l.map(x=>x.name).filter(n=>/^strip_win\d\d\.raw$/.test(n)).sort())await cut(f,1);await reprint()}
-// frames, buckets and windows from the job (C: ftw_job_json)
-async function layout(){const t=await get(F("strip.raw.txt")),j=await ft("jobJson",t),arc=(ls("arc:"+cur)||"").split(",");
- const o=frames;$("film").value=j.film;frames=j.frames;for(const f of frames)f.el=(o.find(x=>x.n===f.n)||{}).el,f.b=arc.includes(""+f.n)?3:PX.indexOf(f.px)>0?PX.indexOf(f.px):f.px?1:0;
- $("plan").textContent=j.windows?j.windows+" window"+(j.windows>1?"s":""):""}
-function paint(fr){const b=fr.el;if(!b)return;b.className="fr"+(fr.b?" on":"")+(fr.b==2?" big":"")+(fr.b==3?" arc":"")+(fr.done?" done":"")+(fr.low?" low":"");
- b.querySelector(".s").textContent=B[fr.b];b.title="frame "+fr.n+" ("+fr.type+")"}
-function cycle(fr){if(task&&task.state==="running")return;fr.b=(fr.b+1)%4;paint(fr);clearTimeout(planT);planT=setTimeout(()=>planP=plan(),350)}
-const arcs=()=>frames.filter(f=>f.b==3).map(f=>f.n);
-async function plan(){planT=0;ls("arc:"+cur,arcs().join(","));if(!frames.some(f=>PX[f.b]))return $("plan").textContent=arcs().length?"archive only":"",1;
- try{const r=await ft("plan",frames.map(f=>PX[f.b]));await api(S("strip.job"),{method:"PUT",body:r.text});
-  const j=await ft("jobJson",await get(F("strip.raw.txt")));$("plan").textContent=r.windows+" window"+(r.windows>1?"s":"")+(arcs().length?" + archive":"");
-  for(const f of j.frames){const g=frames.find(x=>x.n===f.n);if(g){g.done=f.done;paint(g)}}st("");return 1}catch(e){$("plan").textContent="";st(e.message,1)}}
-async function files(){try{const l=await api(S("files"));$("files").innerHTML="";
- for(const f of l.sort((a,b)=>a.name<b.name?-1:1)){const li=document.createElement("li");
-  li.innerHTML='<a download href="'+F(f.name)+'">'+f.name+'</a> '+(f.size/1048576).toFixed(1)+' MB';$("files").append(li)}}catch(e){}}
-let ems=[];const emFor=film=>(ems.find(e=>e.mode===(film==="slide"?"slide":"negative"))||ems[0]).id;
-function busy(b){for(const id of["preview","scan","new","strip","film"])$(id).disabled=b;$("stop").disabled=!b}
-let run={n:1,i:1};
-function onLine(t){const lg=$("log");lg.textContent+=t+"\n";if(lg.textContent.length>2e4)lg.textContent=lg.textContent.slice(-15e3);lg.scrollTop=1e9;
- const w=t.split(" ");if(w[0]!=="progress"){if(t.startsWith("ftwebd exit"))done(+w[2]);return}
- if(w[1]==="begin"){run={kind:w[2],n:+w[3]||1,i:1};fzReset();st(w[2]+" …")}
- else if(w[1]==="unit"){run.i=+w[3];fzReset();st(run.kind+" "+run.i+"/"+run.n)}
- else if(w[1]==="lines"){fzFrame(0);const[k,n]=w[2].split("/").map(Number);$("pb").style.width=((run.i-1+k/n)/run.n*100).toFixed(1)+"%";st(run.kind+" "+run.i+"/"+run.n+" · line "+k+"/"+n)}
- else if(/^(focus|focused|sharp)$/.test(w[1]))onFocus(w);else if(w[1]==="file"){files();const m=t.match(/[\\/]([^\\/]+)[\\/](strip_win\d\d\.raw)$/);if(m&&m[1]===cur&&task.op==="scan")land(m[2])}
- else if(w[1]==="end"){if(w[2]==="ok")$("pb").style.width="100%";st(run.kind+" "+w[2],w[2]!=="ok")}}
-function watch(t){task=t;busy(t.state==="running");if(es)es.close();$("log").textContent="";
- es=new EventSource("/api/tasks/"+t.id+"/events?since=0");es.onmessage=e=>onLine(e.data);
- const end=()=>{es.close();es=null};es.addEventListener("end",end);es.addEventListener("gone",end)}
-async function done(code){busy(false);if(task)task.state="done";
- if(code!==0&&!/stopped|ok/.test($("st").textContent))st("failed (exit "+code+"); see the log",1);
- await landing;if(task&&task.strip===cur){if(task.op==="preview")await load();else{const j=await get(S("strip.job"));if(j){await ft("planLoad",j);await layout();frames.forEach(paint)}}}}
-async function start(o){try{o.strip=cur;const r=await api("/api/tasks",form(o));$("pb").style.width="0";watch({id:r.id,state:"running",strip:cur,op:o.op})}catch(e){st(e.message,1)}}
-$("strip").onchange=()=>{cur=$("strip").value;load()};
-$("new").onclick=async()=>{try{const r=await api("/api/strips",form({name:$("newname").value}));await strips(r.name)}catch(e){st(e.message,1)}};
-$("preview").onclick=()=>cur?start({op:"preview",film:$("film").value}):st("make a strip first",1);
-$("scan").onclick=async()=>{if(planT){clearTimeout(planT);planP=plan()}const ok=!planP||await planP;planP=null;if(!ok)return;const sh=frames.some(f=>PX[f.b]),a=arcs();if(!sh&&!a.length)return st("no frame chosen",1);
- start(Object.assign({op:"scan",share:sh?1:0},a.length?{arc:a.join(","),film:$("film").value}:{}))};
-$("stop").onclick=async()=>{try{await api("/api/tasks/"+task.id+"/stop",{method:"POST"});st("stopping at the next line …")}catch(e){st(e.message,1)}};
-(async()=>{try{ems=await ft("emulsions");for(const e of ems)$("em").append(new Option(e.name,e.id));const l=await get("/api/focus.txt");if(l)await ft("lens",l).catch(e=>st("focus.txt: "+e.message,1))}catch(e){st("engine: "+e.message,1)}})();
-(async()=>{try{const t=await api("/api/tasks/current");await strips(t&&t.state==="running"?t.strip:"");if(t&&t.state==="running")watch(t)}catch(e){st(e.message,1)}})();
+// the landing page: choices from the engine, remembered per browser
+function pickRes(ppi){choice.ppi=ppi;ls("ppi",""+ppi);for(const b of $("res").children)b.setAttribute("aria-pressed",+b.dataset.ppi===ppi)}
+// the engine's lists and this scanner's focus fit, once
+let booted=null;
+const boot=()=>booted=booted||(async()=>{ems=await ft("emulsions");const l=await get("/api/focus.txt");if(l)await ft("lens",l).catch(e=>st("focus.txt: "+e.message,1))})();
+async function landing(){
+ try{await boot();res=await ft("resolutions",PPI);const hs=await ft("holders");
+  $("em").innerHTML="";for(const e of ems)$("em").append(new Option(e.name,e.id));
+  $("holder").innerHTML="";for(const h of hs)$("holder").append(new Option(h.label,h.name));
+  $("res").innerHTML="";for(const r of res){const b=document.createElement("button");b.className="res";b.dataset.ppi=r.ppi;
+   b.innerHTML="<b>"+r.ppi+"</b><small>ppi · "+r.mp.toFixed(1)+" MP</small><small>Dmax: "+(r.dmax==null?"#N/A":r.dmax.toFixed(2))+"</small>";
+   b.onclick=()=>pickRes(r.ppi);$("res").append(b)}
+  pickRes(+ls("ppi")||1730);if(ls("em"))$("em").value=ls("em");if(ls("holder"))$("holder").value=ls("holder")}catch(e){st("engine: "+e.message,1)}
+ try{const sc=await api("/api/scans"),tb=$("recent");tb.innerHTML="";
+  if(!sc.length)tb.innerHTML='<tr><td colspan="4" class="note">coming soon</td></tr>'}catch(e){}
+ const last=ls("last");$("cont").innerHTML=last?'continue <a href="#s='+encodeURIComponent(last)+'">'+last+"</a>":""}
+$("em").onchange=()=>ls("em",$("em").value);$("holder").onchange=()=>ls("holder",$("holder").value);
+const filmOf=id=>((ems.find(e=>e.id===id)||{}).mode==="slide"?"slide":"neg");
+// SCAN: a new strip with the choices, its preview, the review screen
+$("scan").onclick=async()=>{$("scan").disabled=true;try{
+ const t=await api("/api/tasks/current");if(t&&t.state==="running")throw new Error("the scanner is busy: "+t.op+" "+t.strip);
+ const l=await api("/api/strips");let c=0;while(l.some(x=>x.name===today()+"_"+String.fromCharCode(97+c)))c++;
+ const name=today()+"_"+String.fromCharCode(97+c%26);
+ await api("/api/strips",form({name,type:"quick",ppi:choice.ppi,holder:$("holder").value,emulsion:$("em").value}));
+ cur=name;await api("/api/tasks",form({op:"preview",strip:name,film:filmOf($("em").value)}));location.hash="s="+encodeURIComponent(name)}
+ catch(e){st(e.message,1)}finally{$("scan").disabled=false}};
+// screens by the hash: "" landing, #settings, #s=<strip> its review
+async function route(){await PR;const h=location.hash.slice(1),s=h.startsWith("s=")?decodeURIComponent(h.slice(2)):"";
+ $("landing").hidden=!!h;$("settings").hidden=h!=="settings";$("rv").style.display=s?"block":"none";$("crumb").textContent=s||"quick scan";
+ if(s){cur=s;ls("last",s);try{await boot()}catch(e){st("engine: "+e.message,1)}await review(s)}else if(!h){cur="";await landing()}}
+addEventListener("hashchange",route);
+(async()=>{try{const t=await api("/api/tasks/current");if(t&&t.state==="running"&&!location.hash)location.hash="s="+t.strip}catch(e){}route()})();
 </script></body></html>
