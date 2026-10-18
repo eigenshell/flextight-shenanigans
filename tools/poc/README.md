@@ -17,7 +17,7 @@ learn what the spec got wrong — cheaply.
 ```
 build.bat            REM cl or i686-w64-mingw32-gcc, see header
 
-ftpoc inquiry        identity; "SCSI Loader" means run `upload` first
+ftpoc inquiry        identity; "SCSI Loader": the next command uploads first
 ftpoc poll [n]       ScannerReady polls (00 00 idle, 08 00 motor, 04 00 busy)
 ftpoc win            one SetWindow exchange with the idle template, hexdump
 ftpoc park           rest: FlexColor's shutdown descriptor
@@ -62,9 +62,29 @@ ftpoc crop <ppi> <x> <y> <w> <h> [-b bin] [-n lines] [-h s] [-p ccd,lens]
                        crop 3150 13.0 130.4 7.6 11.4
                      6300 sliver across the frame:
                        crop 6300 4.8 135.65 24 0.9
-ftpoc upload MICROCOD.3XX   loader-mode firmware recovery only: refused
-                     unless INQUIRY says "SCSI Loader"; sends FlexColor's
+ftpoc upload [file]  loader-mode firmware upload only: refused unless
+                     INQUIRY says "SCSI Loader"; sends FlexColor's
                      packets (libft/ft_upload.h). Once per power-up.
+                     file: as --microcode (below). Every other command
+                     but inquiry does this by itself (below).
+--microcode PATH     (any command, any position) the MICROCOD.3XX to
+                     upload; default: beside ftpoc.exe, then the current
+                     directory. Nothing else is ever tried.
+```
+
+After a power-up the scanner answers INQUIRY as its loader (`Imacon
+SCSI Loader L302`). Every command but `inquiry` and `upload` then says
+so on stderr, uploads the microcode first (the same D800 page read, 16
+chunks and trailer as `upload`; `progress begin upload 1` with
+`--progress`), polls until idle, and finds the microcode again by
+INQUIRY (it can answer on another `\\.\ScannerN`: Scanner0 loader,
+Scanner4 microcode), waiting up to 30 s; then the command runs on that
+handle. No file, a failed upload or no microcode after 30 s: a clear
+error, exit 1, the command does not run. The probe prefers the
+microcode: a loader is used only when no `\\.\ScannerN` answers with the
+microcode, so a stale loader device never triggers a second upload.
+
+```
 ftpoc scanstop       0xdb (kHwiScanStop) — device rejects it (CHECK COND.)
 ftpoc busreset       IOCTL_STORAGE_RESET_BUS on the Imacon's HBA port only;
                      does NOT clear the scanner's scan state
@@ -176,6 +196,8 @@ server; the rest of the output stays as it is:
 
 ```
 progress begin window 3        a run of 3 units (preview|window|frame|pass)
+progress begin upload 1        the scanner was in its loader: the microcode
+                               upload first (before the command's run)
 progress unit window 2 5       unit 2 of the run: the job's window 5
 progress lines 812/1890        lines read of that unit's scan
 progress focus 2 frame 4 at -500   focus crop 2 of that unit (before

@@ -46,3 +46,31 @@ int ft_upload_is_loader(const unsigned char *inq, size_t n)
 {
     return n >= 27 && memcmp(inq + 16, "SCSI Loader", 11) == 0;
 }
+
+/* s[0..n) + t into out (FT_UPLOAD_PATH); 0, or -1 if it does not fit */
+static int join(char *out, const char *s, size_t n, const char *t)
+{
+    size_t m = strlen(t);
+    if (n + m >= FT_UPLOAD_PATH)
+        return -1;
+    memcpy(out, s, n);
+    memcpy(out + n, t, m + 1);
+    return 0;
+}
+
+int ft_upload_paths(const char *given, const char *exe,
+                    char out[2][FT_UPLOAD_PATH])
+{
+    size_t i, dir = 0;
+    int k = 0;
+    if (given)
+        return given[0] && join(out[0], "", 0, given) == 0 ? 1 : 0;
+    for (i = 0; exe && exe[i]; i++)
+        if (exe[i] == '\\' || exe[i] == '/')
+            dir = i + 1;            /* up to and with the separator */
+    if (dir && join(out[k], exe, dir, FT_UPLOAD_FILE) == 0)
+        k++;
+    if (join(out[k], "", 0, FT_UPLOAD_FILE) == 0)
+        k++;
+    return k;
+}

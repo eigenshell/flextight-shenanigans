@@ -6,7 +6,11 @@
  * before they are kept.
  *
  *   ftwebd [--port 8080] [--strips strips] [--www www] [--ftpoc ftpoc.exe]
- *          [--archive dir] [--archive-ppi 3150|6300]
+ *          [--archive dir] [--archive-ppi 3150|6300] [--microcode file]
+ *
+ * --microcode is passed on to every ftpoc task (the MICROCOD.3XX ftpoc
+ * uploads when the scanner answers as its loader after a power-up);
+ * without it ftpoc looks beside its exe, then in the current directory.
  *
  * Run it from ftpoc's own directory: ftpoc reads focus.txt from its
  * current directory, and the page's planner gets it from here.
@@ -71,6 +75,7 @@
 static const char *g_strips = "strips", *g_www = "www";
 static ft_lens g_lens;
 static const char *g_archive, *g_archive_ppi = "6300";
+static const char *g_microcode;
 static pthread_mutex_t g_put_mu = PTHREAD_MUTEX_INITIALIZER;
 
 static void sock_close(sock_t s)
@@ -538,7 +543,7 @@ static void usage(void)
     fprintf(stderr, "usage: ftwebd [--port 8080] [--strips strips] "
                     "[--www www] [--ftpoc ftpoc]\n"
                     "              [--archive dir] [--archive-ppi 3150|6300]"
-                    "\n");
+                    " [--microcode file]\n");
 }
 
 static void load_lens(void)
@@ -586,6 +591,8 @@ int main(int argc, char **argv)
             ftpoc = argv[++i];
         else if (strcmp(argv[i], "--archive") == 0)
             g_archive = argv[++i];
+        else if (strcmp(argv[i], "--microcode") == 0)
+            g_microcode = argv[++i];
         else if (strcmp(argv[i], "--archive-ppi") == 0) {
             g_archive_ppi = argv[++i];
             if (strcmp(g_archive_ppi, "3150") && strcmp(g_archive_ppi, "6300")) {
@@ -606,6 +613,16 @@ int main(int argc, char **argv)
         fprintf(stderr, "ftwebd: no ftpoc at %s (--ftpoc)\n", ftpoc);
         return 1;
     }
+    if (g_microcode) {
+        FILE *f = strlen(g_microcode) < 300 ? fopen(g_microcode, "rb")
+                                             : NULL;   /* task.c's args */
+        if (!f) {
+            fprintf(stderr, "ftwebd: no microcode at %s (--microcode)\n",
+                    g_microcode);
+            return 1;
+        }
+        fclose(f);
+    }
     if (make_dir(g_strips)) {
         fprintf(stderr, "ftwebd: cannot create %s\n", g_strips);
         return 1;
@@ -615,6 +632,7 @@ int main(int argc, char **argv)
     cfg.strips = g_strips;
     cfg.archive = g_archive;
     cfg.archive_ppi = g_archive_ppi;
+    cfg.microcode = g_microcode;
     task_init(&cfg);
 
 #ifdef _WIN32

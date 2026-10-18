@@ -51,5 +51,42 @@ int main(void)
     CHECK(ft_upload_is_loader(buf, 36) == 0);
     CHECK(ft_upload_is_loader(buf, 20) == 0);
 
+    /* the microcode file: --microcode alone, else beside the exe, then
+     * the current directory */
+    {
+        static char p[2][FT_UPLOAD_PATH], lng[FT_UPLOAD_PATH + 8];
+        CHECK(strcmp(FT_UPLOAD_FILE, "MICROCOD.3XX") == 0);
+        CHECK(ft_upload_paths("D:\\fw\\m.3xx", "C:\\web\\ftpoc.exe", p) == 1);
+        CHECK(strcmp(p[0], "D:\\fw\\m.3xx") == 0);
+        CHECK(ft_upload_paths("", "C:\\web\\ftpoc.exe", p) == 0);
+        CHECK(ft_upload_paths("C:\\web\\ftpoc.exe", NULL, p) == 1);
+        CHECK(ft_upload_paths(NULL, "c:\\flextight_shenanigans\\web\\ftpoc.exe",
+                              p) == 2);
+        CHECK(strcmp(p[0], "c:\\flextight_shenanigans\\web\\MICROCOD.3XX") == 0);
+        CHECK(strcmp(p[1], "MICROCOD.3XX") == 0);
+        CHECK(ft_upload_paths(NULL, "/opt/ft/bin/ftpoc", p) == 2);
+        CHECK(strcmp(p[0], "/opt/ft/bin/MICROCOD.3XX") == 0);
+        CHECK(ft_upload_paths(NULL, "C:\\a/b\\ftpoc.exe", p) == 2);
+        CHECK(strcmp(p[0], "C:\\a/b\\MICROCOD.3XX") == 0);
+        CHECK(ft_upload_paths(NULL, "ftpoc.exe", p) == 1);
+        CHECK(strcmp(p[0], "MICROCOD.3XX") == 0);
+        CHECK(ft_upload_paths(NULL, NULL, p) == 1);
+        CHECK(strcmp(p[0], "MICROCOD.3XX") == 0);
+        CHECK(ft_upload_paths(NULL, "", p) == 1);
+        /* too long: left out, never another place in its stead */
+        memset(lng, 'a', sizeof lng - 1);
+        lng[sizeof lng - 1] = 0;
+        CHECK(ft_upload_paths(lng, NULL, p) == 0);
+        lng[FT_UPLOAD_PATH - 1] = 0;            /* 519 chars: fits */
+        CHECK(ft_upload_paths(lng, NULL, p) == 1);
+        lng[FT_UPLOAD_PATH - 13] = '\\';        /* dir + 12 = 520: no */
+        CHECK(ft_upload_paths(NULL, lng, p) == 1);
+        CHECK(strcmp(p[0], "MICROCOD.3XX") == 0);
+        lng[FT_UPLOAD_PATH - 13] = 'a';
+        lng[FT_UPLOAD_PATH - 14] = '\\';        /* dir + 12 = 519: fits */
+        CHECK(ft_upload_paths(NULL, lng, p) == 2);
+        CHECK(strlen(p[0]) == FT_UPLOAD_PATH - 1);
+    }
+
     return TEST_DONE();
 }

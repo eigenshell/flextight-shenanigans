@@ -63,14 +63,18 @@ ftweb.js, ftweb.wasm) into one folder:
 cd web
 ftwebd --archive D:\scans       REM --port 8080 --strips strips --www www
                                 REM --ftpoc ftpoc.exe --archive-ppi 6300
+                                REM --microcode ..\poc\MICROCOD.3XX
 ```
 
 Then open `http://<box>:8080/` from a phone or PC on the LAN (Windows
 Firewall: allow TCP 8080 from the local subnet). Start it from a console
 window (Stop sends Ctrl+Break to ftpoc's process group, which needs one),
 from ftpoc's folder: ftpoc reads `focus.txt` there, and the page's
-planner gets it from ftwebd. After a power-up run `ftpoc upload
-MICROCOD.3XX` first.
+planner gets it from ftwebd. After a power-up ftpoc uploads the
+scanner's microcode by itself before the task (the status says so):
+put `MICROCOD.3XX` beside `ftpoc.exe`, or start ftwebd with
+`--microcode PATH` (e.g. `--microcode ..\poc\MICROCOD.3XX`), which it
+passes to every ftpoc task.
 
 Strips live in `strips\<name>\`: `strip.raw` + `strip.png` + `strip.job`
 from the preview, `strip.preview.job` (the preview's own job, crops

@@ -4,7 +4,8 @@
 #include <string.h>
 #include "ft_progress.h"
 
-static const char *KIND[] = { "preview", "window", "frame", "pass" };
+static const char *KIND[] = { "preview", "window", "frame", "pass",
+                              "upload" };
 static const char *STATUS[] = { "ok", "stopped", "failed", "refused" };
 static const char *HOW[] = { "measured", "checked", "carried", "none" };
 
@@ -15,12 +16,12 @@ size_t ft_progress_fmt(const ft_progress *p, char *buf, size_t cap)
         buf[0] = 0;
     switch (p->type) {
     case FT_PG_BEGIN:
-        if ((unsigned)p->kind <= FT_PG_PASS && p->n >= 0)
+        if ((unsigned)p->kind <= FT_PG_UPLOAD && p->n >= 0)
             k = snprintf(buf, cap, "progress begin %s %d\n", KIND[p->kind],
                          p->n);
         break;
     case FT_PG_UNIT:
-        if ((unsigned)p->kind <= FT_PG_PASS && p->n >= 1 && p->label >= 0)
+        if ((unsigned)p->kind <= FT_PG_UPLOAD && p->n >= 1 && p->label >= 0)
             k = snprintf(buf, cap, "progress unit %s %d %d\n", KIND[p->kind],
                          p->n, p->label);
         break;
@@ -163,7 +164,7 @@ int ft_progress_parse(const char *line, size_t n, ft_progress *p)
     switch (p->type) {
     case FT_PG_BEGIN:
     case FT_PG_UNIT:
-        if ((t = word(&s, end, KIND, 4)) < 0)
+        if ((t = word(&s, end, KIND, 5)) < 0)
             return -1;
         p->kind = (ft_pg_kind)t;
         a = digits(&s, end, ' ');

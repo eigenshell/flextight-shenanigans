@@ -216,6 +216,39 @@ def test_scan_chain_share_then_archive(arc):
     assert argv_log(arc)[-2][5:7] == ["--film", "slide"]
 
 
+def test_microcode_passed_to_every_step(binary, tmp_path):
+    mc = tmp_path / "fw" / "MICROCOD.3XX"
+    mc.parent.mkdir()
+    mc.write_bytes(b"\0" * 16)
+    s = Server(binary, tmp_path, 0.001,
+               args=["--archive", tmp_path / "nas", "--microcode", mc])
+    try:
+        previewed(s)
+        code, t = s.req("POST", "/api/tasks", {"op": "scan", "strip": "a",
+                                               "arc": "4", "film": "neg"})
+        assert code == 202 and s.wait(t["id"])["exit"] == 0
+        log = argv_log(s)
+        assert [a[0] for a in log] == ["frames", "scan", "frames", "scan"]
+        for a in log:
+            assert a[-2:] == ["--microcode", str(mc)]
+    finally:
+        s.close()
+
+
+def test_microcode_must_exist(binary, tmp_path):
+    r = subprocess.run([str(binary), "--port", str(free_port()), "--ftpoc",
+                        str(FAKE), "--microcode", str(tmp_path / "none")],
+                       cwd=tmp_path, capture_output=True, text=True,
+                       timeout=10)
+    assert r.returncode == 1
+    assert "no microcode at" in r.stderr
+
+
+def test_no_microcode_option_by_default(srv):
+    previewed(srv)
+    assert "--microcode" not in argv_log(srv)[0]
+
+
 @pytest.mark.parametrize("body, msg", [
     ({"arc": "4"}, "film must be neg or slide"),
     ({"arc": "4; rm", "film": "neg"}, "arc: frame numbers, e.g. 1,3-4"),

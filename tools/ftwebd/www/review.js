@@ -262,7 +262,7 @@ function watch(t){task=t;busy(t.state==="running");if(es)es.close();$("log").tex
  const end=()=>{es.close();es=null};es.addEventListener("end",end);es.addEventListener("gone",end)}
 function onLine(t){const lg=$("log");lg.textContent+=t+"\n";if(lg.textContent.length>2e4)lg.textContent=lg.textContent.slice(-15e3);
  const w=t.split(" ");if(w[0]!=="progress"){if(t.startsWith("ftwebd exit"))done(+w[2]);return}
- if(w[1]==="begin"){run={kind:w[2],n:+w[3]||1,i:1};fzReset();st(w[2]+" …")}
+ if(w[1]==="begin"){run={kind:w[2],n:+w[3]||1,i:1};fzReset();st(w[2]==="upload"?"the scanner was powered up: uploading its microcode first …":w[2]+" …")}
  else if(w[1]==="unit"){run.i=+w[3];fzReset();if(run.kind==="window"){const g=+w[4];scanning=new Set(Object.keys(groups).filter(n=>groups[n]===g).map(Number));for(const f of frames)badge(f);jobs()}st(run.kind+" "+run.i+"/"+run.n)}
  else if(w[1]==="lines"){const[k,n]=w[2].split("/").map(Number);$("pb").style.width=((run.i-1+k/n)/run.n*100).toFixed(1)+"%";st(run.kind+" "+run.i+"/"+run.n+" · line "+k+"/"+n);
   if(task&&task.op==="preview")liveGrow(n)}
@@ -273,7 +273,7 @@ let landQ=Promise.resolve();
 const land=n=>landQ=landQ.then(async()=>{const before=landed.slice();await cut(n);const nw=landed.filter(x=>!before.includes(x)||queued.has(x));
  for(const x of nw){queued.delete(x);scanning.delete(x)}await reprint();thumbs(nw);jobs();if(nw.includes(sel))pick(sel)}).catch(e=>st(e.message,1));
 async function done(code){busy(false);const op=task&&task.op;if(task)task.state="done";scanning.clear();queued.clear();
- if(code!==0&&/SCSI Loader/.test($("log").textContent))st("the scanner is in its loader (after a power-up): upload its microcode first (ftpoc upload MICROCOD.3XX), then try again",1);
+ if(code!==0&&/ftpoc: (no microcode file|the microcode upload failed|the microcode did not answer)/.test($("log").textContent))st("the scanner is in its loader (after a power-up) and its microcode upload failed: see the log (MICROCOD.3XX beside ftpoc.exe, or ftwebd --microcode)",1);
  else if(code!==0&&!/stopped|ok/.test($("rst").textContent))st("failed (exit "+code+"); see the log",1);
  await landQ;if(!task||task.strip!==cur)return;if(op==="preview")await load();else{for(const f of frames)badge(f);jobs();maybeStart()}}
 

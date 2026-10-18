@@ -175,12 +175,17 @@ static void *reader(void *arg)
     return NULL;
 }
 
-/* under T.mu: step i's argv from a NULL-terminated list */
+/* under T.mu: step i's argv from a NULL-terminated list, + --microcode
+ * when ftwebd has one */
 static void set_step(int i, const char *const *a)
 {
     int k;
     for (k = 0; a[k] && k < ARGS; k++)
         snprintf(T.arg[i][k], sizeof T.arg[i][k], "%s", a[k]);
+    if (T.cfg.microcode && k + 2 <= ARGS) {
+        snprintf(T.arg[i][k++], sizeof T.arg[i][0], "--microcode");
+        snprintf(T.arg[i][k++], sizeof T.arg[i][0], "%s", T.cfg.microcode);
+    }
     T.narg[i] = k;
 }
 
