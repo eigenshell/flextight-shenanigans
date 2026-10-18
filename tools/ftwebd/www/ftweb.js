@@ -101,6 +101,16 @@ const ops = {
     }
   },
   jobJson: t => withPut([t || null], p => (ok(X.ftw_job_json(w, p, t ? enc.encode(t).length : 0)), JSON.parse(text()))),
+  // a crop: box [x, y, w, h] in the preview's pixels -> the base job's text
+  frameBox(f, box, meta) {
+    const p = X.ftw_alloc(32);
+    try {
+      new Float64Array(M.buffer, p, 4).set(box);
+      return withPut([meta || null], pm => (ok(X.ftw_frame_box(w, f, p, pm, meta ? enc.encode(meta).length : 0)), text()));
+    } finally {
+      X.ftw_release(p);
+    }
+  },
   printLoad: t => load(X.ftw_print_load)(t),
   printNew: id => withPut([id], p => (ok(X.ftw_print_new(w, p)), null)),
   printEmulsion: id => withPut([id], p => ok(X.ftw_print_emulsion(w, p))),

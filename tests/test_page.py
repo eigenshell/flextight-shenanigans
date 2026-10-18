@@ -101,6 +101,36 @@ def test_worker_job_from_the_box(built, tmp_path):
     assert "bogus" in rep[4]["err"]
 
 
+def test_worker_frame_box(built, tmp_path):
+    """a crop: the frame's box in the preview's pixels (as jobJson gives
+    it) moves the base job's window; the base job's text comes back for
+    strip.preview.job; plans start from the new box; a box outside the
+    holder and an unknown frame are refused"""
+    pv = (FIX / "preview.job").read_text()
+    meta = "px=666\nx=2\nbin=12\n"
+    rep = worker(tmp_path, [
+        {"op": "job", "a": [pv]},
+        {"op": "jobJson", "a": [meta]},
+    ])
+    f1 = rep[1]["r"]["frames"][0]
+    box = [f1["x"] + 10, f1["y"] + 5, f1["w"] - 20, f1["h"] - 10]
+    rep = worker(tmp_path, [
+        {"op": "job", "a": [pv]},
+        {"op": "frameBox", "a": [1, box, meta]},
+        {"op": "jobJson", "a": [meta]},
+        {"op": "plan", "a": [[2452, 0, 0, 0, 0, 0]]},
+        {"op": "frameBox", "a": [1, [box[0], -500, box[2], box[3]], meta]},
+        {"op": "frameBox", "a": [42, box, meta]},
+    ])
+    assert "[frame 1]" in rep[1]["r"] and "window = " in rep[1]["r"]
+    assert "window = 4.000 1.600" not in rep[1]["r"]
+    g = rep[2]["r"]["frames"][0]
+    assert [round(g[k], 1) for k in "xywh"] == [round(v, 1) for v in box]
+    assert rep[3]["r"]["windows"] == 1
+    assert "window outside the holder" in rep[4]["err"]
+    assert rep[5] == {"err": "frame 42 is not in the job"}
+
+
 def test_worker_lens(built, tmp_path):
     """the box's focus.txt reaches the planner, checked by C"""
     rep = worker(tmp_path, [

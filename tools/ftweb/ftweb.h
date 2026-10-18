@@ -60,6 +60,13 @@ int ftw_plan_load(ftw *w, const char *text, size_t n);
 int ftw_plan(ftw *w, const double *px, int n);
 int ftw_job_text(ftw *w);
 int ftw_job_json(ftw *w, const char *preview_txt, size_t n);
+/* a crop: frame's box in the preview image's pixels (as ftw_job_json
+ * gives it: x along, y across, w, h; preview_txt as there) becomes the
+ * base job's window, checked as the box checks jobs (inside the holder).
+ * -> out: the base job's text (strip.preview.job). The plan is not
+ * rerun: call ftw_plan. */
+int ftw_frame_box(ftw *w, int frame, const double *box,
+                  const char *preview_txt, size_t n);
 
 /* strip.print: load (or start one: ftw_print_new), change the emulsion
  * (frames whose clicks it does not take go back to auto; their count),

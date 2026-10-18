@@ -389,6 +389,42 @@ int ftw_job_json(ftw *w, const char *preview_txt, size_t n)
     return rc ? rc : outf(w, "]}");
 }
 
+int ftw_frame_box(ftw *w, int frame, const double *box,
+                  const char *preview_txt, size_t n)
+{
+    static ft_job j;
+    long x = preview_x(preview_txt, n);
+    ft_axes ax;
+    ft_err e;
+    size_t len;
+    int i;
+    if (!w->has_job)
+        return fail(w, "no strip.job");
+    for (i = 0; i < w->job.nframes && w->job.f[i].index != frame; i++)
+        ;
+    if (i == w->job.nframes) {
+        snprintf(w->err, sizeof w->err, "frame %d is not in the job", frame);
+        return -1;
+    }
+    ft_preview_axes(ft_preview_find("standard"),
+                    x >= 0 ? x : FT_PREVIEW_X_OUT, &ax);
+    j = w->job;
+    j.f[i].y0 = ax.y_mm0 + box[0] * ax.y_mm_per_line;
+    j.f[i].x0 = ax.x_mm0 + box[1] * ax.x_mm_per_px;
+    j.f[i].len = box[2] * ax.y_mm_per_line;
+    j.f[i].width = box[3] * ax.x_mm_per_px;
+    if (ft_job_validate(&j, &w->lens, &e))
+        return fail_e(w, &e);
+    w->job = j;
+    len = ft_job_write_buf(&j, NULL, 0);
+    out_reset(w);
+    if (out_room(w, len))
+        return fail(w, "out of memory");
+    ft_job_write_buf(&j, (char *)w->out, len + 1);
+    w->nout = len;
+    return 0;
+}
+
 int ftw_plan(ftw *w, const double *px, int n)
 {
     static ft_job j;
