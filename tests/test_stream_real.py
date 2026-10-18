@@ -81,3 +81,26 @@ def test_stream_finds_the_box_frames(strip):
     for g in got:
         assert g[6] != "end", out
         assert int(g[6]) * YM <= g[2] - PAD + 1.0, (g, out)
+
+
+@pytest.mark.skipif(not STRIPS or shutil.which("make") is None,
+                    reason="no real previews in FT_STREAM_DATA "
+                           "(notes/data/stream)")
+@pytest.mark.parametrize("strip", STRIPS, ids=[p.name for p in STRIPS])
+def test_engine_streams_the_same_frames(strip):
+    """the page's engine (ftweb_cli --stream: raw lines in random chunks,
+    calibrated line by line) finds stream_dump's frames to the 0.001 mm"""
+    r = subprocess.run(["make", "-s", "-C", str(ROOT / "tools" / "ftweb"),
+                        "ftweb_cli"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    want, _ = stream(strip)
+    r = subprocess.run([str(ROOT / "tools" / "ftweb" / "ftweb_cli"),
+                        "--stream", str(strip / "strip"), "--chunk", "0"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    got = [tuple(map(float, w)) for w in re.findall(
+        r"window = (\S+) (\S+) (\S+) (\S+)", r.stdout)]
+    assert len(got) == len(want)
+    for (y0, x0, ln, wd), w in zip(got, want):
+        assert (y0, x0) == (w[1], w[3])
+        assert abs(y0 + ln - w[2]) < 0.0015 and abs(x0 + wd - w[4]) < 0.0015

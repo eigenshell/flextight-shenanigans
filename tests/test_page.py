@@ -404,6 +404,71 @@ def test_worker_preview_print(built, tmp_path):
     assert rep[9]["r"] == 666
 
 
+def test_worker_stream(built, tmp_path):
+    """the streamed preview through the worker: strip.raw.cal first, then
+    the raw in whole-line chunks as the live bar reads them: each frame as
+    its gap shows (the base job grows, its preview prints), the strip's
+    end; a crop cuts the frame again; the page's job puts its windows
+    back; plans start from the stream's frames"""
+    pytest.importorskip("numpy")
+    pv = (FIX / "preview.job").read_text()
+    meta = "px=666\nx=2\nbin=12\n"
+    boxes = worker(tmp_path, [{"op": "job", "a": [pv]},
+                              {"op": "jobJson", "a": [meta]}])[1]["r"]["frames"]
+    raw, cal, txt = preview_files(tmp_path, boxes)
+    data, row = raw.read_bytes(), 666 * 6
+    cuts = [0, 1000 * row, 2500 * row, len(data)]
+    for i in range(3):
+        (tmp_path / ("c%d" % i)).write_bytes(data[cuts[i]:cuts[i + 1]])
+    (tmp_path / "odd").write_bytes(data[:row + 3])
+    f = lambda n: {"file": str(tmp_path / n)}
+    moved = pv.replace("window = 80.000 1.600 36.000 24.400",
+                       "window = 81.000 2.000 34.000 23.000")
+    rep = worker(tmp_path, [
+        {"op": "printNew", "a": ["generic-neg"]},
+        {"op": "streamFeed", "a": [f("c0")]},
+        {"op": "streamBegin", "a": [None, meta, None, False]},
+        {"op": "streamBegin", "a": [{"file": str(cal)}, meta, None, False]},
+        {"op": "streamFeed", "a": [f("c0")]},                       # 4
+        {"op": "jobJson", "a": [meta]},
+        {"op": "previewPrint", "a": [1, 200]},
+        {"op": "streamFeed", "a": [f("odd")]},
+        {"op": "streamFeed", "a": [f("c1")]},                       # 8
+        {"op": "streamFeed", "a": [f("c2")]},
+        {"op": "streamEnd"},
+        {"op": "jobJson", "a": [meta]},                             # 11
+        {"op": "previewPrint", "a": [2, 2000]},
+        {"op": "frameBox", "a": [2, [boxes[1]["x"] + 40, boxes[1]["y"] + 10,
+                                     boxes[1]["w"] - 80, boxes[1]["h"] - 20],
+                                 meta]},
+        {"op": "previewPrint", "a": [2, 2000]},                     # 14
+        {"op": "streamWindows", "a": [moved]},
+        {"op": "jobJson", "a": [meta]},
+        {"op": "plan", "a": [[2452, 2452, 2452, 0, 0, 0]]},         # 17
+    ])
+    assert rep[1] == {"err": "stream: not begun"}
+    assert rep[2] == {"err": "stream: no calibration yet"}
+    one = rep[4]["r"]
+    assert [x["n"] for x in one["frames"]] == [1] and not one["grid"]
+    assert [x["n"] for x in rep[5]["r"]["frames"]] == [1]
+    assert rep[6]["r"]["w"] == 200 and rep[6]["r"]["h"] < 200
+    assert rep[7] == {"err": "stream: not whole lines"}
+    got = one["frames"] + rep[8]["r"]["frames"] + rep[9]["r"]["frames"] + \
+        rep[10]["r"]["frames"]
+    fr = rep[11]["r"]["frames"]
+    assert got == fr
+    assert [x["type"] for x in fr] == ["full"] * 5 + ["half"]
+    assert rep[10]["r"]["frames"] == [] and rep[10]["r"]["lines"] == 4795
+    for g, b in zip(fr, boxes):               # the box: padded 0.3 mm
+        assert abs(g["x"] - (b["x"] - 6.2)) < 4 and abs(g["y"] - b["y"]) < 8
+    a, b = rep[12]["r"], rep[14]["r"]
+    assert b["w"] < a["w"] - 70 and b["h"] < a["h"] - 15   # cut again
+    assert rep[15]["r"] == 6                  # every frame's window moved
+    f3 = rep[16]["r"]["frames"][2]
+    assert abs(f3["w"] - 34 / (25.4 / 525)) < 0.2
+    assert rep[17]["r"]["windows"] >= 1
+
+
 class Proxy:
     """a TCP pipe in front of ftwebd (one request per connection, as
     ftwebd answers), the box's slow Wi-Fi breaking: rule(head) -> None

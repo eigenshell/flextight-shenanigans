@@ -15,6 +15,13 @@
  *   ftweb_cli [--lens focus.txt] --dof95 scale bin
  *
  * ftw_dof95 on that lens (default: libft's), printed as %.6f.
+ *
+ *   ftweb_cli --stream <base> [--chunk N] [--slide]
+ *
+ * The streamed preview: <base>.raw.cal, .raw.txt (.raw.faul if there),
+ * then <base>.raw fed N lines a call (0: 1..400 lines, from a fixed
+ * seed), as the live bar reads it; one line per call that sealed frames
+ * ("feed <lines in>: <json>"), "end: <json>", then the base job's text.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,17 +70,84 @@ static int save(const char *path, const void *b, size_t n)
     return bad;
 }
 
+static int stream(ftw *w, const char *base, int chunk, int slide)
+{
+    char path[1024];
+    size_t nr, nc, nm, nf = 0, at = 0, row;
+    unsigned char *raw;
+    void *cal, *meta, *faul;
+    unsigned seed = 1;
+    int rc = 1, k;
+    snprintf(path, sizeof path, "%s.raw", base);
+    raw = load(path, &nr);
+    snprintf(path, sizeof path, "%s.raw.cal", base);
+    cal = load(path, &nc);
+    snprintf(path, sizeof path, "%s.raw.txt", base);
+    meta = load(path, &nm);
+    snprintf(path, sizeof path, "%s.raw.faul", base);
+    faul = load(path, &nf);
+    if (!raw || !cal || !meta) {
+        fprintf(stderr, "ftweb_cli: %s: files missing\n", base);
+        goto out;
+    }
+    if (ftw_stream_begin(w, cal, nc, faul, nf, meta, nm, slide)) {
+        fprintf(stderr, "ftweb_cli: %s\n", ftw_error(w));
+        goto out;
+    }
+    row = (size_t)ftw_preview_px() * 6;
+    while (at + row <= nr) {
+        size_t n = (size_t)chunk;
+        if (!n) {
+            seed = seed * 1103515245u + 12345u;
+            n = 1 + (seed >> 16) % 400;
+        }
+        n *= row;
+        if (at + n > nr)
+            n = (nr - at) / row * row;
+        k = ftw_stream_feed(w, (const unsigned short *)(raw + at), n);
+        if (k < 0) {
+            fprintf(stderr, "ftweb_cli: %s\n", ftw_error(w));
+            goto out;
+        }
+        at += n;
+        if (k > 0)
+            printf("feed %lu: %.*s\n", (unsigned long)(at / row),
+                   (int)ftw_out_len(w), (const char *)ftw_out(w));
+    }
+    if (ftw_stream_end(w) < 0) {
+        fprintf(stderr, "ftweb_cli: %s\n", ftw_error(w));
+        goto out;
+    }
+    printf("end: %.*s\n", (int)ftw_out_len(w), (const char *)ftw_out(w));
+    if (ftw_job_text(w)) {
+        fprintf(stderr, "ftweb_cli: %s\n", ftw_error(w));
+        goto out;
+    }
+    printf("%.*s", (int)ftw_out_len(w), (const char *)ftw_out(w));
+    rc = 0;
+out:
+    free(raw);
+    free(cal);
+    free(meta);
+    free(faul);
+    return rc;
+}
+
 static void usage(void)
 {
     fprintf(stderr, "usage: ftweb_cli --print strip.print [--job strip.job]"
                     " -o outdir [--display N px] window.raw...\n"
                     "       ftweb_cli [--lens focus.txt] --dof95 scale"
-                    " bin\n");
+                    " bin\n"
+                    "       ftweb_cli --stream <base> [--chunk N] [--slide]"
+                    "\n");
 }
 
 int main(int argc, char **argv)
 {
     const char *print = NULL, *job = NULL, *outdir = NULL, *lens = NULL;
+    const char *strm = NULL;
+    int chunk = 0, slide = 0;
     double dof_scale = 0;
     int dof_bin = 0, dof = 0;
     const char *wins[64];
@@ -95,6 +169,12 @@ int main(int argc, char **argv)
             dof_scale = atof(argv[++i]);
             dof_bin = atoi(argv[++i]);
         }
+        else if (strcmp(argv[i], "--stream") == 0 && i + 1 < argc)
+            strm = argv[++i];
+        else if (strcmp(argv[i], "--chunk") == 0 && i + 1 < argc)
+            chunk = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--slide") == 0)
+            slide = 1;
         else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
             outdir = argv[++i];
         else if (strcmp(argv[i], "--display") == 0 && i + 2 < argc) {
@@ -117,6 +197,10 @@ int main(int argc, char **argv)
             goto out;
         }
         free(t);
+    }
+    if (strm) {
+        rc = stream(w, strm, chunk < 0 ? 0 : chunk, slide);
+        goto out;
     }
     if (dof) {
         printf("%.6f\n", ftw_dof95(w, dof_scale, dof_bin));
