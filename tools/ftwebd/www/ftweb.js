@@ -157,6 +157,13 @@ const ops = {
       X.ftw_release(p);
     }
   },
+  // raw preview lines (bytes, whole lines) -> {w, h, rgba} for the live bar
+  liveRows(raw, px, neg, first) {
+    return withPut([raw], p => {
+      const h = ok(X.ftw_live_rows(w, p, raw.length >> 1, px, neg ? 1 : 0, first ? 1 : 0));
+      return { w: px, h, rgba: out() };
+    });
+  },
   jpeg: f => (ok(X.ftw_jpeg(w, f)), { jpg: out(), text: cstr(X.ftw_text(w)) }),
   zip: base => withPut([base], p => (ok(X.ftw_zip(w, p)), out())),
 };

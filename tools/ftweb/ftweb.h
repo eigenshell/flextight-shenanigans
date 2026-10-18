@@ -122,6 +122,13 @@ int ftw_preview_load(ftw *w, const unsigned short *raw, size_t raw_n,
                      const char *faul, size_t faul_n, const char *meta,
                      size_t meta_n);
 int ftw_preview_display(ftw *w, int frame, int long_edge, int *pw, int *ph);
+/* the live bar while the preview scans: whole raw lines (px x 3 samples
+ * each, as strip.raw holds them) -> out: RGBA rows, one per line; the
+ * line count. first: these lines start a preview, their brightest sample
+ * per channel is its white until the next first. neg: inverted. No
+ * calibration: the colour is only roughly right. */
+int ftw_live_rows(ftw *w, const unsigned short *raw, size_t n, int px,
+                  int neg, int first);
 /* every landed frame's JPEG and text, <base>_frameNN.jpg(.txt), in a
  * store-only zip -> out */
 int ftw_zip(ftw *w, const char *base);

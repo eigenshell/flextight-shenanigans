@@ -2,6 +2,7 @@
 /* ftweb.h. Browser tier: heap and snprintf, no files. The steps follow
  * tools/ftdev (cut: share.c ftdev_cut; print: print.c ftdev_print) call
  * for call, with the files replaced by what they would hold. */
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,6 +65,7 @@ struct ftw {
     int pv_measured;
     ft_print_roll pv_roll;
     ft_print_frame pv_pfr[FT_MAX_FRAMES];
+    double live_white[3];       /* ftw_live_rows: the preview's white */
     int disp_frame;             /* the cached screen copy's frame, 0 none */
     int disp_edge;              /* and the long edge it was asked at */
     ft_image disp;
@@ -1112,6 +1114,40 @@ static void zip_name(const ftw *w, const char *base, int frame, char *name,
         snprintf(name, cap, "%s.jpg", nm);
     else
         snprintf(name, cap, "%.120s_frame%02d.jpg", base, frame);
+}
+
+int ftw_live_rows(ftw *w, const unsigned short *raw, size_t n, int px,
+                  int neg, int first)
+{
+    size_t i, lines = px > 0 ? n / ((size_t)px * 3) : 0;
+    unsigned char *o;
+    if (px <= 0 || n % ((size_t)px * 3) || !lines) {
+        snprintf(w->err, sizeof w->err, "live: not whole lines of %d px",
+                 px);
+        return -1;
+    }
+    if (first) {
+        w->live_white[0] = w->live_white[1] = w->live_white[2] = 1;
+        for (i = 0; i < n; i++)
+            if (raw[i] > w->live_white[i % 3])
+                w->live_white[i % 3] = raw[i];
+    } else if (!(w->live_white[0] > 0)) {
+        return fail(w, "live: no first lines yet");
+    }
+    out_reset(w);
+    if (out_room(w, lines * (size_t)px * 4))
+        return fail(w, "out of memory");
+    o = w->out;
+    for (i = 0; i < n; i++) {
+        double t = raw[i] / w->live_white[i % 3], v;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        v = pow(t, 1 / 2.2);
+        *o++ = (unsigned char)((neg ? 1 - v : v) * 255 + 0.5);
+        if (i % 3 == 2)
+            *o++ = 255;
+    }
+    w->nout = lines * (size_t)px * 4;
+    return (int)lines;
 }
 
 int ftw_zip(ftw *w, const char *base)

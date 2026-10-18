@@ -131,6 +131,42 @@ def test_worker_frame_box(built, tmp_path):
     assert rep[5] == {"err": "frame 42 is not in the job"}
 
 
+def test_worker_live_rows(built, tmp_path):
+    """the live bar: raw preview lines as they arrive -> RGBA rows; the
+    first chunk's brightest sample per channel is the white for the whole
+    preview (rows painted earlier never change), negatives inverted,
+    gamma 1/2.2; chunks of whole lines only"""
+    import numpy as np
+    px = 4
+
+    first = np.zeros((2, px, 3), "<u2")
+    first[0] = (14000, 12000, 10000)           # open light, per channel
+    first[1] = (7000, 6000, 5000)              # half of each white
+    later = np.full((1, px, 3), 0, "<u2")
+    later[0] = (3500, 3000, 2500)              # a quarter
+    for n, a in (("a", first), ("b", later)):
+        (tmp_path / n).write_bytes(a.tobytes())
+    rep = worker(tmp_path, [
+        {"op": "liveRows", "a": [{"file": str(tmp_path / "a")}, px, 1, 1],
+         "out": str(tmp_path / "a.rgba")},
+        {"op": "liveRows", "a": [{"file": str(tmp_path / "b")}, px, 1, 0],
+         "out": str(tmp_path / "b.rgba")},
+        {"op": "liveRows", "a": [{"file": str(tmp_path / "b")}, px, 0, 0],
+         "out": str(tmp_path / "c.rgba")},
+        {"op": "liveRows", "a": [{"file": str(tmp_path / "b")}, 5, 1, 0]},
+    ])
+    a = np.frombuffer((tmp_path / "a.rgba").read_bytes(), "u1")
+    assert rep[0]["r"]["h"] == 2 and rep[0]["r"]["w"] == px
+    a = a.reshape(2, px, 4)
+    assert a[0, 0].tolist() == [0, 0, 0, 255]
+    assert a[1, 0].tolist() == [69, 69, 69, 255]
+    b = np.frombuffer((tmp_path / "b.rgba").read_bytes(), "u1")
+    assert b.reshape(px, 4)[0].tolist() == [119, 119, 119, 255]
+    c = np.frombuffer((tmp_path / "c.rgba").read_bytes(), "u1")
+    assert c.reshape(px, 4)[0].tolist() == [136, 136, 136, 255]
+    assert rep[3] == {"err": "live: not whole lines of 5 px"}
+
+
 def test_worker_lens(built, tmp_path):
     """the box's focus.txt reaches the planner, checked by C"""
     rep = worker(tmp_path, [
