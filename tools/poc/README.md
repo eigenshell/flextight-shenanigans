@@ -111,13 +111,19 @@ excluded, orange = low confidence). Edit `strip.job` — `include`,
 across and ~232 mm along); if the job would still be refused, `frames`
 warns per frame and writes it anyway.
 
-`--preview` picks the preview (`scan preview`, `scan preview1000`,
-`scan preview1500` take it alone). Previews are for framing: all three
-use the fast, high-magnification optics.
+`--preview` picks the preview (`scan preview1000`, `scan preview1500`
+take it alone). Previews are for framing: all three use the fast,
+high-magnification optics, focused on the curve (offset 0). The
+standard one is FlexColor's captured 525 ppi descriptor with only its
+CCD/lens moved from FlexColor's 254935 / 1004246 (~10000 CCD steps
+short of the peak, soft) to the curve's pair at 6300 (built-in curve:
+259254 / 1005789); `scan preview` stays the byte-exact capture (`-p`
+sets the pair). The magnification is the same within the model
+(~0.06 %), so the preview's geometry is unchanged.
 
 | mode | ppi | optics / bin | time (strip) |
 |---|---|---|---|
-| standard | 525 | 6300 / 12 (FlexColor's) | ~40 s |
+| standard | 525 | 6300 / 12 (FlexColor's window) | ~40 s |
 | 1000 | 1000 | 6000 / 6 | ~2.7 min |
 | 1500 | 1500 | 6000 / 4 | ~5.7 min |
 
@@ -374,8 +380,8 @@ For files to keep and process later, not to edit on the box:
   reference) or `--bw rgb` (three channels, e.g. chromogenic films).
 - 8-bit outputs do not exist here: make them in post.
 
-`frames --detail` previews at the scan's **own optics** (6300:
-FlexColor's standard preview; 3150: 525 ppi at the 3150 optics, bin 6),
+`frames --detail` previews at the scan's **own optics** (6300: the
+standard preview; 3150: 525 ppi at the 3150 optics, bin 6),
 so the preview's light level and Dmax are the scan's. It then brackets
 focus on every selected frame at bin 1 (~1 min each; the film is not
 flat along a strip, ~1900 tandem steps measured) and groups the frames

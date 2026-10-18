@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 #include "ft_focus.h"
 #include "ft_geom.h"
 #include "ft_plan.h"
@@ -98,6 +99,52 @@ int main(void)
         CHECK_NEAR(out[1], 105.5, 1e-6);
         CHECK_NEAR(out[(0 * 2 + 1) * 3], 7.5, 1e-6);   /* (2,3,12,13) */
         CHECK_NEAR(out[(1 * 2 + 1) * 3 + 2], 227.5, 1e-6);
+    }
+
+    /* the standard preview's descriptor: ftpoc's SCAN_WIN (session 5 seq
+     * 73, FlexColor's CCD/lens 254935 / 1004246 @56/@60) with only the
+     * focus pair moved to the built-in curve at 6300: 259254 / 1005789 */
+    {
+        static const unsigned char SCAN_WIN[] = {
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x4c,0x00,0x00,0x00,0x50,
+            0x1b,0xd0,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x02,0x9a,0x00,0x00,0x12,0xbb,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x0c,0x00,0xe6,0x00,0x01,0x00,0x03,0xe3,0xd7,
+            0x00,0x0f,0x52,0xd6,0x00,0x00,0x5f,0xb4,0x00,0x00,0x00,0x02,
+            0x00,0x00,0x1e,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0xb4,
+        };
+        static const unsigned char FOCUS[8] = {
+            0x00,0x03,0xf4,0xb6, 0x00,0x0f,0x58,0xdd,
+        };
+        unsigned char d[FT_DESC_LEN];
+        long cc = -1, op = -1, rc, ro;
+        int i, same = 1;
+        ft_lens bad = ft_lens_default;
+
+        CHECK(sizeof SCAN_WIN == FT_DESC_LEN);
+        CHECK(FT_DESC_CCD == 56 && FT_DESC_OPTIC == 60);
+        memset(d, 0xa5, sizeof d);
+        CHECK(ft_preview_std_desc(SCAN_WIN, &ft_lens_default, d, &cc,
+                                  &op) == 0);
+        CHECK(cc == 259254 && op == 1005789);
+        /* the same function the crops and synthesized previews use */
+        CHECK(ft_optics_for(&ft_lens_default, 6300, &rc, &ro) == 0);
+        CHECK(cc == rc && op == ro);
+        CHECK(ft_lens_correction(&ft_lens_default, 6300) == 0);
+        CHECK(ft_positions_ok(cc, op));
+        CHECK(memcmp(d + 56, FOCUS, 8) == 0);
+        for (i = 0; i < FT_DESC_LEN; i++)
+            if ((i < 56 || i >= 64) && d[i] != SCAN_WIN[i])
+                same = 0;
+        CHECK(same);
+        /* FlexColor's pair is gone */
+        CHECK(d[58] != SCAN_WIN[58] && d[62] != SCAN_WIN[62]);
+        /* an unusable curve: refused, out untouched */
+        bad.p = 0;
+        memset(d, 0xa5, sizeof d);
+        CHECK(ft_preview_std_desc(SCAN_WIN, &bad, d, &cc, &op) == -1);
+        CHECK(d[0] == 0xa5 && d[83] == 0xa5);
     }
 
     return TEST_DONE();

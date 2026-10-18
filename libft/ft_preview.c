@@ -58,6 +58,29 @@ void ft_preview_axes(const ft_preview *m, long x_out, ft_axes *ax)
         ax->x_mm0;
 }
 
+static void put_be32(unsigned char *d, int off, long v)
+{
+    d[off] = (unsigned char)(v >> 24);
+    d[off + 1] = (unsigned char)(v >> 16);
+    d[off + 2] = (unsigned char)(v >> 8);
+    d[off + 3] = (unsigned char)v;
+}
+
+int ft_preview_std_desc(const unsigned char *tmpl, const ft_lens *l,
+                        unsigned char *out, long *ccd, long *optic)
+{
+    const ft_preview *m = &MODES[0];
+    long c, o;
+    if (ft_optics_for(l, m->ppi * m->bin, &c, &o))
+        return -1;
+    memcpy(out, tmpl, FT_DESC_LEN);
+    put_be32(out, FT_DESC_CCD, c);
+    put_be32(out, FT_DESC_OPTIC, o);
+    *ccd = c;
+    *optic = o;
+    return 0;
+}
+
 void ft_box_down(const float *in, int lines, int px, int f, float *out)
 {
     int lo = lines / f, po = px / f, l, c, i, j, k;

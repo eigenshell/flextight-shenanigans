@@ -442,6 +442,8 @@ static const long F3_Y[6] = { 50, 967, 1910, 2852, 3795, 4737 };
  * FT_OPTIC_MAX in libft/ft_focus.h. */
 #define F_CCD      56
 #define F_OPTIC    60
+typedef char F_CCD_is_libft[F_CCD == FT_DESC_CCD && F_OPTIC == FT_DESC_OPTIC
+                            ? 1 : -1];
 static long g_ccd = -1, g_optic = -1;     /* -1: keep the template's */
 
 /* With the CCD past the lens (1020000 / 997296) the calibration lines
@@ -2243,9 +2245,11 @@ static int crop_scan(const struct crop_req *r)
 }
 
 /* A whole-holder preview (libft/ft_preview.h). standard: FlexColor's
- * captured 525 ppi descriptor, as before. 1000/1500: synthesized over
- * the same window at the 6000 crop optics (bin 6 / 4), on the focus
- * curve: the fastest way to those resolutions. */
+ * captured 525 ppi descriptor with only the CCD/lens moved to the focus
+ * curve at 6300 (FlexColor's own pair is ~10000 CCD steps short of the
+ * peak and soft). o3150/1000/1500: synthesized over the same window at
+ * their optics (bin 6 / 6 / 4), on the focus curve: the fastest way to
+ * those resolutions. */
 static int preview_scan(const ft_preview *m, long keep, DWORD hold,
                         const char *out)
 {
@@ -2253,8 +2257,25 @@ static int preview_scan(const ft_preview *m, long keep, DWORD hold,
     double x0, w, len, scale = m->ppi * m->bin;
     long ccd, optic, x_out, px;
 
-    if (m->bin == 12)
-        return cmd_scan(&PRESETS[0], -1, keep, hold, out);
+    if (m->bin == 12) {
+        static BYTE pv[84];
+        static struct preset pp;
+        int rc;
+        if (ft_preview_std_desc(SCAN_WIN, &g_lens, pv, &ccd, &optic)) {
+            fprintf(stderr, "preview %s: no focus for optical scale %.0f\n",
+                    m->name, scale);
+            return CROP_REFUSED;
+        }
+        if (!pos_ok(ccd, optic))
+            return CROP_REFUSED;
+        pp = PRESETS[0];
+        pp.scan = pv;
+        g_ccd = ccd;             /* cmd_scan applies these to scan + end */
+        g_optic = optic;
+        rc = cmd_scan(&pp, -1, keep, hold, out);
+        g_ccd = g_optic = -1;
+        return rc ? 1 : 0;
+    }
     if (ft_optics_for(&g_lens, scale, &ccd, &optic)) {
         fprintf(stderr, "preview %s: no focus for optical scale %.0f\n",
                 m->name, scale);
