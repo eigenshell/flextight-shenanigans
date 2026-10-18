@@ -32,6 +32,11 @@ double ft_lens_correction(const ft_lens *l, double scale);
  * (m 0.51), so the curve is trusted to 1500 (2026-10-13). */
 #define FT_SCALE_MIN     1500.0
 #define FT_SCALE_MAX     6300.0
+/* The lowest optics the scanner reaches at all: its focus table's A4
+ * reflective pair (FP entries 4/18, m 0.342, scale ~984). Only explicit
+ * positions (crop -p) go below FT_SCALE_MIN; the curve is not trusted
+ * there (user, 2026-10-15: every zoom down to A4 reflective). */
+#define FT_SCALE_REACH_MIN 980.0
 /* Focus offsets move the CCD and the lens together (tandem, as the manual
  * says): the gap and so the magnification stay, only the film-side focus
  * plane moves. Moving the CCD alone also changes the magnification (~1 %
@@ -42,21 +47,21 @@ double ft_lens_correction(const ft_lens *l, double scale);
 /* calibrate-focus brackets the CCD alone (lens on the curve) */
 #define FT_CAL_MARGIN    1200L      /* CCD steps: ~5 % sharpness loss */
 #define FT_CAL_BRACKET_MAX 12000L
-/* every value FlexColor sent, except: the lens may go up to 530000, the
- * scanner's own focus-table minimum for film (FP<serial>.txt entries 6/7,
- * m 0.51; the gap rule below keeps the carriers apart), and the CCD may
- * go to 240000, ~14k steps under FlexColor's 254123: at 3150 ppi negative
- * focus was still rising at 254270 (hardware 2026-10-12). Both counters grow towards the film below; a
- * lower CCD value moves the CCD up, away from the lens. Stepped to 241813
- * with steady motor times (user approved). */
-#define FT_CCD_MIN    240000L
-#define FT_CCD_MAX    1020000L
-#define FT_OPTIC_MIN  530000L
-#define FT_OPTIC_MAX  1021000L
+/* Scan positions stay inside the scanner's own focus table
+ * (FP<serial>.txt), scanning entries only (user, 2026-10-15): CCD 56674
+ * (entry 4, A4 reflective) .. 466453 (entry 16, 1:1), lens 217000
+ * (entry 4) .. 1010000 (user: past the table's 1000000 and FlexColor's
+ * own 1004246 for 6300, under the ~1020000 park). Both counters grow
+ * towards the film below; a lower CCD value moves the CCD up, away from
+ * the lens. Before: CCD 240000..1020000, lens 530000..1021000. */
+#define FT_CCD_MIN    56674L
+#define FT_CCD_MAX    466453L
+#define FT_OPTIC_MIN  217000L
+#define FT_OPTIC_MAX  1010000L
 /* Carrier gap (lens - CCD, steps). Collisions depend on the gap alone:
  * both counters share one scale. FlexColor's maintenance "bottom" parks
- * them at 1020000 / 1021000 (gap 1000, the smallest proven safe; it sets
- * FT_CCD_MAX/FT_OPTIC_MAX); a crossed pair (1020000 / 997296, gap -22704)
+ * them at 1020000 / 1021000 (gap 1000, the smallest proven safe; parking,
+ * not a scan position); a crossed pair (1020000 / 997296, gap -22704)
  * lost the white batch and the carriage never moved. The scanner's own
  * focus table (FP<serial>.txt) never goes below a 160231 gap, so scans
  * keep FT_GAP_MIN (user, 2026-10-13). */

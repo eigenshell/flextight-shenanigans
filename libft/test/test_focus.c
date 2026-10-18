@@ -63,20 +63,27 @@ int main(void)
         CHECK(c == 326230 && o == 541866);
     }
     CHECK(ft_optics_for(&ft_lens_default, 1499, &c, &o) == -1);
-    CHECK(FT_OPTIC_MIN == 530000);
+    /* scan positions: the FP table's scanning envelope (user, 2026-10-15) */
+    CHECK(FT_CCD_MIN == 56674 && FT_CCD_MAX == 466453);
+    CHECK(FT_OPTIC_MIN == 217000 && FT_OPTIC_MAX == 1010000);
+    CHECK(FT_SCALE_REACH_MIN == 980.0);
     CHECK(ft_positions_ok(317523, 530820));     /* FP entry 6, m 0.51 */
-    CHECK(!ft_positions_ok(317523, 529999));
+    CHECK(ft_positions_ok(56674, 217000));      /* FP entry 4, A4 reflective */
+    CHECK(ft_positions_ok(466453, 833910));     /* FP entry 16, 1:1 */
+    CHECK(!ft_positions_ok(56673, 217000));
+    CHECK(!ft_positions_ok(56674, 216999));
+    CHECK(!ft_positions_ok(466454, 833910));
+    CHECK(ft_positions_ok(259254, 1010000));
+    CHECK(!ft_positions_ok(259254, 1010001));
     CHECK(ft_optics_for(&ft_lens_default, 6400, &c, &o) == -1);
 
     CHECK(ft_positions_ok(285187, 998540));
     CHECK(!ft_positions_ok(1020000, 997296));   /* CCD past the lens */
-    CHECK(!ft_positions_ok(200000, 998540));    /* below FlexColor's range */
-    CHECK(ft_positions_ok(240000, 1005789));    /* extended CCD floor */
-    CHECK(!ft_positions_ok(239999, 1005789));
+    CHECK(ft_positions_ok(200000, 998540));     /* inside the FP table */
     /* carrier gap: lens - CCD >= 150000 while scanning (FP table >= 160231) */
     CHECK(FT_GAP_BOTTOM == 1000 && FT_GAP_MIN == 150000);
-    CHECK(ft_positions_ok(850000, 1000000));    /* gap 150000 */
-    CHECK(!ft_positions_ok(850001, 1000000));   /* gap 149999 */
+    CHECK(ft_positions_ok(300000, 450000));     /* gap 150000 */
+    CHECK(!ft_positions_ok(300001, 450000));    /* gap 149999 */
     CHECK(!ft_positions_ok(1020000, 1021000));  /* maintenance bottom, gap 1000 */
 
     /* parabola peak: the 4800-scale bracket measured on hardware */
