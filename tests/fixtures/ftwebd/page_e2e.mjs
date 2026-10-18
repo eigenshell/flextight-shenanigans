@@ -4,15 +4,17 @@
 // ftwebd + the fake ftpoc, the downloads saved to a folder.
 // tests/test_page.py checks them.
 //
-//   node page_e2e.mjs <chromium> <http://127.0.0.1:port/> <download dir>
+//   node page_e2e.mjs <chromium> <http://127.0.0.1:port/> <download dir> [fail]
 //
-// Prints one JSON line: {strip, res, live, landed, ...}.
+// Prints one JSON line: {strip, res, live, landed, ...}. fail: the scan's
+// window does not come (a proxy in front of ftwebd drops it until the
+// page asks GET /_proxy/open); then it lands as a later window would.
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const [chrome, url, dl] = process.argv.slice(2);
+const [chrome, url, dl, mode] = process.argv.slice(2);
 const prof = mkdtempSync(join(tmpdir(), "ftweb-e2e-"));
 const proc = spawn(chrome, ["--headless=new", "--remote-debugging-port=0",
   "--user-data-dir=" + prof, "--no-first-run", "--no-default-browser-check",
@@ -127,38 +129,71 @@ try {
   await until("sel === 4", "back to 4");
   await key("x");
   await until("sel === 5", "frame 5");
+  // fail: frame 1 alone (the fake window holds frame 1 only; 2 and 3 not
+  // landing would start a scan of their own)
+  if (mode === "fail") for (const n of [2, 3]) {
+    await ev("pick(" + n + ")");
+    await until("sel === " + n, "frame " + n);
+    await key("x");
+    await until("sel === 5", "frame 5");
+  }
   await ev('window.stSeen=[];new MutationObserver(()=>stSeen.push(document.getElementById("rst").textContent)).observe(document.getElementById("rst"),{childList:true,characterData:true,subtree:true})');
   await key("x");
   await until('!document.getElementById("toast").hidden || (task && task.op === "scan")', "starting toast");
-  await until('task && task.op === "scan" && task.state === "done" && landed.length > 0', "scan", 90000);
-  await ev("landQ");
-  const review = await ev('fetch(S("strip.review")).then(r=>r.text())');
-  const job1 = await ev('fetch(S("strip.job")).then(r=>r.text())');
-  const landed1 = await ev("landed.slice()");
-  const states = await ev('frames.map(f=>stateOf(f))');
-  const ppin = await ev('document.getElementById("ppin").textContent');
-  // downloads: frame 1 and every landed frame
-  await ev("pick(1)");
-  await until('!document.getElementById("dl").disabled', "download ready");
-  await ev('document.getElementById("dl").click()');
-  await ev('document.getElementById("all").click()');
-  const want = [strip + "_frame01.jpg", strip + "_frame01.jpg.txt", strip + ".zip"];
-  for (let t = 0; t < 600 && !want.every(f => existsSync(join(dl, f))); t++) await sleep(100);
-  // a crop on a scanned frame asks; R: a rescan of that frame alone
-  await dragRight(20);
-  await until('document.getElementById("dlg").open', "rescan dialog");
-  const question = await ev('document.getElementById("dq").textContent');
-  await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "r", text: "r" }, sid);
-  await until('task && task.state === "running"', "rescan started", 20000);
-  await until('task.state === "done"', "rescan done", 90000);
-  await ev("landQ");
-  const keymapText = await ev('(()=>{keymap();const t=document.getElementById("km").textContent;keymap();return t})()');
-  await sleep(300);
-  const out = await ev('(async()=>({landed: landed.slice(), seen: stSeen, plot: !document.getElementById("fz").hidden,' +
-    ' notes: document.getElementById("notes").textContent, print: await fetch(S("strip.print")).then(r=>r.text()),' +
-    ' files: (await api(S("files"))).map(f=>f.name), job2: await fetch(S("strip.job")).then(r=>r.text())}))()');
-  console.log(JSON.stringify(Object.assign({ strip, res, holder, recent, scanFile, before, after, review,
-    job1, landed1, states, ppin, uc, ucSaid, question, keymapText }, out)));
+  if (mode === "fail") {
+    // the window lost for good: said, nothing wedged, no rescan for it
+    await until('task && task.op === "scan" && task.state === "done"', "scan", 90000);
+    await ev("landQ");
+    await until('document.getElementById("fbad").textContent', "the lost window said", 60000);
+    await sleep(500);
+    const bad = await ev('document.getElementById("fbad").textContent');
+    const landedFail = await ev("landed.slice()");
+    const restarted = await ev('!document.getElementById("toast").hidden || !!startT || task.state === "running"');
+    const job1 = await ev('fetch(S("strip.job")).then(r=>r.text())');
+    // a window landing after it (here the same one, now through) lands
+    await ev('fetch("/_proxy/open")');
+    await ev('land("strip_win01.raw")');
+    await ev("landQ");
+    const landed = await ev("landed.slice()");
+    const badAfter = await ev('document.getElementById("fbad").textContent');
+    await ev("pick(1)");
+    await until('!document.getElementById("dl").disabled', "download ready");
+    await ev('document.getElementById("dl").click()');
+    const f = join(dl, strip + "_frame01.jpg");
+    for (let t = 0; t < 600 && !existsSync(f); t++) await sleep(100);
+    await sleep(300);
+    console.log(JSON.stringify({ strip, bad, landedFail, restarted, job1, landed, badAfter }));
+  } else {
+    await until('task && task.op === "scan" && task.state === "done" && landed.length > 0', "scan", 90000);
+    await ev("landQ");
+    const review = await ev('fetch(S("strip.review")).then(r=>r.text())');
+    const job1 = await ev('fetch(S("strip.job")).then(r=>r.text())');
+    const landed1 = await ev("landed.slice()");
+    const states = await ev('frames.map(f=>stateOf(f))');
+    const ppin = await ev('document.getElementById("ppin").textContent');
+    // downloads: frame 1 and every landed frame
+    await ev("pick(1)");
+    await until('!document.getElementById("dl").disabled', "download ready");
+    await ev('document.getElementById("dl").click()');
+    await ev('document.getElementById("all").click()');
+    const want = [strip + "_frame01.jpg", strip + "_frame01.jpg.txt", strip + ".zip"];
+    for (let t = 0; t < 600 && !want.every(f => existsSync(join(dl, f))); t++) await sleep(100);
+    // a crop on a scanned frame asks; R: a rescan of that frame alone
+    await dragRight(20);
+    await until('document.getElementById("dlg").open', "rescan dialog");
+    const question = await ev('document.getElementById("dq").textContent');
+    await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "r", text: "r" }, sid);
+    await until('task && task.state === "running"', "rescan started", 20000);
+    await until('task.state === "done"', "rescan done", 90000);
+    await ev("landQ");
+    const keymapText = await ev('(()=>{keymap();const t=document.getElementById("km").textContent;keymap();return t})()');
+    await sleep(300);
+    const out = await ev('(async()=>({landed: landed.slice(), seen: stSeen, plot: !document.getElementById("fz").hidden,' +
+      ' notes: document.getElementById("notes").textContent, print: await fetch(S("strip.print")).then(r=>r.text()),' +
+      ' files: (await api(S("files"))).map(f=>f.name), job2: await fetch(S("strip.job")).then(r=>r.text())}))()');
+    console.log(JSON.stringify(Object.assign({ strip, res, holder, recent, scanFile, before, after, review,
+      job1, landed1, states, ppin, uc, ucSaid, question, keymapText }, out)));
+  }
 } catch (e) {
   console.error(String(e && e.stack || e));
   process.exitCode = 1;

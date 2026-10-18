@@ -7,7 +7,9 @@ without the wasi-sdk, node >= 22 (and Chromium for the end-to-end)."""
 import json
 import re
 import shutil
+import socket
 import subprocess
+import threading
 import zipfile
 from pathlib import Path
 
@@ -374,12 +376,86 @@ def test_worker_preview_print(built, tmp_path):
     assert rep[9]["r"] == 666
 
 
-def run_page(built, tmp_path):
+class Proxy:
+    """a TCP pipe in front of ftwebd (one request per connection, as
+    ftwebd answers), the box's slow Wi-Fi breaking: rule(head) -> None
+    (passed), or n: the answer cut after n bytes (0: the connection
+    dropped unanswered). GET /_proxy/open (from the page) sets .open"""
+    def __init__(self, port, rule):
+        self.up, self.rule, self.open, self.cut = port, rule, False, []
+        self.ls = socket.create_server(("127.0.0.1", 0))
+        self.port = self.ls.getsockname()[1]
+        threading.Thread(target=self.loop, daemon=True).start()
+
+    def loop(self):
+        while True:
+            try:
+                c, _ = self.ls.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.one, args=(c,), daemon=True).start()
+
+    def one(self, c):
+        data = b""
+        while b"\r\n\r\n" not in data:
+            d = c.recv(65536)
+            if not d:
+                return c.close()
+            data += d
+        head = data.split(b"\r\n\r\n")[0].decode("latin-1")
+        if head.startswith("GET /_proxy/open "):
+            self.open = True
+            c.sendall(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            return c.close()
+        n = self.rule(self, head)
+        if n is not None:
+            self.cut.append((head.split("\r\n")[0], n))
+        if n == 0:
+            return c.close()
+        u = socket.create_connection(("127.0.0.1", self.up))
+        u.sendall(data)
+
+        def up():                    # the rest of the request, if any
+            try:
+                while True:
+                    d = c.recv(65536)
+                    if not d:
+                        break
+                    u.sendall(d)
+            except OSError:
+                pass
+        threading.Thread(target=up, daemon=True).start()
+        sent = 0
+        try:
+            while True:
+                d = u.recv(65536)
+                if not d:
+                    break
+                if n is not None and sent + len(d) >= n:
+                    c.sendall(d[:n - sent])
+                    break
+                c.sendall(d)
+                sent += len(d)
+        except OSError:
+            pass
+        for x in (u, c):
+            try:
+                x.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            x.close()
+
+    def close(self):
+        self.ls.close()
+
+
+def run_page(built, tmp_path, rule=None, mode="full"):
     """the page in Chromium: landing (2450 ppi), SCAN, the live bar, the
     review by keys (qwerty on frame 1, dvorak on frame 2 with a name), a
     crop dragged on frame 3, 4 and 5 skipped, 6 confirmed: the scan
     starts by itself; Download and All; then a crop on a scanned frame:
-    the dialog, R, its rescan"""
+    the dialog, R, its rescan. rule: a Proxy's between page and box;
+    mode "fail": the scan's window does not come, then does"""
     pytest.importorskip("numpy")
     meta = "px=666\nx=2\nbin=12\n"
     boxes = worker(tmp_path, [
@@ -398,20 +474,84 @@ def run_page(built, tmp_path):
     srv = Server(ROOT / "tools" / "ftwebd" / "ftwebd", box, 0.03,
                  env={"FAKE_FTPOC_WINDOW": str(win),
                       "FAKE_FTPOC_PREVIEW": str(tmp_path / "pv" / "strip")})
+    px = Proxy(srv.port, rule) if rule else None
     try:
         r = subprocess.run([NODE, "--no-warnings", str(FIX / "page_e2e.mjs"),
-                            CHROME, "http://127.0.0.1:%d/" % srv.port,
-                            str(dl)], capture_output=True, text=True,
-                           timeout=300)
+                            CHROME, "http://127.0.0.1:%d/" %
+                            (px or srv).port, str(dl), mode],
+                           capture_output=True, text=True, timeout=300)
     finally:
+        if px:
+            px.close()
         srv.close()
     assert r.returncode == 0, r.stderr[-4000:]
-    return json.loads(r.stdout), box, dl
+    out = json.loads(r.stdout)
+    out["cut"] = px.cut if px else []
+    return out, box, dl
 
 
 @pytest.mark.skipif(CHROME is None, reason="needs Chromium")
 def test_page_end_to_end(built, tmp_path):
-    out, box, dl = run_page(built, tmp_path)
+    check_end_to_end(tmp_path, *run_page(built, tmp_path))
+
+
+WIN = re.compile(r"GET /api/strips/[^/ ]+/files/strip_win01\.raw ")
+
+
+def broken(px, head):
+    """the window's first GET (the whole file) cut after 3 MB, the next
+    (the resume) dropped unanswered; the rest through"""
+    if not WIN.match(head):
+        return None
+    px.n = getattr(px, "n", 0) + 1
+    return {1: 3 << 20, 2: 0}.get(px.n)
+
+
+@pytest.mark.skipif(CHROME is None, reason="needs Chromium")
+def test_page_resumes_a_broken_transfer(built, tmp_path):
+    """the box's Wi-Fi breaks while the page fetches a window (hundreds
+    of MB at ~100 KB/s on the box): the page goes on from the bytes it
+    has (Range), and its prints are the CLI's as before"""
+    out, box, dl = run_page(built, tmp_path, broken)
+    assert [n for _, n in out["cut"]] == [3 << 20, 0]
+    check_end_to_end(tmp_path, out, box, dl)
+
+
+def lost(px, head):
+    """the window does not come at all until the page opens the proxy"""
+    return 0 if WIN.match(head) and not px.open else None
+
+
+@pytest.mark.skipif(CHROME is None, reason="needs Chromium")
+def test_page_lost_window_does_not_wedge(built, tmp_path):
+    """a window that cannot be fetched: said, by name and how far it got;
+    no rescan started for it; a window landing after it still lands, its
+    frame's print the CLI's"""
+    out, box, dl = run_page(built, tmp_path, lost, "fail")
+    assert out["cut"] and all(n == 0 for _, n in out["cut"])
+    assert re.match(r"strip_win01\.raw: stopped at 0 MB: ", out["bad"]), \
+        out["bad"]
+    assert out["landedFail"] == [] and out["landed"] == [1]
+    assert not out["restarted"]
+    log = [json.loads(l) for l in (box / "fake_ftpoc.log").read_text()
+           .splitlines()]
+    assert [a[0] for a in log] == ["frames", "scan"]
+    assert out["badAfter"] == ""
+    s = out["strip"]
+    strip = box / "strips" / s
+    job = tmp_path / "job1.job"
+    job.write_text(out["job1"])
+    subprocess.run([str(FTDEV), "cut", str(strip / "strip_win01.raw")],
+                   check=True, capture_output=True)
+    r = subprocess.run([str(FTDEV), "print", str(strip / "strip_frame01.dng"),
+                        "--roll", str(strip / "strip.print"), "--job",
+                        str(job)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert (dl / (s + "_frame01.jpg")).read_bytes() == \
+        (strip / "strip_frame01.jpg").read_bytes()
+
+
+def check_end_to_end(tmp_path, out, box, dl):
     s = out["strip"]
     strip = box / "strips" / s
     # the landing page: the engine's numbers, Dmax not estimated (#N/A)

@@ -10,7 +10,7 @@
 const CSS=`#rv .bar{background:linear-gradient(#262019,#120f0d);border-block:1px solid var(--line);padding:8px 0;margin-top:6px}
 #live{display:block;width:100%;height:auto;max-height:140px;object-fit:contain;cursor:pointer;image-rendering:auto}
 .prog{margin:8px 0 2px;height:6px;background:var(--panel);border:1px solid var(--line);overflow:hidden}.prog div{height:100%;width:0;background:var(--amber);transition:width .3s}
-#rv .st{flex:1;font-size:13px;min-height:1.4em}#rv .st.err{color:var(--red)}.stop{border-color:var(--red);color:var(--red)}
+#rv .st{flex:1;font-size:13px;min-height:1.4em}#rv .st.err,#fbad{color:var(--red)}.stop{border-color:var(--red);color:var(--red)}
 #fz{display:block;width:240px;height:64px}
 #thumbs{display:flex;gap:8px;overflow-x:auto;padding:8px 0}
 .th{position:relative;flex:none;border:2px solid transparent;background:#000;cursor:pointer;padding:0;min-height:0}
@@ -33,6 +33,7 @@ dialog{background:var(--panel);color:var(--ink);border:1px solid var(--amber);ma
 const HTML=`<div class="bar"><canvas id="live" width="1" height="1" aria-label="the strip"></canvas></div>
 <div class="prog"><div id="pb"></div></div>
 <div class="row"><span class="st" id="rst"></span><button id="again" hidden>Preview again</button><button id="stop" class="stop" disabled>Stop</button></div>
+<div class="note"><span id="fet"></span> <span id="fbad"></span></div>
 <canvas id="fz" hidden></canvas>
 <div id="thumbs"></div>
 <div class="view"><div id="bw"><canvas id="big" width="0" height="0"></canvas></div>
@@ -52,6 +53,9 @@ const HTML=`<div class="bar"><canvas id="live" width="1" height="1" aria-label="
 // ---------------------------------------------------------------- state
 let frames=[],dec={},landed=[],sel=0,task=null,es=null,run={kind:"",n:1,i:1},scanPx=0,info={},meta="";
 let pv=null,pvImg=null,kk={},queued=new Set(),scanning=new Set(),rescan=new Set(),cropped=new Set(),groups={},zoomed=0;
+// frames of a window scanned but not fetched (no rescan for them; a
+// reload fetches again), and why, per window
+let unfetched=new Set(),fe={};
 const NN=n=>String(n).padStart(2,"0"),frame=n=>frames.find(f=>f.n===n);
 const autoName=n=>cur+"_frame"+NN(n);
 // partial and half frames: under construction. A window keeps one pixel
@@ -64,7 +68,7 @@ const started=f=>/queued|scanning|done/.test(stateOf(f));
 // ---------------------------------------------------------------- screen
 async function review(s){
  if(!$("live")){const st_=document.createElement("style");st_.textContent=CSS;document.head.append(st_);$("rv").innerHTML=HTML;wire()}
- frames=[];dec={};landed=[];sel=0;kk={};queued.clear();scanning.clear();rescan.clear();cropped.clear();groups={};pv=null;pvImg=null;
+ frames=[];dec={};landed=[];sel=0;kk={};queued.clear();scanning.clear();rescan.clear();cropped.clear();groups={};pv=null;pvImg=null;unfetched.clear();fe={};fetchBad();fetching("");
  $("thumbs").innerHTML="";$("jobs").innerHTML="";$("notes").textContent="";$("ppin").textContent="";$("log").textContent="";$("pb").style.width="0";
  $("again").hidden=true;drawBig();
  const t=await api("/api/tasks/current").catch(()=>null);
@@ -95,15 +99,40 @@ async function load(){const s=cur;
  const l=await api(S("files")).catch(()=>[]),wins=winFiles(l.map(x=>x.name));
  for(const[i,n]of wins.entries())landQ=landQ.then(async()=>{if(s!==cur)return;st("loading scanned window "+(i+1)+"/"+wins.length+" …");
   const before=landed.slice();await cut(n,1);const nw=landed.filter(x=>!before.includes(x));if(s!==cur)return;
-  await reprint();await thumbs(landed.slice());jobs();drawStrip();if(landed.includes(sel))await pick(sel);if(i===wins.length-1)st("")})}
+  await reprint();await thumbs(landed.slice());jobs();drawStrip();if(landed.includes(sel))await pick(sel);if(i===wins.length-1)st("")}).catch(e=>st(e.message,1))}
 const img=src=>new Promise(y=>{const i=new Image();i.onload=()=>y(i);i.onerror=()=>y(null);i.src=src});
 // window scans, earlier runs first (strip_rK_winNN), the latest last
 function winFiles(names){const k=n=>{const m=n.match(/^strip_(?:r(\d+)_)?win(\d\d)\.raw$/);return m?[m[1]?+m[1]:1e9,+m[2]]:null};
  return names.filter(k).sort((a,b)=>{const x=k(a),y=k(b);return x[0]-y[0]||x[1]-y[1]})}
-async function cut(name,quiet){const s=cur,[raw,cal,mt,faul]=await Promise.all([get(F(name),1),get(F(name+".cal"),1),get(F(name+".txt"),1),get(F(name+".faul"),1)]);
- if(s!==cur)return;if(!raw||!cal||!mt)return quiet||st(name+": files missing",1);
+// a scanned window: its raw streamed (fetchBig), then cut. Never throws:
+// a window not fetched is said (#fbad) and its frames wait for a reload
+async function cut(name,quiet){const s=cur;let fr=[],mb="";try{
+ const[cal,mt,faul]=await Promise.all([get(F(name+".cal"),1),get(F(name+".txt"),1),get(F(name+".faul"),1)]);
+ if(s!==cur)return;if(!cal||!mt)return quiet||st(name+": files missing",1);
+ fr=(new TextDecoder().decode(mt).match(/^share_frame=\d+/gm)||[]).map(x=>+x.slice(12));
+ const raw=await fetchBig(F(name),(k,n)=>{if(s!==cur)return 0;const m=MB(k)+"/"+MB(n);if(m!==mb){mb=m;fetching(name+": fetching "+m+" MB")}return 1});
+ if(s!==cur)return;if(!raw)return quiet||st(name+": files missing",1);
+ for(const x of fr)unfetched.delete(x);delete fe[name];fetchBad();
  try{const r=await ft("cut",raw,cal,mt,faul);for(const f of r.frames){if(!landed.includes(f.frame))landed.push(f.frame);rescan.delete(f.frame)}landed.sort((a,b)=>a-b)}
  catch(e){if(!quiet)st(name+": "+e.message,1)}}
+ catch(e){if(s!==cur)return;for(const x of fr)unfetched.add(x);fe[name]=name+": "+e.message;fetchBad()}
+ finally{if(s===cur)fetching("")}}
+// a window's raw: hundreds of MB, most of an hour over the box's Wi-Fi.
+// Streamed with its progress (on(bytes, of n); 0 from on stops: null); a
+// broken transfer goes on by Range from the bytes in hand (ftwebd answers
+// 1 MB a time), after a pause while attempts in a row bring nothing;
+// null if the file is missing
+const MB=b=>(b/1048576).toFixed(0),fetching=m=>$("fet").textContent=m,fetchBad=()=>$("fbad").textContent=Object.values(fe).join(" · ");
+async function fetchBig(p,on){let buf=null,k=0,n=0;
+ for(let fails=0;;){const k0=k;let e="";
+  try{const r=await fetch(p,k?{headers:{Range:"bytes="+k+"-"}}:{});if(r.status===404&&!buf)return null;if(!r.ok)throw new Error(r.status+" "+r.statusText);
+   if(!buf){n=+r.headers.get("Content-Length");buf=new Uint8Array(n)}
+   for(const rd=r.body.getReader();;){const{done,value}=await rd.read();if(done)break;if(k+value.length>n)throw new Error("longer than "+n+" bytes");
+    buf.set(value,k);k+=value.length;if(!on(k,n)){rd.cancel();return null}}
+   if(k>=n)return buf}
+  catch(x){e=x.message}
+  fails=k>k0?0:fails+1;if(fails>4)throw new Error("stopped at "+MB(k)+(n?"/"+MB(n):"")+" MB: "+(e||"no data"));
+  if(e)await new Promise(y=>setTimeout(y,500*(fails+1)))}}
 async function reprint(){if(!landed.length)return;try{$("notes").textContent=await ft("measure")}catch(e){st(e.message,1)}}
 
 // the strip bar: the preview as it comes in, then strip.png with the boxes
@@ -210,7 +239,7 @@ function jobs(){const t=$("jobs");t.innerHTML="<tr><th>Frame</th><th>Name</th><t
   ft("name",f.n).then(v=>{if(v)r.cells[1].textContent=v}).catch(()=>{})}}
 let startT=0;
 function maybeStart(){if(task&&task.state==="running")return;if(!frames.length||frames.some(f=>stateOf(f)==="pending"))return;
- const todo=frames.filter(f=>!blocked(f)&&dec[f.n]==="confirmed"&&(!landed.includes(f.n)||rescan.has(f.n))).map(f=>f.n);if(!todo.length||startT)return;
+ const todo=frames.filter(f=>!blocked(f)&&dec[f.n]==="confirmed"&&(!landed.includes(f.n)&&!unfetched.has(f.n)||rescan.has(f.n))).map(f=>f.n);if(!todo.length||startT)return;
  if(!scanPx)return st("no resolution for this strip (strip.scan)",1);
  $("tt").textContent="starting the scan of "+todo.length+" frame"+(todo.length>1?"s":"")+" …";$("toast").hidden=false;
  startT=setTimeout(()=>{startT=0;$("toast").hidden=true;scanFrames(todo)},3000)}
@@ -242,7 +271,7 @@ function onLine(t){const lg=$("log");lg.textContent+=t+"\n";if(lg.textContent.le
  else if(w[1]==="end"){if(w[2]==="ok")$("pb").style.width="100%";st(run.kind+" "+w[2],w[2]!=="ok")}}
 let landQ=Promise.resolve();
 const land=n=>landQ=landQ.then(async()=>{const before=landed.slice();await cut(n);const nw=landed.filter(x=>!before.includes(x)||queued.has(x));
- for(const x of nw){queued.delete(x);scanning.delete(x)}await reprint();thumbs(nw);jobs();if(nw.includes(sel))pick(sel)});
+ for(const x of nw){queued.delete(x);scanning.delete(x)}await reprint();thumbs(nw);jobs();if(nw.includes(sel))pick(sel)}).catch(e=>st(e.message,1));
 async function done(code){busy(false);const op=task&&task.op;if(task)task.state="done";scanning.clear();queued.clear();
  if(code!==0&&/SCSI Loader/.test($("log").textContent))st("the scanner is in its loader (after a power-up): upload its microcode first (ftpoc upload MICROCOD.3XX), then try again",1);
  else if(code!==0&&!/stopped|ok/.test($("rst").textContent))st("failed (exit "+code+"); see the log",1);
