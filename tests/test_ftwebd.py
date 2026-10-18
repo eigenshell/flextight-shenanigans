@@ -486,3 +486,20 @@ def test_preview_job_put_validated(srv):
     assert moved != before
     assert srv.req("PUT", p, moved) == (200, {"ok": True})
     assert (d / "strip.preview.job").read_text() == moved
+
+
+def test_scan_keeps_earlier_runs(srv):
+    """a second scan of a strip (a rescan) numbers its windows from 1
+    again: the earlier run's window files move to strip_rK_winNN first,
+    so frames scanned before are not overwritten"""
+    previewed(srv)
+    d = srv.cwd / "strips" / "a"
+    for k in (1, 2):
+        code, t = srv.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
+        assert code == 202 and srv.wait(t["id"])["exit"] == 0
+    names = sorted(p.name for p in d.iterdir() if "win" in p.name)
+    assert "strip_win01.raw" in names and "strip_r1_win01.raw" in names
+    assert "strip_r1_win01.raw.txt" in names
+    code, t = srv.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
+    assert srv.wait(t["id"])["exit"] == 0
+    assert (d / "strip_r2_win01.raw").exists()

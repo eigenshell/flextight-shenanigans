@@ -2,6 +2,7 @@
 /* task.h: one ftpoc child at a time, a reader thread splitting its output
  * into numbered lines (on '\n' or '\r': ftpoc's human counters use '\r'),
  * and waiters woken per line. */
+#include <dirent.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +32,37 @@ static struct {
     char part[LINE];            /* the line being read */
     size_t npart;
 } T = { .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER };
+
+/* a scan numbers its windows from 1 (strip_winNN.raw + .cal/.txt/.faul):
+ * an earlier run's files move to strip_rK_winNN... (K: the next free run)
+ * so a rescan does not overwrite frames scanned before */
+static void keep_runs(const char *strip)
+{
+    char dir[300], from[700], to[700];
+    struct dirent *de;
+    DIR *d;
+    int k, runs = 0, any = 0;
+    snprintf(dir, sizeof dir, "%s/%s", T.cfg.strips, strip);
+    if (!(d = opendir(dir)))
+        return;
+    while ((de = readdir(d)) != NULL) {
+        if (sscanf(de->d_name, "strip_r%d_win", &k) == 1 && k > runs)
+            runs = k;
+        any |= strncmp(de->d_name, "strip_win", 9) == 0;
+    }
+    if (any) {
+        rewinddir(d);
+        while ((de = readdir(d)) != NULL) {
+            if (strncmp(de->d_name, "strip_win", 9) != 0)
+                continue;
+            snprintf(from, sizeof from, "%s/%s", dir, de->d_name);
+            snprintf(to, sizeof to, "%s/strip_r%d_%s", dir, runs + 1,
+                     de->d_name + 6);
+            rename(from, to);
+        }
+    }
+    closedir(d);
+}
 
 void task_init(const task_cfg *cfg)
 {
@@ -231,6 +263,8 @@ int task_start(const task_req *rq, int *id, char *err, size_t errn)
             set_step(ns++, b);
         }
     }
+    if (strcmp(rq->op, "scan") == 0 && rq->share)
+        keep_runs(rq->strip);
     T.nsteps = ns;
     T.nlines = 0;
     T.npart = 0;
