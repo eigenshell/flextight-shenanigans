@@ -612,7 +612,10 @@ static void pg_end(ft_pg_status s)
 /* The first scan of the process holds at least this long before its
  * calibration, whatever the caller asks (lamp warm-up); frames, scan --job
  * and calibrate-focus set it with -h, 0..120 s (e.g. 35 s after a cold
- * power-up). */
+ * power-up). An automatic microcode upload (a power-up: the lamp is
+ * cold) raises it to FIRST_HOLD_COLD; their -h, parsed later, still
+ * wins. */
+#define FIRST_HOLD_COLD 35000
 static DWORD g_first_hold = 10000;
 
 /* -h: hold before calibration, 0..120 s */
@@ -1817,6 +1820,7 @@ static int auto_upload(void)
         return 1;
     }
     fprintf(stderr, "ftpoc: microcode running; carrying on\n");
+    g_first_hold = FIRST_HOLD_COLD;     /* after a power-up: lamp cold */
     return 0;
 }
 
@@ -4560,8 +4564,9 @@ int main(int argc, char **argv)
             "first, finds it again (it can move to another \\\\.\\ScannerN) and\n"
             "carries on.\n"
             "CLOSE FlexColor first. Motion is slow and clamped. The first scan of a\n"
-            "run holds at least 10 s, except that frames, scan --job and\n"
-            "calibrate-focus -h set that first hold (0..120 s). Ctrl+C: scans (scan,\n"
+            "run holds at least 10 s (35 s after an automatic microcode upload),\n"
+            "except that frames, scan --job and calibrate-focus -h set that first\n"
+            "hold (0..120 s). Ctrl+C: scans (scan,\n"
             "crop, frames, scan --job, calibrate-focus) stop at the next line read\n"
             "and send END; park and goto finish their current move (Ctrl+C is held\n"
             "until then); move stops before its next step. Nothing new starts.\n");

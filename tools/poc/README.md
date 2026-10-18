@@ -298,7 +298,9 @@ frames marked `done = yes`, so a run stopped by Ctrl+C or a failed scan
 resumes where it left off.
 
 Hold: the first scan of a run holds at least 10 s before its
-calibration, whatever was asked, except that `-h` on `frames`,
+calibration (35 s when ftpoc uploaded the microcode itself earlier in
+the run: a power-up, the lamp is cold), whatever was asked, except
+that `-h` on `frames`,
 `scan --job` and `calibrate-focus` sets that first hold explicitly
 (0..120 s, e.g. `-h 35` after a cold power-up, `-h 0` when the lamp is
 already warm). Their later scans hold 3 s.
