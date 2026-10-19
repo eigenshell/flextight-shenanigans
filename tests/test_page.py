@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_ftweb import LENS_2P, LENS_P, NODE, WASI_SDK, dof95, make
+from tests.test_ftweb import (FTWEB, LENS_2P, LENS_P, NODE, PPIS, WASI_SDK,
+                               dof95, make)
 from tests.test_ftwebd import Server
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -38,6 +39,15 @@ def built():
     make("-C", ROOT / "tools" / "ftdev")
     make("-C", ROOT / "libft", "test/window_dump")
     return WWW / "ftweb.wasm"
+
+
+def native_resolutions():
+    """the native engine's landing-page resolutions (ftweb_cli)"""
+    make("-C", FTWEB)
+    r = subprocess.run([str(FTWEB / "ftweb_cli"), "--resolutions",
+                        *map(str, PPIS)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return json.loads(r.stdout)
 
 
 def worker(tmp, calls):
@@ -273,20 +283,23 @@ def test_worker_frame_names(built, tmp_path):
 
 def test_worker_resolutions_and_holders(built, tmp_path):
     """the landing page's choices come from C: MP and the planner's px per
-    ppi (36x24 geometry; Dmax not estimated yet: null, shown #N/A), a ppi
-    no bin reaches refused; the holders with their labels"""
+    ppi (36x24 geometry), Dmax the native engine's (libft's estimator),
+    a ppi no bin reaches refused; the holders with their labels"""
     rep = worker(tmp_path, [
-        {"op": "resolutions", "a": [[1220, 1730, 2450, 3000, 3460, 4000]]},
+        {"op": "resolutions", "a": [list(PPIS)]},
         {"op": "resolutions", "a": [[500]]},
         {"op": "holders"},
     ])
-    assert rep[0]["r"] == [
-        {"ppi": 1220, "mp": 2.0, "px": 1729, "dmax": None},
-        {"ppi": 1730, "mp": 4.0, "px": 2452, "dmax": None},
-        {"ppi": 2450, "mp": 8.0, "px": 3472, "dmax": None},
-        {"ppi": 3000, "mp": 12.1, "px": 4252, "dmax": None},
-        {"ppi": 3460, "mp": 16.0, "px": 4904, "dmax": None},
-        {"ppi": 4000, "mp": 21.4, "px": 5669, "dmax": None}]
+    assert [{k: v for k, v in r.items() if k != "dmax"}
+            for r in rep[0]["r"]] == [
+        {"ppi": 1220, "mp": 2.0, "px": 1729},
+        {"ppi": 1730, "mp": 4.0, "px": 2452},
+        {"ppi": 2450, "mp": 8.0, "px": 3472},
+        {"ppi": 3000, "mp": 12.1, "px": 4252},
+        {"ppi": 3460, "mp": 16.0, "px": 4904},
+        {"ppi": 4000, "mp": 21.4, "px": 5669}]
+    assert rep[0]["r"] == native_resolutions()
+    assert all(r["dmax"] is not None for r in rep[0]["r"])
     assert rep[1] == {"err": "500 ppi: out of the optics' range"}
     assert rep[2]["r"] == [{
         "name": "24x217", "frames": 6,
@@ -698,9 +711,14 @@ def test_page_lost_window_does_not_wedge(built, tmp_path):
 def check_end_to_end(tmp_path, out, box, dl):
     s = out["strip"]
     strip = box / "strips" / s
-    # the landing page: the engine's numbers, Dmax not estimated (#N/A)
-    assert out["res"][2] == "2450ppi · 8.0 MPDmax: #N/A"
-    assert all(r.endswith("Dmax: #N/A") for r in out["res"])
+    # the landing page: the engine's numbers, Dmax the estimator's
+    # (one decimal; #N/A where it has none)
+    want = ["%dppi · %.1f MPDmax%s" % (
+        r["ppi"], r["mp"],
+        ": #N/A" if r["dmax"] is None else " ≈ %.1f" % r["dmax"])
+        for r in native_resolutions()]
+    assert out["res"] == want
+    assert out["res"][2].startswith("2450ppi · 8.0 MPDmax ≈ ")
     assert out["holder"].startswith("Filmchrome 24x36x6")
     assert out["recent"] == "coming soon"
     assert re.match(r"type = quick\nppi = 2450\nholder = 24x217\n"

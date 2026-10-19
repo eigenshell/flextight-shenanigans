@@ -9,6 +9,7 @@
 #include <string.h>
 #include "ft_calib.h"
 #include "ft_develop.h"
+#include "ft_dmax.h"
 #include "ft_dng.h"
 #include "ft_emulsion.h"
 #include "ft_focus.h"
@@ -271,6 +272,9 @@ int ftw_emulsions(ftw *w)
 
 int ftw_resolutions(ftw *w, const double *ppi, int n)
 {
+    /* today's optics limits: the estimator takes them as parameters */
+    const ft_optics_limits lim = { FT_SCALE_MIN, FT_SCALE_MAX,
+                                   &ft_lens_default };
     int i, bins[6], rc;
     for (i = 0; i < n; i++)
         if (!ft_bins_for_ppi(ppi[i], bins)) {
@@ -283,8 +287,12 @@ int ftw_resolutions(ftw *w, const double *ppi, int n)
     for (i = 0; i < n && !rc; i++) {
         double in = FT_SHARE_FF_LONG_MM / 25.4, mp = ppi[i] * in *
                     ppi[i] * in * 24.0 / FT_SHARE_FF_LONG_MM / 1e6;
-        rc = outf(w, "%s{\"ppi\":%g,\"mp\":%.1f,\"px\":%.0f,\"dmax\":null}",
+        double dmax;
+        rc = outf(w, "%s{\"ppi\":%g,\"mp\":%.1f,\"px\":%.0f,\"dmax\":",
                   i ? "," : "", ppi[i], mp, ppi[i] * in);
+        if (!rc)
+            rc = ft_dmax_for_ppi(&lim, ppi[i], &dmax)
+                 ? outf(w, "%.1f}", dmax) : outf(w, "null}");
     }
     return rc ? rc : outf(w, "]");
 }

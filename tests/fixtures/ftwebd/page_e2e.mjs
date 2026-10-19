@@ -149,6 +149,10 @@ try { main: {
   const f1End = await ev("JSON.stringify(frame(1))");
   const state1 = await ev("stateOf(frame(1))");
   const previewJob = await ev('fetch(S("files/strip.preview.job")).then(r=>r.text())');
+  // the large view laid out for frame 3 (Enter's pick is not awaited: sel
+  // turns 3 at once, G holds frame 2's view until its drawBig): the drag
+  // is aimed through G
+  await ev("pick(3)");
   // frame 3: a crop (its right edge dragged in), kept as the job's window
   const before = await ev('fetch(S("strip.job")).then(r=>r.text())');
   await dragRight(40);
