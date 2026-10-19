@@ -233,7 +233,7 @@ function saveReview(){clearTimeout(revT);revT=setTimeout(async()=>{try{await api
 async function setName(){const n=sel,v=$("name").value.trim();try{await ft("setName",n,v===autoName(n)?"":v);savePrint();st("")}catch(e){st(e.message,1)}}
 function decide(d){const f=frame(sel);if(!f)return;
  if(blocked(f))return st("frame "+f.n+" ("+f.type+"): "+UC+": "+f.type+" frames wait for per-frame resolution",1);
- const j=jobOf(f.n);
+ const j=jobOf(f.n);want[f.n]=d;
  if(j&&d!=="confirmed"&&stateOf(f)!=="done"){if(j.state!=="queued")return st(RUN(f),1);return unconfirm(f,j,d)}
  if(started(f)&&d==="pending")return st("frame "+f.n+" is "+stateOf(f)+": its decision stays",1);
  dec[f.n]=d;saveReview();badge(f);jobs();drawStrip();
@@ -241,13 +241,18 @@ function decide(d){const f=frame(sel);if(!f)return;
  maybeStart()}
 // a frame out of its queued job: the job re-planned without it (PUT), or
 // dropped when it was its last frame (DELETE: a job that started
-// meanwhile is stopped, the frame out of it). PUT 409 (started): it
-// stays in, part of the running job, said
-const unconfirm=(f,j,d)=>bq=bq.then(async()=>{const ns=j.frames.filter(n=>n!==f.n);
- if(ns.length){if(!await put(j,ns)){for(const g of frames)badge(g);jobs();return st("frame "+f.n+": its job has just started; it stays in",1)}}
- else{const r=await fetch("/api/tasks/"+j.id,{method:"DELETE"}),o=await r.json().catch(()=>({}));
-  if(!r.ok&&r.status!==404)throw new Error(o.error||r.status+" "+r.statusText);
-  if(o.was==="running")j.frames=[];else bj.delete(j.id)}
+// meanwhile is stopped, the frame out of it). PUT 409 (started), DELETE
+// 409 (ended): it stays in, said. A decision made after it (want: the
+// last one per frame) wins: then nothing changes here
+const want={};
+const unconfirm=(f,j,d)=>bq=bq.then(async()=>{if(want[f.n]!==d)return maybeStart();
+ const stays=w=>{for(const g of frames)badge(g);jobs();st("frame "+f.n+": its job has just "+w+"; it stays in",1)};
+ if(j.frames.includes(f.n)){const ns=j.frames.filter(n=>n!==f.n);
+  if(ns.length){if(!await put(j,ns))return stays("started")}
+  else{const r=await fetch("/api/tasks/"+j.id,{method:"DELETE"}),o=await r.json().catch(()=>({}));
+   if(r.status===409)return stays("ended");
+   if(!r.ok&&r.status!==404)throw new Error(o.error||r.status+" "+r.statusText);
+   if(o.was==="running")j.frames=[];else bj.delete(j.id)}}
  dec[f.n]=d;saveReview();badge(f);jobs();drawStrip()}).catch(e=>st(e.message,1));
 // a frame of the job that runs (not yet landed): no decision change, its
 // job's Stop instead
@@ -278,8 +283,9 @@ function maybeStart(){if(!frames.length)return;const todo=todoFrames();if(!todo.
 function cancelStart(){if(!startT)return;clearTimeout(startT);startT=0;$("toast").hidden=true;st("scan not started: confirm or skip a frame to start it")}
 // frames -> the batch: merged into this strip's tail job while it is
 // still queued (PUT its job), else a job of their own (POST); a rescan
-// is a job of its own. One change to the batch at a time (bq)
-const enqueue=todo=>bq=bq.then(async()=>{todo=todo.filter(n=>!jobOf(n));if(!todo.length)return;
+// is a job of its own. One change to the batch at a time (bq); a frame
+// no longer confirmed when its turn comes stays out
+const enqueue=todo=>bq=bq.then(async()=>{todo=todo.filter(n=>!jobOf(n)&&dec[n]==="confirmed");if(!todo.length)return;
  const re=todo.filter(n=>rescan.has(n)),add=todo.filter(n=>!rescan.has(n));
  if(re.length)await post(re,1);
  if(add.length){const t=tail();if(!t||!await put(t,t.frames.concat(add).sort((a,b)=>a-b)))await post(add)}

@@ -589,6 +589,11 @@ def test_page_batch_queue(built, tmp_path):
     assert out["running"] == ("frame 1 is in the job scanning now: Stop "
                               "ends that job (its frames to retry)")
     assert out["skipOn"] is False
+    # while the batch's changes wait, the last decision holds: a frame
+    # unconfirmed before its enqueue ran is not sent; one confirmed again
+    # before its unconfirm ran stays in its job
+    assert out["late"] == [False, "pending"]
+    assert out["again"] == [[2], "confirmed"]
     assert out["landed"] == [1, 2]
     files = set(out["files"])
     assert {"strip_j2_win01.raw", "strip_j4_win01.raw"} <= files

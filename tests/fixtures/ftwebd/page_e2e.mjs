@@ -129,6 +129,29 @@ async function batchFlow() {
   out.skipOn = await ev('document.getElementById("skip").disabled');
   await key("Enter");
   await until(scans + '.some(j=>j.state==="queued"&&j.frames.join()==="2")', "2 again", 20000);
+  // the batch's changes wait (bq held by a gate): the decision the user
+  // made last is the one that holds
+  const gate = 'window.gate=new Promise(y=>window.openGate=y);bq=bq.then(()=>gate);0';
+  // 3 confirmed, the countdown fires (its enqueue waits), then Backspace:
+  // not sent
+  await ev(gate);
+  await ev("pick(3)");
+  await until("sel === 3", "frame 3");
+  await key("Enter");
+  await until("!startT", "countdown fired", 20000);
+  await ev("pick(3)");
+  await until("sel === 3", "frame 3");
+  await key("Backspace");
+  await ev("openGate();bq");
+  out.late = await ev("[!!jobOf(3),dec[3]]");
+  // 2 out of its queued job (waits), then confirmed again: it stays in
+  await ev(gate);
+  await ev("pick(2)");
+  await until("sel === 2", "frame 2");
+  await key("Backspace");
+  await key("Enter");
+  await ev("openGate();bq");
+  out.again = await ev("[jobOf(2)&&jobOf(2).frames,dec[2]]");
   rmSync(hold);
   await until(scans + ".every(j=>j.closed) && landed.includes(1) && landed.includes(2)", "batch landed", 90000);
   await ev("landQ");
