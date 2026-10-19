@@ -160,7 +160,8 @@ function drawStrip(){const c=$("live"),i=pvImg;if(!i)return;c.width=i.naturalWid
 async function thumbs(only){const t=$("thumbs");if(!only){t.innerHTML="";for(const f of frames){const b=document.createElement("button");b.className="th";b.id="th"+f.n;
   b.innerHTML='<canvas></canvas><span class="n">'+f.n+'</span><span class="b"></span>';b.onclick=()=>pick(f.n);t.append(b)}}
  for(const f of frames)if(!only||only.includes(f.n)){badge(f);await paintTo($("th"+f.n).querySelector("canvas"),f.n,240).catch(()=>{})}}
-function badge(f){const b=$("th"+f.n);if(!b)return;const s=stateOf(f);b.classList.toggle("sel",f.n===sel);const e=b.querySelector(".b");e.className="b "+s;e.textContent=s}
+function badge(f){if(f.n===sel){const r=inRun(f);$("skip").disabled=r;$("skip").title=r?RUN(f):""}
+ const b=$("th"+f.n);if(!b)return;const s=stateOf(f);b.classList.toggle("sel",f.n===sel);const e=b.querySelector(".b");e.className="b "+s;e.textContent=s}
 async function paintTo(c,n,edge){const d=landed.includes(n)?await ft("display",n,edge):pv?await ft("previewPrint",n,edge):null;if(!d)return null;
  c.width=d.w;c.height=d.h;c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(d.rgba.buffer),d.w,d.h),0,0);return c}
 
@@ -232,10 +233,26 @@ function saveReview(){clearTimeout(revT);revT=setTimeout(async()=>{try{await api
 async function setName(){const n=sel,v=$("name").value.trim();try{await ft("setName",n,v===autoName(n)?"":v);savePrint();st("")}catch(e){st(e.message,1)}}
 function decide(d){const f=frame(sel);if(!f)return;
  if(blocked(f))return st("frame "+f.n+" ("+f.type+"): "+UC+": "+f.type+" frames wait for per-frame resolution",1);
+ const j=jobOf(f.n);
+ if(j&&d!=="confirmed"&&stateOf(f)!=="done"){if(j.state!=="queued")return st(RUN(f),1);return unconfirm(f,j,d)}
  if(started(f)&&d==="pending")return st("frame "+f.n+" is "+stateOf(f)+": its decision stays",1);
  dec[f.n]=d;saveReview();badge(f);jobs();drawStrip();
  if(d!=="pending"){const i=frames.indexOf(f),nx=frames.slice(i+1).concat(frames.slice(0,i)).find(g=>stateOf(g)==="pending");if(nx)pick(nx.n);else pick(f.n)}
  maybeStart()}
+// a frame out of its queued job: the job re-planned without it (PUT), or
+// dropped when it was its last frame (DELETE: a job that started
+// meanwhile is stopped, the frame out of it). PUT 409 (started): it
+// stays in, part of the running job, said
+const unconfirm=(f,j,d)=>bq=bq.then(async()=>{const ns=j.frames.filter(n=>n!==f.n);
+ if(ns.length){if(!await put(j,ns)){for(const g of frames)badge(g);jobs();return st("frame "+f.n+": its job has just started; it stays in",1)}}
+ else{const r=await fetch("/api/tasks/"+j.id,{method:"DELETE"}),o=await r.json().catch(()=>({}));
+  if(!r.ok&&r.status!==404)throw new Error(o.error||r.status+" "+r.statusText);
+  if(o.was==="running")j.frames=[];else bj.delete(j.id)}
+ dec[f.n]=d;saveReview();badge(f);jobs();drawStrip()}).catch(e=>st(e.message,1));
+// a frame of the job that runs (not yet landed): no decision change, its
+// job's Stop instead
+const inRun=f=>{const j=jobOf(f.n);return!!j&&j.state!=="queued"&&stateOf(f)!=="done"},
+ RUN=f=>"frame "+f.n+" is in the job scanning now: Stop ends that job (its frames to retry)";
 function step(d){const i=frames.findIndex(f=>f.n===sel)+d;if(i>=0&&i<frames.length)pick(frames[i].n)}
 
 // the job list; confirmed frames go to the box's batch (a FIFO of jobs

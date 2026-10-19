@@ -577,12 +577,26 @@ def test_page_batch_queue(built, tmp_path):
     assert inc == {"1": "no", "2": "yes", "3": "yes", "4": "no", "5": "no",
                    "6": "no"}
     assert out["badges"] == ["scanning", "queued", "queued"]
+    # unconfirm: a queued frame out of its job (PUT), the job's last
+    # frame out drops it (DELETE); a frame of the running job cannot
+    # (Skip disabled, Stop offered)
+    inc = dict(re.findall(r"\[frame (\d)\]\ntype = \w+\ninclude = (\w+)",
+                          out["tailAfter"]))
+    assert (inc["2"], inc["3"]) == ("yes", "no")
+    assert out["badge3"] == "pending"
+    assert out["dropped"] is None
+    assert out["skipOff"] == [True, False]
+    assert out["running"] == ("frame 1 is in the job scanning now: Stop "
+                              "ends that job (its frames to retry)")
+    assert out["skipOn"] is False
     assert out["landed"] == [1, 2]
-    assert {"strip_j2_win01.raw", "strip_j3_win01.raw"} <= set(out["files"])
+    files = set(out["files"])
+    assert {"strip_j2_win01.raw", "strip_j4_win01.raw"} <= files
+    assert "strip_j3.job" not in files       # the dropped job's file
     log = [json.loads(l) for l in (box / "fake_ftpoc.log").read_text()
            .splitlines()]
     assert [a[2] for a in log if a[0] == "scan"] == \
-        ["strips/%s/strip_j2.job" % s, "strips/%s/strip_j3.job" % s]
+        ["strips/%s/strip_j2.job" % s, "strips/%s/strip_j4.job" % s]
 
 
 def lost(px, head):

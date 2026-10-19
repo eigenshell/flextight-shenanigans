@@ -104,6 +104,31 @@ async function batchFlow() {
   out.jobs = await ev(jobsNow);
   out.tailJob = await ev('fetch(F("strip_j' + out.jobs[1][0] + '.job")).then(r=>r.text())');
   out.badges = await badges([1, 2, 3]);
+  // Backspace on a queued frame: its job re-planned without it (PUT)
+  await ev("pick(3)");
+  await until("sel === 3", "frame 3");
+  await key("Backspace");
+  await until(scans + '.some(j=>j.state==="queued"&&j.frames.join()==="2")', "3 out", 20000);
+  out.tailAfter = await ev('fetch(F("strip_j' + out.jobs[1][0] + '.job")).then(r=>r.text())');
+  out.badge3 = (await badges([3]))[0];
+  // the job's last frame out: the job dropped (DELETE)
+  await ev("pick(2)");
+  await until("sel === 2", "frame 2");
+  await key("Backspace");
+  await until("!" + scans + '.some(j=>j.state==="queued")', "job dropped", 20000);
+  out.dropped = await ev('api("/api/tasks/' + out.jobs[1][0] + '")');
+  // a frame of the running job: refused, Stop offered (Skip disabled)
+  await ev("pick(1)");
+  await until("sel === 1", "frame 1");
+  out.skipOff = await ev('[document.getElementById("skip").disabled,document.getElementById("stop").disabled]');
+  await key("Backspace");
+  out.running = await ev('document.getElementById("rst").textContent');
+  // frame 2 confirmed again: a job of its own
+  await ev("pick(2)");
+  await until("sel === 2", "frame 2");
+  out.skipOn = await ev('document.getElementById("skip").disabled');
+  await key("Enter");
+  await until(scans + '.some(j=>j.state==="queued"&&j.frames.join()==="2")', "2 again", 20000);
   rmSync(hold);
   await until(scans + ".every(j=>j.closed) && landed.includes(1) && landed.includes(2)", "batch landed", 90000);
   await ev("landQ");
