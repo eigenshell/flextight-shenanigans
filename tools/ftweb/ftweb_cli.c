@@ -15,11 +15,21 @@
  *   ftweb_cli [--lens focus.txt] --dof95 scale bin
  *
  * ftw_dof95 on that lens (default: libft's), printed as %.6f.
+ *
+ *   ftweb_cli --resolutions ppi...
+ *
+ * ftw_resolutions' JSON for those ppi.
+ *
+ *   ftweb_cli --dmax ppi
+ *
+ * libft's Dmax estimate (ft_dmax_for_ppi on today's optics limits) as
+ * %.6f, or null without one.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "ft.h"
+#include "ft_dmax.h"
 #include "ftweb.h"
 
 /* the whole file in an ftw_alloc buffer; NULL if unreadable */
@@ -68,7 +78,9 @@ static void usage(void)
     fprintf(stderr, "usage: ftweb_cli --print strip.print [--job strip.job]"
                     " -o outdir [--display N px] window.raw...\n"
                     "       ftweb_cli [--lens focus.txt] --dof95 scale"
-                    " bin\n");
+                    " bin\n"
+                    "       ftweb_cli --resolutions ppi...\n"
+                    "       ftweb_cli --dmax ppi\n");
 }
 
 int main(int argc, char **argv)
@@ -83,6 +95,32 @@ int main(int argc, char **argv)
 
     if (!w)
         return 1;
+    if (argc == 3 && strcmp(argv[1], "--dmax") == 0) {
+        const ft_optics_limits lim = { FT_SCALE_MIN, FT_SCALE_MAX,
+                                       &ft_lens_default };
+        double d;
+        if (ft_dmax_for_ppi(&lim, atof(argv[2]), &d))
+            printf("%.6f\n", d);
+        else
+            printf("null\n");
+        ftw_free(w);
+        return 0;
+    }
+    if (argc > 2 && strcmp(argv[1], "--resolutions") == 0) {
+        double ppi[64];
+        int n = 0;
+        for (i = 2; i < argc && n < 64; i++)
+            ppi[n++] = atof(argv[i]);
+        if (ftw_resolutions(w, ppi, n) < 0) {
+            fprintf(stderr, "ftweb_cli: %s\n", ftw_error(w));
+            ftw_free(w);
+            return 1;
+        }
+        fwrite(ftw_out(w), 1, ftw_out_len(w), stdout);
+        printf("\n");
+        ftw_free(w);
+        return 0;
+    }
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--print") == 0 && i + 1 < argc)
             print = argv[++i];

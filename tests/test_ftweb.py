@@ -210,6 +210,31 @@ def test_engine_dof95_is_libft(tools, tmp_path):
         pytest.approx(dof95(3000, 1, 2 * LENS_P), abs=1e-5)
 
 
+PPIS = (1220, 1730, 2450, 3000, 3460, 4000)     # the landing page's
+
+
+def cli_json(run, *args):
+    r = run(list(map(str, args)))
+    assert r.returncode == 0, r.stdout + r.stderr
+    return json.loads(r.stdout)
+
+
+@needs_cc
+def test_engine_resolutions_dmax_is_libft(tools):
+    """the landing page's Dmax is libft's estimator (ft_dmax_for_ppi, on
+    today's optics limits) to one decimal; null where it has none"""
+    run = lambda a: subprocess.run([str(tools[1]), *a], capture_output=True,
+                                   text=True)
+    res = cli_json(run, "--resolutions", *PPIS)
+    assert [r["ppi"] for r in res] == list(PPIS)
+    for r in res:
+        est = cli_json(run, "--dmax", r["ppi"])
+        assert est is not None
+        assert r["dmax"] == float("%.1f" % est)
+    assert cli_json(run, "--dmax", 6301) is None
+    assert cli_json(run, "--dmax", 0) is None
+
+
 WASI_SDK = Path(os.environ.get(
     "WASI_SDK", Path.home() / ".local/opt/wasi-sdk-34.0-x86_64-linux"))
 
@@ -289,7 +314,8 @@ def test_wasm_dof95_is_native(wasm, tools, tmp_path):
     lens = tmp_path / "focus.txt"
     lens.write_text(LENS_2P)
     for args in (["--dof95", "1729", "1"], ["--dof95", "3150", "2"],
-                 ["--lens", str(lens), "--dof95", "3000", "1"]):
+                 ["--lens", str(lens), "--dof95", "3000", "1"],
+                 ["--resolutions", *map(str, PPIS)], ["--dmax", "1220"]):
         n = subprocess.run([str(tools[1]), *args], capture_output=True,
                            text=True)
         w = subprocess.run([NODE, "--no-warnings",

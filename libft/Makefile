@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 CC ?= cc
 CFLAGS ?= -std=c99 -O2 -Wall -Wextra -Wpedantic
-SRC = ft.c ft_geom.c ft_holder.c ft_focus.c ft_focus_io.c ft_calib.c ft_job.c ft_job_io.c ft_png.c ft_detect.c ft_preview.c ft_plan.c ft_maint.c ft_upload.c ft_image.c ft_develop.c ft_dng.c ft_dng_io.c ft_tiff_ifd.c ft_tiff.c ft_out.c ft_curve.c ft_render.c ft_render_auto.c ft_density.c ft_stream.c ft_dplan.c ft_detail.c ft_share.c ft_share_cut.c ft_share_cut_io.c ft_output.c ft_icc.c ft_resize.c ft_atrous.c ft_noise_model.c ft_nr.c ft_sharpen.c ft_look.c ft_print.c ft_pm_classic.c ft_pm_stock.c ft_pm_frontier.c ft_pm_lut3d.c ft_emulsion.c ft_print_file.c ft_progress.c ft_jpeg.c ft_jpeg_io.c ft_zip.c ft_share_print.c
+SRC = ft.c ft_geom.c ft_holder.c ft_focus.c ft_focus_io.c ft_calib.c ft_job.c ft_job_io.c ft_png.c ft_detect.c ft_preview.c ft_plan.c ft_dmax.c ft_maint.c ft_upload.c ft_image.c ft_develop.c ft_dng.c ft_dng_io.c ft_tiff_ifd.c ft_tiff.c ft_out.c ft_curve.c ft_render.c ft_render_auto.c ft_density.c ft_stream.c ft_dplan.c ft_detail.c ft_share.c ft_share_cut.c ft_share_cut_io.c ft_output.c ft_icc.c ft_resize.c ft_atrous.c ft_noise_model.c ft_nr.c ft_sharpen.c ft_look.c ft_print.c ft_pm_classic.c ft_pm_stock.c ft_pm_frontier.c ft_pm_lut3d.c ft_emulsion.c ft_print_file.c ft_progress.c ft_jpeg.c ft_jpeg_io.c ft_zip.c ft_share_print.c
 OBJ = $(SRC:.c=.o)
-TESTS = test/test_ft test/test_geom test/test_focus test/test_calib test/test_job test/test_png test/test_detect test/test_preview test/test_plan test/test_maint test/test_upload test/test_develop test/test_curve test/test_render test/test_render_auto test/test_tiff test/test_density test/test_stream test/test_dplan test/test_detail test/test_share test/test_share_cut test/test_dng test/test_output test/test_icc test/test_resize test/test_jpeg test/test_icc_linear test/test_atrous test/test_noise_model test/test_nr test/test_sharpen test/test_look test/test_print test/test_frontier test/test_lut3d test/test_emulsion test/test_print_file test/test_progress test/test_jpeg_ref test/test_zip test/test_share_print
+TESTS = test/test_ft test/test_geom test/test_focus test/test_calib test/test_job test/test_png test/test_detect test/test_preview test/test_plan test/test_dmax test/test_maint test/test_upload test/test_develop test/test_curve test/test_render test/test_render_auto test/test_tiff test/test_density test/test_stream test/test_dplan test/test_detail test/test_share test/test_share_cut test/test_dng test/test_output test/test_icc test/test_resize test/test_jpeg test/test_icc_linear test/test_atrous test/test_noise_model test/test_nr test/test_sharpen test/test_look test/test_print test/test_frontier test/test_lut3d test/test_emulsion test/test_print_file test/test_progress test/test_jpeg_ref test/test_zip test/test_share_print
 # the render core, the 2b encoders, the share planner, the output colour
 # units, the NR / sharpen units, looks and the print chain also build for
 # the browser (WASM): libm and mem* only
 PURE = ft_curve.o ft_render.o ft_render_auto.o ft_density.o ft_dplan.o \
-       ft_plan.o ft_geom.o ft_share.o ft_output.o ft_icc.o ft_resize.o \
+       ft_plan.o ft_dmax.o ft_geom.o ft_share.o ft_output.o ft_icc.o ft_resize.o \
        ft_atrous.o ft_noise_model.o ft_nr.o ft_sharpen.o ft_look.o \
        ft_print.o ft_pm_classic.o ft_pm_stock.o ft_pm_frontier.o \
        ft_pm_lut3d.o ft_emulsion.o ft_print_file.o
