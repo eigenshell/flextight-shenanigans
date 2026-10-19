@@ -512,18 +512,21 @@ def run_page(built, tmp_path, rule=None, mode="full"):
     box.mkdir()
     dl = tmp_path / "dl"
     dl.mkdir()
+    hold = tmp_path / "hold"
     srv = Server(ROOT / "tools" / "ftwebd" / "ftwebd", box, 0.03,
                  env={"FAKE_FTPOC_WINDOW": str(win),
-                      "FAKE_FTPOC_PREVIEW": str(tmp_path / "pv" / "strip")})
+                      "FAKE_FTPOC_PREVIEW": str(tmp_path / "pv" / "strip"),
+                      "FAKE_FTPOC_HOLD": str(hold)})
     px = Proxy(srv.port, rule) if rule else None
     try:
         r = subprocess.run([NODE, "--no-warnings", str(FIX / "page_e2e.mjs"),
                             CHROME, "http://127.0.0.1:%d/" %
-                            (px or srv).port, str(dl), mode],
+                            (px or srv).port, str(dl), mode, str(hold)],
                            capture_output=True, text=True, timeout=300)
     finally:
         if px:
             px.close()
+        hold.unlink(missing_ok=True)
         srv.close()
     assert r.returncode == 0, r.stderr[-4000:]
     out = json.loads(r.stdout)
@@ -556,6 +559,28 @@ def test_page_resumes_a_broken_transfer(built, tmp_path):
     out, box, dl = run_page(built, tmp_path, broken)
     assert [n for _, n in out["cut"]] == [3 << 20, 0]
     check_end_to_end(tmp_path, out, box, dl)
+
+
+@pytest.mark.skipif(CHROME is None, reason="needs Chromium")
+def test_page_batch_queue(built, tmp_path):
+    """the first confirm starts a job; frames confirmed while it scans
+    collect into the next job (the batch's tail, re-planned by PUT while
+    it is queued), which runs after it"""
+    out, box, dl = run_page(built, tmp_path, mode="batch")
+    s = out["strip"]
+    assert out["first"] == [[2, "running", [1]]]
+    assert out["jobs"] == [[2, "running", [1]], [3, "queued", [2, 3]]]
+    inc = dict(re.findall(r"\[frame (\d)\]\ntype = \w+\ninclude = (\w+)",
+                          out["tailJob"]))
+    assert inc == {"1": "no", "2": "yes", "3": "yes", "4": "no", "5": "no",
+                   "6": "no"}
+    assert out["badges"] == ["scanning", "queued", "queued"]
+    assert out["landed"] == [1, 2]
+    assert {"strip_j2_win01.raw", "strip_j3_win01.raw"} <= set(out["files"])
+    log = [json.loads(l) for l in (box / "fake_ftpoc.log").read_text()
+           .splitlines()]
+    assert [a[2] for a in log if a[0] == "scan"] == \
+        ["strips/%s/strip_j2.job" % s, "strips/%s/strip_j3.job" % s]
 
 
 def lost(px, head):
@@ -633,7 +658,9 @@ def check_end_to_end(tmp_path, out, box, dl):
                            "every frame gets 3472 px on its long side, and "
                            "frame 3 (cropped) needs more ppi for that")
     assert out["landed1"] == [1]              # one window, one fake frame
-    assert out["states"] == ["done", "confirmed", "confirmed", "skipped",
+    # frames 2 and 3 were in the job, but the fake window holds frame 1
+    # only: to retry
+    assert out["states"] == ["done", "retry", "retry", "skipped",
                              "skipped", "under construction"]
     seen = "\n".join(out["seen"])
     assert "window 1/1 · focusing frame 1 · crop 1 at -500" in seen

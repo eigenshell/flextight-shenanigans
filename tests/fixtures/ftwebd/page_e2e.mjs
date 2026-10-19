@@ -4,17 +4,19 @@
 // ftwebd + the fake ftpoc, the downloads saved to a folder.
 // tests/test_page.py checks them.
 //
-//   node page_e2e.mjs <chromium> <http://127.0.0.1:port/> <download dir> [fail]
+//   node page_e2e.mjs <chromium> <http://127.0.0.1:port/> <download dir> [fail|batch] [hold file]
 //
 // Prints one JSON line: {strip, res, live, landed, ...}. fail: the scan's
 // window does not come (a proxy in front of ftwebd drops it until the
 // page asks GET /_proxy/open); then it lands as a later window would.
+// batch: confirms while a job scans collect into the next job (scans wait
+// while the hold file exists: fake_ftpoc.py).
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const [chrome, url, dl, mode] = process.argv.slice(2);
+const [chrome, url, dl, mode, hold] = process.argv.slice(2);
 const prof = mkdtempSync(join(tmpdir(), "ftweb-e2e-"));
 const proc = spawn(chrome, ["--headless=new", "--remote-debugging-port=0",
   "--user-data-dir=" + prof, "--no-first-run", "--no-default-browser-check",
@@ -73,7 +75,36 @@ async function dragRight(dx) {
 }
 const fileHas = (f, re) => 'fetch(S(' + JSON.stringify(f) + ')).then(r=>r.text()).then(t=>' + re + '.test(t))';
 
-try {
+// batch: frame 1 confirmed starts a job at once (held running), 2 then
+// queues behind it, 3 merges into that queued job (PUT); then the hold
+// goes and both land
+async function batchFlow() {
+  const out = {}, scans = '[...bj.values()].filter(j=>j.op==="scan")',
+    jobsNow = scans + '.map(j=>[j.id,j.state,j.frames]).sort((a,b)=>a[0]-b[0])',
+    badges = ns => ev("[" + ns + '].map(n=>document.getElementById("th"+n).querySelector(".b").textContent)');
+  writeFileSync(hold, "");
+  await ev("startMs=200");
+  await key("Enter");
+  await until(scans + '.some(j=>j.state==="running")', "job 1 running", 20000);
+  out.first = await ev(jobsNow);
+  await until("sel === 2", "frame 2");
+  await key("Enter");
+  await until(scans + ".length === 2", "job 2 queued", 20000);
+  await until("sel === 3", "frame 3");
+  await key("Enter");
+  await until(scans + '.some(j=>j.state==="queued"&&j.frames.join()==="2,3")', "3 merged", 20000);
+  out.jobs = await ev(jobsNow);
+  out.tailJob = await ev('fetch(F("strip_j' + out.jobs[1][0] + '.job")).then(r=>r.text())');
+  out.badges = await badges([1, 2, 3]);
+  rmSync(hold);
+  await until(scans + ".every(j=>j.closed) && landed.includes(1) && landed.includes(2)", "batch landed", 90000);
+  await ev("landQ");
+  out.landed = await ev("landed.slice()");
+  out.files = await ev('api(S("files")).then(l=>l.map(f=>f.name))');
+  return out;
+}
+
+run: try {
   await connect();
   const { targetId } = await cdp("Target.createTarget", { url: "about:blank" });
   ({ sessionId: sid } = await cdp("Target.attachToTarget", { targetId, flatten: true }));
@@ -94,6 +125,12 @@ try {
   // the live bar fills while the preview scans, then the frames
   await until('typeof lv === "object" && lv.line > 0', "live rows", 30000);
   await until('document.querySelectorAll(".th").length === 6 && sel === 1 && document.getElementById("big").width > 0', "frames");
+  if (mode === "batch") {
+    console.log(JSON.stringify(Object.assign({ strip }, await batchFlow())));
+    break run;
+  }
+  // the scan waits for the last decision (the countdown restarts on each)
+  await ev("startMs=1e9");
   const scanFile = await ev('fetch(S("files/strip.scan")).then(r=>r.text())');
   // frame 1 (qwerty): C + C + M - (w w d), turn right (g), confirm (Enter)
   for (const k of ["w", "w", "d"]) await key(k);
@@ -142,6 +179,7 @@ try {
     await until("sel === 5", "frame 5");
   }
   await ev('window.stSeen=[];new MutationObserver(()=>stSeen.push(document.getElementById("rst").textContent+" |band "+(fzAt&&fzAt[2]))).observe(document.getElementById("rst"),{childList:true,characterData:true,subtree:true})');
+  await ev("startMs=3000");
   await key("x");
   await until('!document.getElementById("toast").hidden || (task && task.op === "scan")', "starting toast");
   if (mode === "fail") {
