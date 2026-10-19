@@ -56,6 +56,9 @@
  *
  * A good preview's job is kept as strip.preview.job: the page plans
  * every size choice from it (the planner excludes frames). */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE             /* accept4 */
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <pthread.h>
@@ -69,6 +72,7 @@
 #include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -100,6 +104,42 @@ static void sock_close(sock_t s)
 #else
     close(s);
 #endif
+}
+
+/* s kept from the children: an ftpoc that held a connection's socket
+ * kept it open past ftwebd's close (no EOF: a POST's answer "lasted" as
+ * long as the scan it started, and the browser's few connections per
+ * host ran out). The listening socket is set before any child runs */
+static void sock_private(sock_t s)
+{
+#ifdef _WIN32
+    SetHandleInformation((HANDLE)s, HANDLE_FLAG_INHERIT, 0);
+#else
+    int fl = fcntl(s, F_GETFD);
+    if (fl >= 0)
+        fcntl(s, F_SETFD, fl | FD_CLOEXEC);
+#endif
+}
+
+/* accept, the connection kept from the children. Linux: at once
+ * (accept4), so a child started meanwhile never gets it; elsewhere set
+ * right after (a child started in between could still take it) */
+static sock_t accept_private(sock_t ls)
+{
+    sock_t c;
+#if defined(__linux__) && defined(SOCK_CLOEXEC)
+    c = accept4(ls, NULL, NULL, SOCK_CLOEXEC);
+    if (c >= 0 || errno != ENOSYS)
+        return c;
+#endif
+    c = accept(ls, NULL, NULL);
+#ifdef _WIN32
+    if (c != INVALID_SOCKET)
+#else
+    if (c >= 0)
+#endif
+        sock_private(c);
+    return c;
 }
 
 /* strip and file names: [A-Za-z0-9._-], 1..64, no leading '.' */
@@ -802,6 +842,7 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);
 #endif
     ls = socket(AF_INET, SOCK_STREAM, 0);
+    sock_private(ls);
     setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof one);
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
@@ -819,7 +860,7 @@ int main(int argc, char **argv)
         sock_t *c = malloc(sizeof *c);
         if (!c)
             continue;
-        *c = accept(ls, NULL, NULL);
+        *c = accept_private(ls);
 #ifdef _WIN32
         if (*c == INVALID_SOCKET) {
 #else

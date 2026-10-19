@@ -347,6 +347,35 @@ def test_stop_after_the_steps_output(binary, tmp_path):
         s.close()
 
 
+def test_post_ends_while_its_scan_runs(held):
+    """the POST that starts a scan is answered and its connection closed
+    while the scan runs: the child (ftpoc) holds none of ftwebd's sockets
+    (it did: EOF came only as the scan ended, and the browser's few
+    connections per host ran out)"""
+    previewed(held)
+    held.hold.touch()
+    body = b"op=scan&strip=a"
+    with socket.create_connection(("127.0.0.1", held.port)) as c:
+        c.settimeout(3)
+        c.sendall(b"POST /api/tasks HTTP/1.1\r\nContent-Type: application/"
+                  b"x-www-form-urlencoded\r\nContent-Length: %d\r\n\r\n"
+                  % len(body) + body)
+        data = b""
+        while True:
+            try:
+                d = c.recv(65536)
+            except socket.timeout:
+                pytest.fail("no EOF while the scan runs: %r" % data)
+            if not d:
+                break
+            data += d
+    assert data.startswith(b"HTTP/1.1 202 "), data
+    tid = json.loads(data.partition(b"\r\n\r\n")[2])["id"]
+    assert held.req("GET", "/api/tasks/%d" % tid)[1]["state"] == "running"
+    held.hold.unlink()
+    assert held.wait(tid)["exit"] == 0
+
+
 def test_jobs_run_in_order(held):
     """a POST while the scanner is busy is queued (no more 409): the
     jobs run one after the other in order; a job's lines stay readable
