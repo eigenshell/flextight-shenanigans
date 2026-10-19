@@ -11,6 +11,11 @@
 #include <unistd.h>
 #endif
 #include "http.h"
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <windows.h>            /* after http.h's winsock2.h */
+#endif
 
 static const char *reason(int code)
 {
@@ -280,13 +285,40 @@ static const char *mime(const char *path)
     return "application/octet-stream";
 }
 
+FILE *http_fopen_read(const char *path)
+{
+#ifdef _WIN32
+    /* fopen does not share delete: a reader would make the writer's
+     * MoveFileEx over path fail (sharing violation) */
+    HANDLE h = CreateFileA(path, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE |
+                           FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    int fd;
+    FILE *f;
+    if (h == INVALID_HANDLE_VALUE)
+        return NULL;
+    fd = _open_osfhandle((intptr_t)h, _O_RDONLY | _O_BINARY);
+    if (fd < 0) {
+        CloseHandle(h);
+        return NULL;
+    }
+    f = _fdopen(fd, "rb");
+    if (!f)
+        _close(fd);                 /* closes h too */
+    return f;
+#else
+    return fopen(path, "rb");
+#endif
+}
+
 /* path with cache headers ("Cache-Control: ...\r\n" + more); from >= 0:
  * a range from there (http_file_from) */
 static void send_file(sock_t s, const char *path, const char *cache,
                       long from)
 {
     char h[500], buf[65536], rng[100] = "";
-    FILE *f = fopen(path, "rb");
+    FILE *f = http_fopen_read(path);
     long n, len;
     size_t got;
     int k;

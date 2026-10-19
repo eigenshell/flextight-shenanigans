@@ -92,8 +92,19 @@ static pthread_mutex_t file_mu = PTHREAD_MUTEX_INITIALIZER;
 static int replace(const char *tmp, const char *path, int rc)
 {
 #ifdef _WIN32
-    /* rename() does not replace an existing file there */
-    rc = rc || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING);
+    /* rename() does not replace an existing file there. Readers share
+     * delete (http_fopen_read); anything else holding path briefly (a
+     * virus scanner, an indexer): a few tries */
+    int i;
+    for (i = 0; !rc && !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING);
+         i++) {
+        DWORD e = GetLastError();
+        if (i == 9 || (e != ERROR_SHARING_VIOLATION &&
+                       e != ERROR_ACCESS_DENIED))
+            rc = 1;
+        else
+            Sleep(20);
+    }
 #else
     rc = rc || rename(tmp, path) != 0;
 #endif
@@ -106,7 +117,7 @@ static int replace(const char *tmp, const char *path, int rc)
 static int copy_file(const char *from, const char *to)
 {
     char buf[4096], tmp[420];
-    FILE *in = fopen(from, "rb"), *out;
+    FILE *in = http_fopen_read(from), *out;     /* from: replaceable */
     size_t n;
     int rc = 0;
     if (!in)
