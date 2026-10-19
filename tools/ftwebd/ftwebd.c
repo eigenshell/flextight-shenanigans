@@ -329,6 +329,20 @@ static void api_put(sock_t s, const char *dir, const char *name,
         http_json(s, 200, "{\"ok\":true}");
 }
 
+/* 1 if the form text has key= (decodable or not) */
+static int has_param(const char *qs, const char *key)
+{
+    size_t kl = strlen(key);
+    const char *p = qs;
+    while (p && *p) {
+        if (strncmp(p, key, kl) == 0 && p[kl] == '=')
+            return 1;
+        p = strchr(p, '&');
+        p = p ? p + 1 : NULL;
+    }
+    return 0;
+}
+
 /* a job's text checked as ftpoc reads it, and against this scanner's
  * optics (ftpoc moves by it); 0, or -1 with msg */
 static int job_ok(const char *text, size_t n, char *msg, size_t cap)
@@ -376,20 +390,26 @@ static void api_task_start(sock_t s, const http_req *r)
             return;
         }
     }
-    /* job=: the share job's text (else the box copies strip.job) */
-    job = malloc(HTTP_BODY_MAX);
-    if (!job) {
-        http_error(s, 500, "out of memory");
-        return;
-    }
-    if (http_param(body, "job", job, HTTP_BODY_MAX)) {
-        free(job);
-        job = NULL;
-    } else if (job_ok(job, strlen(job), err, sizeof err)) {
-        snprintf(msg, sizeof msg, "job: %s", err);
-        free(job);
-        http_error(s, 422, msg);
-        return;
+    /* job=: the share job's text (else the box copies strip.job); read
+     * only for a share step, refused when it does not decode (a NUL, a
+     * bad %XX, over HTTP_BODY_MAX) */
+    job = NULL;
+    if (strcmp(op, "scan") == 0 && rq.share && has_param(body, "job")) {
+        job = malloc(HTTP_BODY_MAX);
+        if (!job) {
+            http_error(s, 500, "out of memory");
+            return;
+        }
+        rc = http_param(body, "job", job, HTTP_BODY_MAX);
+        if (rc)
+            snprintf(err, sizeof err, "not form text (a NUL, a bad %%XX "
+                     "or too long)");
+        if (rc || job_ok(job, strlen(job), err, sizeof err)) {
+            snprintf(msg, sizeof msg, "job: %s", err);
+            free(job);
+            http_error(s, 422, msg);
+            return;
+        }
     }
     rq.job = job;
     rq.njob = job ? strlen(job) : 0;

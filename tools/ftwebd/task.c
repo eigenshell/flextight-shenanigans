@@ -278,6 +278,8 @@ int task_start(const task_req *rq, int *id, char *err, size_t errn)
     T.nlines = 0;
     T.npart = 0;
     if (run_step(0, err, errn)) {
+        if (strcmp(rq->op, "scan") == 0 && rq->share)
+            remove(job);        /* no task: its job file goes too */
         pthread_mutex_unlock(&T.mu);
         return -1;
     }

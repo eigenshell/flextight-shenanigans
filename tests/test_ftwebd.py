@@ -225,6 +225,11 @@ def test_scan_chain_share_then_archive(arc):
     assert argv_log(arc)[-2][0:2] == ["frames", "--detail"]
     assert argv_log(arc)[-2][5:7] == ["--film", "slide"]
     assert argv_log(arc)[-2][-1] == str(arc.cwd / "nas" / "a" / "strip_j3")
+    # job= is the share job's: without a share step it is not read
+    code, t = arc.req("POST", "/api/tasks", {"op": "scan", "strip": "a",
+                                             "share": "0", "arc": "2",
+                                             "film": "neg", "job": "bogus"})
+    assert code == 202 and arc.wait(t["id"])["exit"] == 0
 
 
 def test_microcode_passed_to_every_step(binary, tmp_path):
@@ -562,6 +567,13 @@ def test_scan_job_from_the_post(srv):
                                              "job": "[strip]\nbogus = 1\n"})
     assert code == 422 and e["error"].startswith("job: ")
     assert "bogus" in e["error"]
+    # a job= that does not decode (a NUL, a bad %XX) is refused, never
+    # taken for "no job=" (a copy of strip.job)
+    for bad in ("%00", "%zz", "[strip]%00x"):
+        code, e = srv.req("POST", "/api/tasks",
+                          "op=scan&strip=a&job=" + bad)
+        assert code == 422 and e["error"].startswith("job: "), bad
+    assert len(argv_log(srv)) == 2
 
 
 def test_scan_needs_a_job(srv):
