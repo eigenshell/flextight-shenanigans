@@ -7,6 +7,7 @@ checks on names and bodies (strip.job, strip.print)."""
 import json
 import os
 import re
+import resource
 import shutil
 import socket
 import subprocess
@@ -340,6 +341,105 @@ def test_jobs_run_in_order(held):
     assert "strips/a/strip_j2.job" in ev[0][1]
     assert ev[-1][1] == "ftwebd exit 0"
     assert held.events(2, since=3) == ev[3:]
+
+
+def test_ring_wraps_and_slots_recycle(binary, tmp_path):
+    """more than 4096 lines and more than 8 jobs: an ended job's slot is
+    recycled oldest first (gone: 404), and an ended job replays only the
+    lines the shared ring still holds, from since=0 or an older since"""
+    s = Server(binary, tmp_path, 0, env={"FAKE_FTPOC_ROWS": "40000"})
+    try:
+        previewed(s)
+        job = only((s.cwd / "strips" / "a" / "strip.job").read_text(), {1})
+        first, nlines = {}, s.req("GET", "/api/tasks/1")[1]["lines"]
+        for want in range(2, 11):
+            code, t = s.req("POST", "/api/tasks", {"op": "scan",
+                                                   "strip": "a", "job": job})
+            assert code == 202 and t["id"] == want
+            done = s.wait(want)
+            assert done["exit"] == 0
+            first[want] = nlines + 1
+            nlines += done["lines"]
+        gone = nlines - 4096
+        assert gone > first[4]                  # jobs 2-3 wholly overwritten
+        # 9 jobs after the preview: jobs 1 and 2's slots went to 9 and 10
+        # (no such job: null)
+        assert s.req("GET", "/api/tasks/1") == (200, None)
+        assert s.req("GET", "/api/tasks/2") == (200, None)
+        assert s.req("GET", "/api/tasks/3")[1]["state"] == "done"
+        assert s.events(3) == []                # its lines all overwritten
+        k = max(t for t in first if first[t] <= gone)   # partly overwritten
+        ev = s.events(k)
+        assert ev[0][0] == gone - first[k] + 2
+        assert [i for i, _ in ev] == list(range(ev[0][0], ev[-1][0] + 1))
+        assert ev[-1][1] == "ftwebd exit 0"
+        assert s.events(k, since=1) == ev
+        ev = s.events(10)
+        assert len(ev) == s.req("GET", "/api/tasks/10")[1]["lines"]
+        assert "strips/a/strip_j10.job" in ev[0][1]
+    finally:
+        s.close()
+
+
+def fds_free(pid, free):
+    """an fd limit leaving `free` descriptors to the process pid: the
+    number of its (free + 1)th unused one (fds above it stay open)"""
+    fds = {int(f) for f in os.listdir("/proc/%d/fd" % pid)}
+    n = 0
+    while True:
+        if n not in fds:
+            if not free:
+                return n
+            free -= 1
+        n += 1
+
+
+@pytest.mark.skipif(not hasattr(resource, "prlimit") or os.geteuid() == 0,
+                    reason="needs Linux prlimit, not as root")
+def test_job_that_cannot_start(held):
+    """a job whose first step cannot spawn (no fds for its pipe): queued,
+    it ends at once (its error, exit -1) and its job file goes; on an
+    idle box the POST is refused (422) and no slot is kept"""
+    previewed(held)
+    job = (held.cwd / "strips" / "a" / "strip.job").read_text()
+    d = held.cwd / "strips" / "a"
+    held.hold.touch()
+    for want in (2, 3):
+        code, t = held.req("POST", "/api/tasks", {"op": "scan", "strip": "a",
+                                                  "job": job})
+        assert code == 202 and t["id"] == want
+    time.sleep(0.3)                             # connections closed
+    pid = held.p.pid
+    lim = resource.prlimit(pid, resource.RLIMIT_NOFILE)
+    # job 2's pipe closes as it ends: one fd free, not the two of a pipe
+    resource.prlimit(pid, resource.RLIMIT_NOFILE, (fds_free(pid, 0), lim[1]))
+    held.hold.unlink()
+    for _ in range(250):                        # no HTTP: accept has no fd
+        if not (d / "strip_j3.job").exists():
+            break
+        time.sleep(0.02)
+    time.sleep(0.1)
+    resource.prlimit(pid, resource.RLIMIT_NOFILE, lim)
+    assert held.wait(2)["exit"] == 0
+    t = held.wait(3)
+    assert t["exit"] == -1 and t["lines"] == 2
+    ev = held.events(3)
+    assert ev[0][1].startswith("pipe: ")
+    assert ev[1][1] == "ftwebd exit -1"
+    assert not (d / "strip_j3.job").exists()
+    # idle: the POST is refused, no slot kept (a preview: no file to
+    # write, so the request's only fds are its socket and the pipe's)
+    time.sleep(0.3)
+    resource.prlimit(pid, resource.RLIMIT_NOFILE, (fds_free(pid, 2), lim[1]))
+    code, e = held.req("POST", "/api/tasks",
+                       {"op": "preview", "strip": "a", "film": "neg"})
+    resource.prlimit(pid, resource.RLIMIT_NOFILE, lim)
+    assert code == 422 and e["error"].startswith("pipe: ")
+    assert held.req("GET", "/api/tasks/4") == (200, None)
+    assert held.req("GET", "/api/tasks/current")[1]["id"] == 3
+    code, t = held.req("POST", "/api/tasks", {"op": "scan", "strip": "a",
+                                              "job": job})
+    assert code == 202 and t["id"] == 5 and held.wait(5)["exit"] == 0
 
 
 def test_stop(slow):

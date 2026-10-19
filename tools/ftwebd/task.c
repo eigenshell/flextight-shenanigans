@@ -220,30 +220,37 @@ static void finish(int code)
 
 static void *reader(void *arg);
 
-/* under T.mu: job j runs (its first step and the reader). 0, or -1 with
- * err and j still T.run (the caller ends or drops it); a first step that
- * cannot start removes the job file ftpoc never read */
-static int run_job(batch_job *j, char *err, size_t errn)
+/* under T.mu: a job that did not start; its job file goes. -1 */
+static int not_started(const batch_job *j)
 {
     char job[310];
+    if (j->share) {
+        job_file(job, sizeof job, j);
+        remove(job);
+    }
+    return -1;
+}
+
+/* under T.mu: job j runs (its first step and the reader). 0, or -1 with
+ * err and j still T.run (the caller ends or drops it); a job that cannot
+ * start removes its job file */
+static int run_job(batch_job *j, char *err, size_t errn)
+{
     pthread_t th;
     T.run = j;
     j->state = JOB_RUNNING;
     j->first = T.nlines + 1;
     T.npart = 0;
     build(j);
-    if (run_step(0, err, errn)) {
-        if (j->share) {
-            job_file(job, sizeof job, j);
-            remove(job);
-        }
-        return -1;
-    }
+    if (run_step(0, err, errn))
+        return not_started(j);
     if (pthread_create(&th, NULL, reader, NULL)) {
-        /* cannot happen in practice */
+        /* cannot happen in practice: the child is stopped and reaped
+         * here (its pipe closed), its unread output lost */
         snprintf(err, errn, "cannot start the reader thread");
         proc_stop(&T.p);
-        return -1;
+        proc_wait(&T.p);
+        return not_started(j);
     }
     pthread_detach(th);
     changed();
