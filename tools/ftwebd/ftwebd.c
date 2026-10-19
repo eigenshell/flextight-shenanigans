@@ -39,20 +39,44 @@
  *                    (job: the share job's text, kept as strip_j<id>.job;
  *                    none: a copy of strip.job. ftpoc's outputs are
  *                    named after it: strip_j<id>_winNN.raw)
- *                    202 {id}: queued at the batch's tail (507: 8 jobs
- *                    queued or running)
+ *                    202 {id}: queued at the batch's tail, started at
+ *                    once when idle (404 no such strip, 422 a bad
+ *                    request or job, 507: 8 jobs queued or running)
  *   GET  /api/tasks/current, /api/tasks/{id}
- *   GET  /api/tasks/{id}/events?since=k   SSE, id = line number
- *   POST /api/tasks/{id}/stop
- *   PUT  /api/tasks/{id}/job              a queued scan's job (validated);
- *                                         409 once it has started
- *   DELETE /api/tasks/{id}                a queued job dropped, or the
- *                                         running one stopped
- *   DELETE /api/tasks?state=queued        every queued job dropped
+ *                    {id, op, strip, state, exit, stopped, lines}; state
+ *                    queued|running|done|failed|stopped; current: the
+ *                    running job, else the latest; null: none
+ *   GET  /api/tasks/{id}/events?since=k   SSE, id = line number (since=
+ *                                         or Last-Event-ID); a queued
+ *                                         job's waits for its start;
+ *                                         event end after its last line
+ *                                         (ftwebd exit <code>), gone:
+ *                                         dropped or its slot reused
+ *   POST /api/tasks/{id}/stop             the running job (409 not
+ *                                         running, 404 none)
+ *   PUT  /api/tasks/{id}/job              a queued scan's job (validated,
+ *                                         422; a preview's: 422); 409
+ *                                         once it has started, 404 none
+ *   DELETE /api/tasks/{id}                {"ok","was":"queued"}: dropped
+ *                                         (its job file too), "running":
+ *                                         stopped; 409 ended, 404 none
+ *   DELETE /api/tasks?state=queued        {"dropped":n}: every queued job
+ *                                         dropped (box-wide)
  *   GET  /api/batch/events?since=rev      SSE, id = rev: {"rev","jobs":
  *                                         [{id, op, strip, state, exit}]}
- *                                         at once (unless since = the
- *                                         current rev) and on every change
+ *                                         at once (unless since= or
+ *                                         Last-Event-ID is the current
+ *                                         rev) and on every change
+ *
+ * The batch: 8 slots, jobs run one after the other in the order queued;
+ * one that fails or is stopped is marked so and the next runs; ended
+ * jobs' slots are reused oldest first, their lines readable (one ring
+ * across jobs) until newer lines overwrite them.
+ *
+ * Every file written goes to <file>.tmp and is renamed over it, under
+ * one lock: a GET racing a write gets the old file or the new one. The
+ * sockets are close-on-exec (Windows: not inheritable): ftpoc children
+ * hold none of them.
  *
  * A good preview's job is kept as strip.preview.job: the page plans
  * every size choice from it (the planner excludes frames). */
