@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ft_calib.h"
 #include "ft_develop.h"
 #include "ft_dmax.h"
 #include "ft_dng.h"
@@ -25,6 +26,7 @@
 #include "ft_share.h"
 #include "ft_share_cut.h"
 #include "ft_share_print.h"
+#include "ft_stream_detect.h"
 #include "ft_zip.h"
 #include "ftweb.h"
 
@@ -46,6 +48,9 @@ typedef struct {
     int frame;
     ft_image im;
     ft_image proxy;
+    int measured;               /* roll and pf: its own balance */
+    ft_print_roll roll;
+    ft_print_frame pf;
 } pframe;
 
 struct ftw {
@@ -58,15 +63,25 @@ struct ftw {
     int has_print;
     int n;
     wframe f[FT_MAX_FRAMES];    /* by frame number */
-    int measured;
-    ft_print_roll roll;
+    int measured;               /* per-frame balance: each its own */
+    ft_print_roll rolls[FT_MAX_FRAMES];
     ft_print_frame pfr[FT_MAX_FRAMES];
     int npv;                    /* the preview's frames (ftw_preview_load) */
     pframe pv[FT_MAX_FRAMES];
-    int pv_measured;
-    ft_print_roll pv_roll;
-    ft_print_frame pv_pfr[FT_MAX_FRAMES];
     double live_white[3];       /* ftw_live_rows: the preview's white */
+    /* the streamed preview (ftw_stream_*): rows calibrated as they come,
+     * kept (frames are cut from them), fed to the streaming detector */
+    int st_on, st_px;
+    long st_x;
+    ft_axes st_ax;
+    float *st_dark, *st_white;  /* px x 3 each */
+    float *st_prev;             /* the last two flat-fielded raw lines */
+    long st_raw;                /* raw lines in */
+    float *st_t;                /* RGB-aligned lines: st_n of st_cap */
+    long st_n, st_cap;
+    int st_faul[3][FT_FAUL_MAX], st_fcount[3];
+    ft_sdet st_det;
+    int st_grid;
     int disp_frame;             /* the cached screen copy's frame, 0 none */
     int disp_edge;              /* and the long edge it was asked at */
     ft_image disp;
@@ -77,6 +92,9 @@ struct ftw {
 };
 
 static const char *TYPES[] = { "full", "half", "panorama", "partial" };
+
+static void stream_free(ftw *w);
+static int stream_recut(ftw *w, int frame, ft_err *e);
 
 static int fail(ftw *w, const char *msg)
 {
@@ -181,7 +199,14 @@ static void preview_free(ftw *w)
         ft_image_free(&w->pv[i].proxy);
     }
     w->npv = 0;
-    w->pv_measured = 0;
+}
+
+/* the preview's frames to be measured again (another emulsion) */
+static void pv_unmeasure(ftw *w)
+{
+    int i;
+    for (i = 0; i < w->npv; i++)
+        w->pv[i].measured = 0;
 }
 
 void ftw_free(ftw *w)
@@ -192,6 +217,7 @@ void ftw_free(ftw *w)
     for (i = 0; i < w->n; i++)
         frame_free(&w->f[i]);
     preview_free(w);
+    stream_free(w);
     ft_image_free(&w->disp);
     free(w->out);
     free(w);
@@ -314,6 +340,7 @@ int ftw_job_load(ftw *w, const char *text, size_t n)
 {
     if (job_parse(w, text, n, &w->job))
         return -1;
+    stream_free(w);                     /* the box's job: not the stream's */
     w->has_job = 1;
     w->has_plan = 0;
     return 0;
@@ -358,6 +385,36 @@ static long preview_x(const char *t, size_t n)
     return meta_key(t, n, "x");
 }
 
+/* job frame f as the page's frame object: its box in preview px (ax),
+ * its planned px, ppi, group and done (plan p, NULL none) */
+static int frame_json(ftw *w, const ft_job_frame *f, const ft_job *p,
+                      const ft_axes *ax, int first)
+{
+    const ft_job_frame *c = NULL;
+    double px = 0, dof = 0;
+    int g;
+    for (g = 0; p && g < p->nframes; g++)
+        if (p->f[g].index == f->index)
+            c = &p->f[g];
+    if (c && c->include && p->share > 0)
+        px = ft_job_share_px(p, c);
+    if (px > 0)
+        dof = ftw_dof95(w, c->ppi * ft_job_bin(c), ft_job_bin(c));
+    return outf(w, "%s{\"n\":%d,\"type\":\"%s\",\"low\":%s,"
+                   "\"x\":%.1f,\"y\":%.1f,\"w\":%.1f,\"h\":%.1f,"
+                   "\"px\":%g,\"ppi\":%g,\"group\":%d,\"done\":%s,"
+                   "\"dof\":%.0f}",
+                first ? "" : ",", f->index,
+                (unsigned)f->type <= 3 ? TYPES[f->type] : "full",
+                f->confidence_low ? "true" : "false",
+                (f->y0 - ax->y_mm0) / ax->y_mm_per_line,
+                (f->x0 - ax->x_mm0) / ax->x_mm_per_px,
+                f->len / ax->y_mm_per_line, f->width / ax->x_mm_per_px, px,
+                px > 0 ? c->ppi : 0, px > 0 ? c->group : 0,
+                px > 0 && c->done ? "true" : "false",
+                isfinite(dof) ? dof : 0);
+}
+
 int ftw_job_json(ftw *w, const char *preview_txt, size_t n)
 {
     const ft_job *j = &w->job, *p = w->has_plan ? &w->plan : NULL;
@@ -381,29 +438,8 @@ int ftw_job_json(ftw *w, const char *preview_txt, size_t n)
               j->film == FT_FILM_SLIDE ? "slide" : "neg");
     rc = rc ? rc : out_str(w, j->holder);
     rc = rc ? rc : outf(w, ",\"windows\":%d,\"frames\":[", ng);
-    for (i = 0; !rc && i < j->nframes; i++) {
-        const ft_job_frame *f = &j->f[i], *c = NULL;
-        double px = 0, dof = 0;
-        for (g = 0; p && g < p->nframes; g++)
-            if (p->f[g].index == f->index)
-                c = &p->f[g];
-        if (c && c->include && p->share > 0)
-            px = ft_job_share_px(p, c);
-        if (px > 0)
-            dof = ftw_dof95(w, c->ppi * ft_job_bin(c), ft_job_bin(c));
-        rc = outf(w, "%s{\"n\":%d,\"type\":\"%s\",\"low\":%s,"
-                     "\"x\":%.1f,\"y\":%.1f,\"w\":%.1f,\"h\":%.1f,"
-                     "\"px\":%g,\"ppi\":%g,\"group\":%d,\"done\":%s,\"dof\":%.0f}",
-                  i ? "," : "", f->index,
-                  (unsigned)f->type <= 3 ? TYPES[f->type] : "full",
-                  f->confidence_low ? "true" : "false",
-                  (f->y0 - ax.y_mm0) / ax.y_mm_per_line,
-                  (f->x0 - ax.x_mm0) / ax.x_mm_per_px,
-                  f->len / ax.y_mm_per_line, f->width / ax.x_mm_per_px, px,
-                  px > 0 ? c->ppi : 0, px > 0 ? c->group : 0, px > 0 && c->done ? "true"
-                                                           : "false",
-                  isfinite(dof) ? dof : 0);
-    }
+    for (i = 0; !rc && i < j->nframes; i++)
+        rc = frame_json(w, &j->f[i], p, &ax, i == 0);
     return rc ? rc : outf(w, "]}");
 }
 
@@ -434,6 +470,8 @@ int ftw_frame_box(ftw *w, int frame, const double *box,
     if (ft_job_validate(&j, &w->lens, &e))
         return fail_e(w, &e);
     w->job = j;
+    if (stream_recut(w, frame, &e))     /* a streamed frame: cut again */
+        return fail_e(w, &e);
     len = ft_job_write_buf(&j, NULL, 0);
     out_reset(w);
     if (out_room(w, len))
@@ -492,7 +530,7 @@ int ftw_print_load(ftw *w, const char *text, size_t n)
     w->pf = pf;
     w->has_print = 1;
     w->measured = 0;
-    w->pv_measured = 0;
+    pv_unmeasure(w);
     w->disp_frame = 0;
     return 0;
 }
@@ -504,7 +542,7 @@ int ftw_print_new(ftw *w, const char *emulsion)
     ft_print_file_init(&w->pf, emulsion);
     w->has_print = 1;
     w->measured = 0;
-    w->pv_measured = 0;
+    pv_unmeasure(w);
     w->disp_frame = 0;
     return 0;
 }
@@ -530,7 +568,7 @@ int ftw_print_emulsion(ftw *w, const char *emulsion)
     }
     w->pf = pf;
     w->measured = 0;
-    w->pv_measured = 0;
+    pv_unmeasure(w);
     out_reset(w);
     return outf(w, "%s", em->id) ? -1 : dropped;
 }
@@ -772,13 +810,14 @@ static const ft_emulsion *emulsion(ftw *w)
     return em;
 }
 
+/* per-frame balance: each frame measured alone (ft_share_print_balance)
+ * with its own film base (its sidecar's, else estimated from it), as
+ * ftdev print does one frame a call */
 int ftw_measure(ftw *w)
 {
-    static double bsum[3][FT_MAX_FRAMES];
-    const ft_image *proxies[FT_MAX_FRAMES];
     const ft_emulsion *em = emulsion(w);
     float base[3];
-    int i, c, nbase = 0, idx[FT_MAX_FRAMES], ni = 0;
+    int i, c, idx[FT_MAX_FRAMES], ni = 0, estimated = 0;
     ft_err e;
 
     if (!em)
@@ -797,21 +836,6 @@ int ftw_measure(ftw *w)
                                                          : "negatives");
             return fail(w, m);
         }
-        if (f->sc.has_film_base) {
-            for (c = 0; c < 3; c++)
-                bsum[c][nbase] = f->sc.film_base[c];
-            nbase++;
-        }
-        proxies[i] = &f->proxy;
-    }
-    if (nbase) {
-        for (c = 0; c < 3; c++)
-            base[c] = (float)ft_print_median(bsum[c], nbase);
-    } else {
-        if (ft_render_base_from_frames(proxies, w->n, em->mode, base, &e))
-            return fail_e(w, &e);
-        outf(w, "note: no film_base in the sidecars; estimated from the "
-                "frames\n");
     }
     if (job_now(w)) {
         const ft_job *j = job_now(w);
@@ -823,12 +847,25 @@ int ftw_measure(ftw *w)
     }
     if (ft_print_file_unknown(&w->pf, idx, ni, &e))
         outf(w, "warning: strip.print: %s\n", e.msg);
-    if (ft_print_roll_measure(em, base, proxies, w->n, w->pfr, &w->roll,
-                              &e))
-        return fail_e(w, &e);
-    if (w->n < 6 && em->balance == &ft_pm_balance_frontier)
-        outf(w, "note: %d frame%s: print a roll's frames together for the "
-                "roll's colour balance\n", w->n, w->n == 1 ? "" : "s");
+    for (i = 0; i < w->n; i++) {
+        const wframe *f = &w->f[i];
+        if (f->sc.has_film_base) {
+            for (c = 0; c < 3; c++)
+                base[c] = (float)f->sc.film_base[c];
+        } else {
+            const ft_image *one[1];
+            one[0] = &f->proxy;
+            if (ft_render_base_from_frames(one, 1, em->mode, base, &e))
+                return fail_e(w, &e);
+            estimated = 1;
+        }
+        if (ft_share_print_balance(em, base, &f->proxy, &w->rolls[i],
+                                   &w->pfr[i], &e))
+            return fail_e(w, &e);
+    }
+    if (estimated)
+        outf(w, "note: no film_base in the sidecars; estimated from the "
+                "frames\n");
     w->measured = 1;
     return 0;
 }
@@ -846,7 +883,7 @@ static int print_one(ftw *w, int i, unsigned char **jpg, size_t *n)
         return -1;
     if (frame_image(f, &im, &e))
         return fail_e(w, &e);
-    rc = ft_share_print_frame(em, &w->roll, &w->pfr[i],
+    rc = ft_share_print_frame(em, &w->rolls[i], &w->pfr[i],
                               ft_print_file_clicks(&w->pf, f->frame),
                               ft_print_file_rotation(&w->pf, f->frame), &im,
                               &f->sc, f->frame, jpg, n, w->text, &info, &e);
@@ -992,12 +1029,47 @@ int ftw_display(ftw *w, int frame, int long_edge, int *pw, int *ph)
         w->disp_frame = frame;
         w->disp_edge = long_edge;
     }
-    return rgba_out(w, em, &w->roll, &w->pfr[i],
+    return rgba_out(w, em, &w->rolls[i], &w->pfr[i],
                     ft_print_file_clicks(&w->pf, frame), &w->disp,
                     ft_print_file_rotation(&w->pf, frame), pw, ph);
 }
 
 /* ------------------------------------------------------------ preview */
+
+/* job frame f's box cut from the preview t (nl lines x px, RGB-aligned;
+ * ax its axes) into p, x along, as a share frame is cut, with its stats
+ * proxy; to be measured. 1 cut, 0 off the preview, -1 with e filled */
+static int cut_pframe(const float *t, int nl, int px, const ft_axes *ax,
+                      const ft_job_frame *f, pframe *p, ft_err *e)
+{
+    ft_develop_opts co;
+    long l0 = (long)((f->y0 - ax->y_mm0) / ax->y_mm_per_line + 0.5),
+         l1 = (long)((f->y0 + f->len - ax->y_mm0) / ax->y_mm_per_line + 0.5),
+         c0 = (long)((f->x0 - ax->x_mm0) / ax->x_mm_per_px + 0.5),
+         c1 = (long)((f->x0 + f->width - ax->x_mm0) / ax->x_mm_per_px + 0.5);
+    if (l0 < 0) l0 = 0;
+    if (c0 < 0) c0 = 0;
+    if (l1 > nl) l1 = nl;
+    if (c1 > px) c1 = px;
+    if (l1 - l0 < 8 || c1 - c0 < 8)
+        return 0;                       /* off the preview: no frame */
+    memset(&co, 0, sizeof co);
+    co.crop_x = (int)c0;
+    co.crop_y = (int)l0;
+    co.crop_w = (int)(c1 - c0);
+    co.crop_h = (int)(l1 - l0);
+    ft_image_init(&p->im);
+    ft_image_init(&p->proxy);
+    if (ft_crop_orient(t, nl, px, &co, &p->im, e) ||
+        ft_share_print_proxy(&p->im, &p->proxy, e)) {
+        ft_image_free(&p->im);
+        ft_image_free(&p->proxy);
+        return -1;
+    }
+    p->frame = f->index;
+    p->measured = 0;
+    return 1;
+}
 
 int ftw_preview_load(ftw *w, const unsigned short *raw, size_t raw_n,
                      const unsigned short *cal, size_t cal_n,
@@ -1015,6 +1087,7 @@ int ftw_preview_load(ftw *w, const unsigned short *raw, size_t raw_n,
     int i, nl = 0, lines, cl;
 
     preview_free(w);
+    stream_free(w);
     if (!w->has_job)
         return fail(w, "no strip.job");
     if (px < 1 || px > 20000 || x < 0 || bin != pm->bin)
@@ -1032,72 +1105,48 @@ int ftw_preview_load(ftw *w, const unsigned short *raw, size_t raw_n,
         return fail_e(w, &e);
     ft_preview_axes(pm, x, &ax);
     for (i = 0; i < j->nframes; i++) {
-        const ft_job_frame *f = &j->f[i];
-        pframe *p = &w->pv[w->npv];
-        ft_develop_opts co;
-        long l0 = (long)((f->y0 - ax.y_mm0) / ax.y_mm_per_line + 0.5),
-             l1 = (long)((f->y0 + f->len - ax.y_mm0) / ax.y_mm_per_line + 0.5),
-             c0 = (long)((f->x0 - ax.x_mm0) / ax.x_mm_per_px + 0.5),
-             c1 = (long)((f->x0 + f->width - ax.x_mm0) / ax.x_mm_per_px + 0.5);
-        if (l0 < 0) l0 = 0;
-        if (c0 < 0) c0 = 0;
-        if (l1 > nl) l1 = nl;
-        if (c1 > px) c1 = px;
-        if (l1 - l0 < 8 || c1 - c0 < 8)
-            continue;                   /* off the preview: no frame */
-        memset(&co, 0, sizeof co);
-        co.crop_x = (int)c0;
-        co.crop_y = (int)l0;
-        co.crop_w = (int)(c1 - c0);
-        co.crop_h = (int)(l1 - l0);
-        ft_image_init(&p->im);
-        ft_image_init(&p->proxy);
-        if (ft_crop_orient(t, nl, (int)px, &co, &p->im, &e) ||
-            ft_share_print_proxy(&p->im, &p->proxy, &e)) {
-            ft_image_free(&p->im);
-            ft_image_free(&p->proxy);
+        int rc = cut_pframe(t, nl, (int)px, &ax, &j->f[i], &w->pv[w->npv],
+                            &e);
+        if (rc < 0) {
             free(t);
             preview_free(w);
             return fail_e(w, &e);
         }
-        p->frame = f->index;
-        w->npv++;
+        w->npv += rc;
     }
     free(t);
     return w->npv;
 }
 
-/* the strip's balance over the preview's frames (no clicks) */
-static int preview_measure(ftw *w, const ft_emulsion *em)
+/* preview frame i's own balance (per-frame: measured from the frame
+ * alone, locked until its box or the emulsion changes) */
+static int preview_measure(ftw *w, const ft_emulsion *em, int i)
 {
-    const ft_image *proxies[FT_MAX_FRAMES];
     const ft_job *j = &w->job;
+    pframe *p = &w->pv[i];
     float base[3];
     ft_err e;
-    int i;
-    if (w->pv_measured)
+    int c;
+    if (p->measured)
         return 0;
-    if (w->npv == 0)
-        return fail(w, "no preview frames");
     if ((j->film == FT_FILM_SLIDE) != (em->mode == FT_RENDER_SLIDE))
         return fail(w, j->film == FT_FILM_SLIDE
                        ? "the strip is slide film; the emulsion prints "
                          "negatives"
                        : "the strip is negative film; the emulsion prints "
                          "slides");
-    for (i = 0; i < w->npv; i++)
-        proxies[i] = &w->pv[i].proxy;
     if (j->has_film_base) {
-        for (i = 0; i < 3; i++)
-            base[i] = (float)j->film_base[i];
-    } else if (ft_render_base_from_frames(proxies, w->npv, em->mode, base,
-                                          &e)) {
-        return fail_e(w, &e);
+        for (c = 0; c < 3; c++)
+            base[c] = (float)j->film_base[c];
+    } else {
+        const ft_image *one[1];
+        one[0] = &p->proxy;
+        if (ft_render_base_from_frames(one, 1, em->mode, base, &e))
+            return fail_e(w, &e);
     }
-    if (ft_print_roll_measure(em, base, proxies, w->npv, w->pv_pfr,
-                              &w->pv_roll, &e))
+    if (ft_share_print_balance(em, base, &p->proxy, &p->roll, &p->pf, &e))
         return fail_e(w, &e);
-    w->pv_measured = 1;
+    p->measured = 1;
     return 0;
 }
 
@@ -1115,10 +1164,10 @@ static int preview_rgba(ftw *w, int frame, int long_edge, int with_print,
         return fail(w, "no such frame in the preview");
     if (long_edge < 16)
         return fail(w, "display: too small");
-    if (!(em = emulsion(w)) || preview_measure(w, em) ||
+    if (!(em = emulsion(w)) || preview_measure(w, em, i) ||
         fit(w, &w->pv[i].im, long_edge, &d))
         return -1;
-    rc = rgba_out(w, em, &w->pv_roll, &w->pv_pfr[i],
+    rc = rgba_out(w, em, &w->pv[i].roll, &w->pv[i].pf,
                   with_print ? ft_print_file_clicks(&w->pf, frame) : none, &d,
                   with_print ? ft_print_file_rotation(&w->pf, frame) : 0, pw,
                   ph);
@@ -1184,6 +1233,258 @@ int ftw_live_rows(ftw *w, const unsigned short *raw, size_t n, int px,
     }
     w->nout = lines * (size_t)px * 4;
     return (int)lines;
+}
+
+/* ------------------------------------------------------------ stream */
+
+static void stream_free(ftw *w)
+{
+    free(w->st_dark);
+    free(w->st_white);
+    free(w->st_prev);
+    free(w->st_t);
+    ft_sdet_free(&w->st_det);
+    w->st_dark = w->st_white = w->st_prev = w->st_t = NULL;
+    w->st_on = 0;
+    w->st_n = w->st_cap = w->st_raw = 0;
+}
+
+int ftw_stream_begin(ftw *w, const unsigned short *cal, size_t cal_n,
+                     const char *faul, size_t faul_n, const char *meta,
+                     size_t meta_n, int slide)
+{
+    const ft_preview *pm = ft_preview_find("standard");
+    const ft_holder *h = ft_holder_find("24x217");
+    long px = meta_key(meta, meta_n, "px"), x = meta_key(meta, meta_n, "x"),
+         bin = meta_key(meta, meta_n, "bin");
+    ft_film film = slide ? FT_FILM_SLIDE : FT_FILM_NEGATIVE;
+    ft_err e;
+    int i;
+
+    stream_free(w);
+    preview_free(w);
+    if (px < 1 || px > 20000 || x < 0 || bin != pm->bin)
+        return fail(w, "stream: not a standard preview (px, x, bin=12)");
+    if (!cal)
+        return fail(w, "stream: no calibration yet");
+    w->st_dark = malloc((size_t)px * 3 * sizeof *w->st_dark);
+    w->st_white = malloc((size_t)px * 3 * sizeof *w->st_white);
+    w->st_prev = malloc((size_t)px * 6 * sizeof *w->st_prev);
+    if (!w->st_dark || !w->st_white || !w->st_prev) {
+        stream_free(w);
+        return fail(w, "out of memory");
+    }
+    if (ft_split_cal(cal, (int)(cal_n / ((size_t)px * 6)), (int)px,
+                     w->st_dark, w->st_white, &e)) {
+        stream_free(w);
+        return fail_e(w, &e);
+    }
+    for (i = 0; i < 3; i++)
+        w->st_fcount[i] = 0;
+    if (faul)
+        ft_faul_parse(faul, faul_n, w->st_faul, w->st_fcount);
+    ft_preview_axes(pm, x, &w->st_ax);
+    if (ft_sdet_init(&w->st_det, &w->st_ax, (int)px, film, h, &e)) {
+        stream_free(w);
+        return fail_e(w, &e);
+    }
+    w->st_px = (int)px;
+    w->st_x = x;
+    w->st_on = 1;
+    w->st_grid = 0;
+    /* the base job: the stream's frames as they seal */
+    memset(&w->job, 0, sizeof w->job);
+    snprintf(w->job.holder, sizeof w->job.holder, "%s", h->name);
+    w->job.film = film;
+    w->job.focus = FT_FOCUS_SHIFTED;
+    w->has_job = 1;
+    w->has_plan = 0;
+    return 0;
+}
+
+/* detector frame f into the base job (as ft_detect's go: ft_layout_to_job)
+ * and cut from the rows in hand */
+static int stream_seal(ftw *w, const ft_sdet_frame *f, ft_err *e)
+{
+    static ft_layout L;
+    static ft_job j;
+    const ft_holder *h = ft_holder_find("24x217");
+    int has_base;
+    memset(&L, 0, sizeof L);
+    has_base = ft_sdet_base(&w->st_det, L.base);
+    L.nframes = 1;
+    L.f[0].index = f->index;
+    L.f[0].type = f->type;
+    L.f[0].y0 = f->y0;
+    L.f[0].y1 = f->y1;
+    L.f[0].x0 = f->x0;
+    L.f[0].x1 = f->x1;
+    L.f[0].confidence_low = f->grid;
+    ft_layout_to_job(&L, h, w->job.film, 2000, 0, &j);
+    if (w->job.nframes == FT_MAX_FRAMES || w->npv == FT_MAX_FRAMES)
+        return ft_fail(e, "stream: too many frames");
+    /* the film base: the first frame's, kept for every frame after */
+    if (w->job.nframes == 0 && has_base) {
+        memcpy(w->job.film_base, j.film_base, sizeof j.film_base);
+        w->job.has_film_base = 1;
+    }
+    w->job.f[w->job.nframes++] = j.f[0];
+    w->st_grid |= f->grid;
+    if (cut_pframe(w->st_t, (int)w->st_n, w->st_px, &w->st_ax, &j.f[0],
+                   &w->pv[w->npv], e) < 0)
+        return -1;
+    if (w->pv[w->npv].frame == f->index)
+        w->npv++;
+    return 0;
+}
+
+/* the frames sealed since job frame `from`, as JSON -> out */
+static int stream_out(ftw *w, int from)
+{
+    int i, rc = 0;
+    out_reset(w);
+    rc = outf(w, "{\"lines\":%ld,\"grid\":%s,\"frames\":[", w->st_n,
+              w->st_grid ? "true" : "false");
+    for (i = from; !rc && i < w->job.nframes; i++)
+        rc = frame_json(w, &w->job.f[i], NULL, &w->st_ax, i == from);
+    rc = rc ? rc : outf(w, "]}");
+    return rc ? -1 : w->job.nframes - from;
+}
+
+int ftw_stream_feed(ftw *w, const unsigned short *raw, size_t n)
+{
+    size_t row = (size_t)w->st_px * 3, lines, i;
+    int from = w->job.nframes;
+    float *ff;
+    ft_err e;
+    if (!w->st_on)
+        return fail(w, "stream: not begun");
+    if (n % (row * 2))
+        return fail(w, "stream: not whole lines");
+    lines = n / (row * 2);
+    if (w->st_n + (long)lines > w->st_cap) {
+        long cap = w->st_cap ? w->st_cap : 1024;
+        float *nt;
+        while (cap < w->st_n + (long)lines)
+            cap *= 2;
+        nt = realloc(w->st_t, (size_t)cap * row * sizeof *nt);
+        if (!nt)
+            return fail(w, "out of memory");
+        w->st_t = nt;
+        w->st_cap = cap;
+    }
+    ff = malloc((lines ? lines : 1) * row * sizeof *ff);
+    if (!ff)
+        return fail(w, "out of memory");
+    /* develop's stages, line by line: flat-field, Faul Pixs, then the
+     * tri-linear realignment (R two lines on, G one: ft_align_rgb, k 1) */
+    ft_flatfield(raw, (int)lines, w->st_px, w->st_dark, w->st_white, ff);
+    if (lines && ft_faul_fix(ff, (int)lines, w->st_px, w->st_faul,
+                             w->st_fcount, (int)w->st_x, 12)) {
+        free(ff);
+        return fail(w, "out of memory");
+    }
+    for (i = 0; i < lines; i++) {
+        const float *r = ff + i * row;
+        if (w->st_raw >= 2) {
+            float *o = w->st_t + (size_t)w->st_n * row;
+            const float *g = w->st_prev + ((w->st_raw - 1) % 2) * row,
+                        *b = w->st_prev + ((w->st_raw - 2) % 2) * row;
+            size_t c;
+            for (c = 0; c < row; c += 3) {
+                o[c] = r[c];
+                o[c + 1] = g[c + 1];
+                o[c + 2] = b[c + 2];
+            }
+            w->st_n++;
+            ft_sdet_line(&w->st_det, o);
+            while (w->job.nframes < w->st_det.nframes)
+                if (stream_seal(w, &w->st_det.f[w->job.nframes], &e)) {
+                    free(ff);
+                    return fail_e(w, &e);
+                }
+        }
+        memcpy(w->st_prev + (w->st_raw % 2) * row, r, row * sizeof *r);
+        w->st_raw++;
+    }
+    free(ff);
+    return stream_out(w, from);
+}
+
+int ftw_stream_end(ftw *w)
+{
+    int from = w->job.nframes;
+    ft_err e;
+    if (!w->st_on)
+        return fail(w, "stream: not begun");
+    ft_sdet_end(&w->st_det);
+    while (w->job.nframes < w->st_det.nframes)
+        if (stream_seal(w, &w->st_det.f[w->job.nframes], &e))
+            return fail_e(w, &e);
+    return stream_out(w, from);
+}
+
+/* frame `frame` of the stream cut again from the rows (its box moved) */
+static int stream_recut(ftw *w, int frame, ft_err *e)
+{
+    int i, k;
+    for (i = 0; i < w->job.nframes && w->job.f[i].index != frame; i++)
+        ;
+    for (k = 0; k < w->npv && w->pv[k].frame != frame; k++)
+        ;
+    if (!w->st_on || i == w->job.nframes)
+        return 0;
+    if (k < w->npv) {
+        ft_image_free(&w->pv[k].im);
+        ft_image_free(&w->pv[k].proxy);
+    } else if (w->npv < FT_MAX_FRAMES) {
+        k = w->npv;
+    } else {
+        return 0;
+    }
+    if (cut_pframe(w->st_t, (int)w->st_n, w->st_px, &w->st_ax, &w->job.f[i],
+                   &w->pv[k], e) < 0)
+        return -1;
+    if (k == w->npv && w->pv[k].frame == frame)
+        w->npv++;
+    else if (w->pv[k].frame != frame) {   /* off the preview now: gone */
+        for (; k + 1 < w->npv; k++)
+            w->pv[k] = w->pv[k + 1];
+        w->npv--;
+    }
+    w->disp_frame = 0;
+    return 0;
+}
+
+int ftw_stream_windows(ftw *w, const char *text, size_t n)
+{
+    static ft_job j;
+    ft_err e;
+    int i, k, got = 0;
+    if (!w->has_job)
+        return fail(w, "no strip.job");
+    if (ft_job_parse(&j, text, n, &e))
+        return fail_e(w, &e);
+    for (i = 0; i < j.nframes; i++)
+        for (k = 0; k < w->job.nframes; k++) {
+            ft_job_frame *f = &w->job.f[k];
+            if (f->index != j.f[i].index)
+                continue;
+            /* the job's text keeps 0.001 mm: closer is the same window */
+            if (fabs(f->y0 - j.f[i].y0) > 6e-4 ||
+                fabs(f->x0 - j.f[i].x0) > 6e-4 ||
+                fabs(f->len - j.f[i].len) > 6e-4 ||
+                fabs(f->width - j.f[i].width) > 6e-4) {
+                f->y0 = j.f[i].y0;
+                f->x0 = j.f[i].x0;
+                f->len = j.f[i].len;
+                f->width = j.f[i].width;
+                if (stream_recut(w, f->index, &e))
+                    return fail_e(w, &e);
+                got++;
+            }
+        }
+    return got;
 }
 
 int ftw_zip(ftw *w, const char *base)

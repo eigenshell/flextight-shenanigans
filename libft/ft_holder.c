@@ -4,7 +4,8 @@
 
 static const ft_holder HOLDERS[] = {
     { "24x217", 231.0, 32.0, 2.02, 38.02, 40.0, 6,
-      "Filmchrome 24x36x6 (25.2 x 226.8 mm), 6 frames 35 mm with borders" },
+      "Filmchrome 24x36x6 (25.2 x 226.8 mm), 6 frames 35 mm with borders",
+      5.5, 25.5, 1.5, 29.5 },
 };
 #define NHOLDERS (int)(sizeof HOLDERS / sizeof HOLDERS[0])
 

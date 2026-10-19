@@ -161,7 +161,19 @@ const ops = {
       return { w: px, h, rgba: out() };
     });
   },
-  jpeg: f => (ok(X.ftw_jpeg(w, f)), { jpg: out(), text: cstr(X.ftw_text(w)) }),
+  // the streamed preview: strip.raw.cal, .txt, .faul (or null), slide ->
+  // an empty base job; then whole raw lines (bytes) as they come and the
+  // strip's end -> {lines, grid, frames: the frames newly sealed}
+  streamBegin(cal, meta, faul, slide) {
+    return withPut([cal, faul, meta], (pc, pf, pm) =>
+      (ok(X.ftw_stream_begin(w, pc, cal ? cal.length : 0, pf, faul ? faul.length : 0, pm,
+                             enc.encode(meta).length, slide ? 1 : 0)), null));
+  },
+  streamFeed: raw => withPut([raw], p => (ok(X.ftw_stream_feed(w, p, raw.length)), JSON.parse(text()))),
+  streamEnd: () => (ok(X.ftw_stream_end(w)), JSON.parse(text())),
+  // a job the page wrote (strip.job): its windows onto the stream's frames
+  streamWindows: t => withPut([t], p => ok(X.ftw_stream_windows(w, p, enc.encode(t).length))),
+  jpeg: f =>(ok(X.ftw_jpeg(w, f)), { jpg: out(), text: cstr(X.ftw_text(w)) }),
   zip: base => withPut([base], p => (ok(X.ftw_zip(w, p)), out())),
 };
 
