@@ -649,6 +649,31 @@ def test_batch_events(held):
                               "state": "done", "exit": 0}
 
 
+def test_batch_events_stop_and_refusal(held):
+    """a stop is a change (running, then stopped); so is a refused POST
+    that took an ended job's slot (that job is gone)"""
+    previewed(held)
+    held.hold.touch()
+    snaps = batch_stream(held)
+    _, t = held.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
+    first(snaps, lambda x: x["jobs"][-1] == {
+        "id": t["id"], "op": "scan", "strip": "a", "state": "running",
+        "exit": -1})
+    assert held.req("POST", "/api/tasks/%d/stop" % t["id"]) == \
+        (200, {"ok": True})
+    first(snaps, lambda x: x["jobs"][-1]["state"] == "stopped")
+    held.hold.unlink()
+    for _ in range(6):                  # 8 ended jobs: every slot used
+        _, t = held.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
+        held.wait(t["id"])
+    snaps = batch_stream(held, secs=5)
+    assert [j["id"] for j in next(snaps)["jobs"]] == list(range(1, 9))
+    held.req("POST", "/api/strips", {"name": "b"})     # no strip.job
+    assert held.req("POST", "/api/tasks", {"op": "scan", "strip": "b"}) == \
+        (422, {"error": "no strip.job to scan (send job=)"})
+    assert [j["id"] for j in next(snaps)["jobs"]] == list(range(2, 9))
+
+
 def test_batch_events_resume(held):
     """since= or Last-Event-ID: the current snapshot at once if the batch
     has changed since, else the next change's (a PUT and a clear count)"""

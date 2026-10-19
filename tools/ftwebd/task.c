@@ -386,6 +386,7 @@ int task_start(const task_req *rq, int *id, char *err, size_t errn)
             else
                 snprintf(err, errn, "no strip.job to scan (send job=)");
             batch_drop(j);
+            changed();          /* j may have taken an ended job's slot */
             pthread_mutex_unlock(&T.mu);
             return -1;
         }
@@ -395,6 +396,7 @@ int task_start(const task_req *rq, int *id, char *err, size_t errn)
     if (idle && run_job(j, err, errn)) {
         T.run = NULL;
         batch_drop(j);
+        changed();              /* as above */
         pthread_mutex_unlock(&T.mu);
         return -1;
     }
