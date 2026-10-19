@@ -91,6 +91,7 @@ static ft_lens g_lens;
 static const char *g_archive, *g_archive_ppi = "6300";
 static const char *g_microcode;
 static pthread_mutex_t g_put_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_time_mu = PTHREAD_MUTEX_INITIALIZER;
 
 static void sock_close(sock_t s)
 {
@@ -204,7 +205,11 @@ static int scan_choices(const char *body, char *text, size_t cap,
         return snprintf(msg, mcap, "holder: no holder '%s'", holder), -1;
     if (!ft_emulsion_find(em))
         return snprintf(msg, mcap, "emulsion: no emulsion '%s'", em), -1;
+    /* localtime's struct is shared (a thread per connection; C99 has no
+     * localtime_r): copied out under a lock */
+    pthread_mutex_lock(&g_time_mu);
     strftime(when, sizeof when, "%Y-%m-%dT%H:%M:%S", localtime(&now));
+    pthread_mutex_unlock(&g_time_mu);
     snprintf(text, cap, "type = %s\nppi = %s\nholder = %s\nemulsion = %s\n"
                         "created = %s\n", type, ppi, holder, em, when);
     return 0;
@@ -536,16 +541,27 @@ static int kept_file(const char *f)
            strcmp(f, "strip.review") == 0;
 }
 
-/* path split on '/': seg[0..n) point into a copy */
+/* path split on '/' (empty segments skipped): seg[0..n) point into a
+ * copy; -1 past max. No strtok: a thread serves each connection, and
+ * strtok's hidden state mixed paths in flight together (stray 404s) */
 static int split(const char *path, char *copy, size_t cap, char **seg,
                  int max)
 {
     int n = 0;
     char *p;
     snprintf(copy, cap, "%s", path);
-    for (p = strtok(copy, "/"); p && n < max; p = strtok(NULL, "/"))
+    for (p = copy; *p;) {
+        if (*p == '/') {
+            *p++ = 0;
+            continue;
+        }
+        if (n == max)
+            return -1;
         seg[n++] = p;
-    return p ? -1 : n;
+        while (*p && *p != '/')
+            p++;
+    }
+    return n;
 }
 
 static void route(http_req *r)

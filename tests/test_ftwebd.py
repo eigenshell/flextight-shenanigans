@@ -829,6 +829,31 @@ def test_focus_txt(srv):
     assert srv.req("GET", "/api/focus.txt", raw=True) == (200, b"film = 1\n")
 
 
+def test_routes_under_concurrent_requests(srv):
+    """requests in flight together route each by its own path (a thread
+    per connection; the path split shares no state between them)"""
+    import threading
+    (srv.cwd / "strips" / "a").mkdir(parents=True)
+    (srv.cwd / "strips" / "a" / "strip.review").write_text("1 pending\n")
+    want = {"/api/strips/a/strip.review": 200,
+            "/api/strips/a/files/strip.review": 200,
+            "/api/tasks/current": 200, "/api/strips": 200}
+    bad = []
+
+    def hammer(path):
+        for _ in range(1500):
+            code, _ = srv.req("GET", path, raw=True)
+            if code != want[path]:
+                bad.append((path, code))
+    ts = [threading.Thread(target=hammer, args=(p,)) for p in want
+          for _ in range(6)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert bad == []
+
+
 def test_build_bat_links(tmp_path):
     """build.bat lists libft's sources by hand (only the box builds it):
     its list, with proc_posix.c for proc_win.c, must link here"""
