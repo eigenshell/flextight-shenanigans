@@ -39,7 +39,8 @@
  *                    (job: the share job's text, kept as strip_j<id>.job;
  *                    none: a copy of strip.job. ftpoc's outputs are
  *                    named after it: strip_j<id>_winNN.raw)
- *                                         202 {id} | 409 busy
+ *                    202 {id}: queued at the batch's tail (409: the
+ *                    batch is full)
  *   GET  /api/tasks/current, /api/tasks/{id}
  *   GET  /api/tasks/{id}/events?since=k   SSE, id = line number
  *   POST /api/tasks/{id}/stop

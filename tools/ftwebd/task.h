@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /* ftpoc tasks: the client names an op, ftwebd builds the argv (never the
- * client). One task at a time (the scanner has one holder). Its output is
- * a ring of numbered lines (1..): line 1 is the built command, the last
- * is "ftwebd exit <code>". Events resume with since = the last number
+ * client). Tasks are the batch's jobs (batch.h): queued in order, run one
+ * at a time (the scanner has one holder), the next as one ends. A job's
+ * output is numbered lines (1..): line 1 is the built command, the last
+ * "ftwebd exit <code>". Events resume with since = the last number
  * seen. */
 #ifndef FTWEBD_TASK_H
 #define FTWEBD_TASK_H
@@ -31,25 +32,30 @@ typedef struct {
 } task_req;
 
 void task_init(const task_cfg *cfg);
-/* preview: ftpoc frames (film neg|slide) -> strip.job + strip.png.
- * scan: up to three steps, each run after the last one exits 0: the
- * share windows (scan --job strip_j<id>.job; ftpoc names the outputs
- * after the job: strip_j<id>_winNN.raw), then the ARC frames as a
- * detailed scan into <archive>/<strip>/ (frames --detail neg --select
+/* queues a job at the batch's tail (it starts at once when the scanner
+ * is idle). preview: ftpoc frames (film neg|slide) -> strip.job +
+ * strip.png. scan: up to three steps, each run after the last one exits
+ * 0: the share windows (scan --job strip_j<id>.job; ftpoc names the
+ * outputs after the job: strip_j<id>_winNN.raw), then the ARC frames as
+ * a detailed scan into <archive>/<strip>/ (frames --detail neg --select
  * -o strip_j<id>, then scan --job on that job). Each step's command is
- * an event line. 0 with *id set; 1 busy (err names the running task);
- * -1 bad request, no job to scan or spawn failure (err) */
+ * an event line (a step that cannot start: its error, then the exit
+ * line, -1). 0 with *id set; 1 the batch is full (err); -1 bad request,
+ * no job to scan, or (idle, nothing queued) its first step cannot start
+ * (err; no job kept) */
 int task_start(const task_req *rq, int *id, char *err, size_t errn);
 /* 0 delivered, -1 not running or not delivered, -2 no such task */
 int task_stop(int id);
-/* {"id":..,"op":..,"strip":..,"state":"running|done","exit":..,
- * "lines":..} for id, or the latest task when id is 0. 0, or -1 if there
- * is none (out: "null") */
+/* {"id":..,"op":..,"strip":..,"state":"queued|running|done","exit":..,
+ * "stopped":..,"lines":..} for id, or the running (else the latest) job
+ * when id is 0. 0, or -1 if there is none (out: "null") */
 int task_json(int id, char *out, size_t n);
-/* SSE text for the lines after `since` ("id: k\ndata: line\n\n" each),
- * waiting up to wait_s for one. Returns the bytes written (0: none yet),
- * -1 no such task. *since moves past what was written; *ended = the task
- * has exited and every line was written. */
+/* SSE text for job id's lines after `since` ("id: k\ndata: line\n\n"
+ * each), waiting up to wait_s for one (a queued job: until it starts).
+ * Returns the bytes written (0: none yet), -1 no such job (or dropped).
+ * *since moves past what was written; *ended = the job has ended and
+ * every line was written. An ended job's lines stay until newer jobs'
+ * lines overwrite them (the ring is shared) */
 long task_events(int id, long *since, char *out, size_t n, int wait_s,
                  int *ended);
 

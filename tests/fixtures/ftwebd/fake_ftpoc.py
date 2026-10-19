@@ -15,7 +15,8 @@ frame as its share_frame, so the page can cut and print real pixels.
 Otherwise windows are 64 zero bytes. FAKE_FTPOC_PREVIEW: a preview's base
 (<p>.raw, .raw.cal, .raw.txt) frames writes as strip.raw while it
 "scans" (each progress line a share of the bytes, as ftpoc writes the
-lines as they come), then the rest (else 64 zero bytes). scan says what focus does: window 1 a bracket, the rest carry
+lines as they come), then the rest (else 64 zero bytes). FAKE_FTPOC_HOLD: a path; each scan window waits while that file exists
+(after its "progress unit" line), so a test holds a job running. scan says what focus does: window 1 a bracket, the rest carry
 it."""
 import json
 import os
@@ -30,6 +31,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DELAY = float(os.environ.get("FAKE_FTPOC_DELAY", "0.01"))
+HOLD = os.environ.get("FAKE_FTPOC_HOLD")
 stopped = False
 
 
@@ -40,6 +42,15 @@ def on_int(signum, frame):
 
 def say(line):
     print(line, flush=True)
+
+
+def held():
+    """waits while FAKE_FTPOC_HOLD's file exists; False if stopped"""
+    while HOLD and os.path.exists(HOLD):
+        if stopped:
+            return False
+        time.sleep(0.02)
+    return not stopped
 
 
 def png(path, w, h, boxes):
@@ -139,6 +150,9 @@ def scan(args):
     say("progress begin window %d" % len(groups))
     for i, g in enumerate(groups, 1):
         say("progress unit window %d %d" % (i, g))
+        if not held():
+            say("progress end stopped")
+            return 1
         first = min(n for n, inc, gg, _, _ in secs if inc and gg == g)
         if i == 1:
             for k, (o, s) in enumerate(((-500, 0.031), (0, 0.044),

@@ -122,6 +122,17 @@ def slow(binary, tmp_path):
     s.close()
 
 
+@pytest.fixture
+def held(binary, tmp_path):
+    """scans wait while s.hold exists (fake_ftpoc.py FAKE_FTPOC_HOLD)"""
+    hold = tmp_path / "hold"
+    s = Server(binary, tmp_path, 0.001, env={"FAKE_FTPOC_HOLD": str(hold)})
+    s.hold = hold
+    yield s
+    hold.unlink(missing_ok=True)
+    s.close()
+
+
 def previewed(s, name="a"):
     assert s.req("POST", "/api/strips", {"name": name}) == (200, {"name": name})
     code, t = s.req("POST", "/api/tasks",
@@ -299,14 +310,43 @@ def test_stop_ends_the_chain(binary, tmp_path):
         s.close()
 
 
-def test_busy_and_stop(slow):
+def test_jobs_run_in_order(held):
+    """a POST while the scanner is busy is queued (no more 409): the
+    jobs run one after the other in order; a job's lines stay readable
+    after later jobs ran"""
+    previewed(held)
+    job = (held.cwd / "strips" / "a" / "strip.job").read_text()
+    held.hold.touch()
+    ids = []
+    for keep in ({1}, {2}, {3}):
+        code, t = held.req("POST", "/api/tasks", {"op": "scan", "strip": "a",
+                                                  "job": only(job, keep)})
+        assert code == 202
+        ids.append(t["id"])
+    assert ids == [2, 3, 4]
+    assert [held.req("GET", "/api/tasks/%d" % i)[1]["state"] for i in ids] \
+        == ["running", "queued", "queued"]
+    assert held.req("GET", "/api/tasks/3")[1]["lines"] == 0
+    assert held.req("GET", "/api/tasks/current")[1]["id"] == 2
+    held.hold.unlink()
+    for i in ids:
+        assert held.wait(i)["exit"] == 0
+    assert [a[2] for a in argv_log(held) if a[0] == "scan"] == \
+        ["strips/a/strip_j%d.job" % i for i in ids]
+    for i in ids:
+        assert (held.cwd / "strips" / "a" / ("strip_j%d_win01.raw" % i)).exists()
+    ev = held.events(2)
+    assert [i for i, _ in ev] == list(range(1, len(ev) + 1))
+    assert "strips/a/strip_j2.job" in ev[0][1]
+    assert ev[-1][1] == "ftwebd exit 0"
+    assert held.events(2, since=3) == ev[3:]
+
+
+def test_stop(slow):
     slow.req("POST", "/api/strips", {"name": "a"})
     code, t = slow.req("POST", "/api/tasks",
                        {"op": "preview", "strip": "a", "film": "slide"})
     assert code == 202
-    code, e = slow.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
-    assert code == 409
-    assert e["error"] == "scanner busy: preview a (task %d)" % t["id"]
     time.sleep(0.3)
     assert slow.req("POST", "/api/tasks/%d/stop" % t["id"]) == \
         (200, {"ok": True})
@@ -434,7 +474,7 @@ def test_build_bat_links(tmp_path):
             if l.startswith("gcc ")]
     assert len(line) == 1
     srcs = [str(SRC / f) for f in ("ftwebd.c", "http.c", "task.c",
-                                   "proc_posix.c")]
+                                   "batch.c", "proc_posix.c")]
     srcs += [str(ROOT / "libft" / f) for f in
              re.findall(r"%LIBFT%\\(\w+\.c)", line[0])]
     r = subprocess.run(["cc", "-std=c99", "-O0", "-I", str(ROOT / "libft"),

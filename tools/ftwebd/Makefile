@@ -3,7 +3,7 @@
 CC ?= cc
 CFLAGS ?= -std=c99 -O2 -Wall -Wextra -Wpedantic
 LIBFT = ../../libft
-SRC = ftwebd.c http.c task.c proc_posix.c
+SRC = ftwebd.c http.c task.c batch.c proc_posix.c
 
 ftwebd: $(SRC) *.h $(LIBFT)/libft.a
 	$(CC) $(CFLAGS) -I$(LIBFT) -o $@ $(SRC) $(LIBFT)/libft.a -lm -pthread
