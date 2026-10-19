@@ -49,6 +49,10 @@
  *   DELETE /api/tasks/{id}                a queued job dropped, or the
  *                                         running one stopped
  *   DELETE /api/tasks?state=queued        every queued job dropped
+ *   GET  /api/batch/events?since=rev      SSE, id = rev: {"rev","jobs":
+ *                                         [{id, op, strip, state, exit}]}
+ *                                         at once (unless since = the
+ *                                         current rev) and on every change
  *
  * A good preview's job is kept as strip.preview.job: the page plans
  * every size choice from it (the planner excludes frames). */
@@ -77,6 +81,7 @@
 #include "ft_job.h"
 #include "ft_plan.h"
 #include "ft_print_file.h"
+#include "batch.h"              /* BATCH_MAX: the snapshot's size */
 #include "http.h"
 #include "proc.h"
 #include "task.h"
@@ -493,6 +498,36 @@ static void api_events(sock_t s, int id, const http_req *r)
     free(buf);
 }
 
+/* the batch's snapshots, one per change: the first at once, unless the
+ * client (since=, Last-Event-ID) has the current revision. The snapshot
+ * is copied out under the lock and sent without it */
+static void api_batch_events(sock_t s, const http_req *r)
+{
+    char v[24], buf[BATCH_MAX * 512 + 64];
+    long rev = -1;
+    if (http_param(r->query, "since", v, sizeof v) == 0)
+        rev = atol(v);
+    if (r->last_event_id[0])
+        rev = atol(r->last_event_id);
+    if (rev < 0)
+        rev = -1;
+    if (http_sse_head(s))
+        return;
+    for (;;) {
+        long n = task_batch(&rev, buf, sizeof buf, 15);
+        if (n < 0)
+            break;
+        if (n == 0) {
+            static const char ka[] = ": keepalive\n\n";
+            if (http_send_all(s, ka, sizeof ka - 1))
+                break;
+            continue;
+        }
+        if (http_send_all(s, buf, (size_t)n))
+            break;
+    }
+}
+
 /* the files the page writes (PUT, checked) */
 static int kept_file(const char *f)
 {
@@ -541,6 +576,11 @@ static void route(http_req *r)
     }
     if (n == 2 && strcmp(seg[1], "scans") == 0 && get) {
         http_json(s, 200, "[]");
+        return;
+    }
+    if (n == 3 && strcmp(seg[1], "batch") == 0 &&
+        strcmp(seg[2], "events") == 0 && get) {
+        api_batch_events(s, r);
         return;
     }
     if (strcmp(seg[1], "strips") == 0) {

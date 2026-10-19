@@ -74,5 +74,11 @@ int task_json(int id, char *out, size_t n);
  * lines overwrite them (the ring is shared) */
 long task_events(int id, long *since, char *out, size_t n, int wait_s,
                  int *ended);
+/* SSE text for the batch: "id: rev\ndata: {"rev":..,"jobs":[..]}\n\n"
+ * (batch_json's list) once the batch's revision (+1 on every add, PUT,
+ * start, end, drop) differs from *rev (-1: at once), waiting up to
+ * wait_s. The bytes written (0: no change yet), -1 if it does not fit;
+ * *rev = the revision written */
+long task_batch(long *rev, char *out, size_t n, int wait_s);
 
 #endif

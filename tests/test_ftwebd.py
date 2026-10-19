@@ -599,6 +599,85 @@ def test_batch_full(held):
     assert held.wait(2)["state"] == "done"
 
 
+def batch_stream(s, secs=20, query="", headers=None):
+    """the batch's snapshots (SSE /api/batch/events), as they come; the
+    stream is open on return"""
+    r = urllib.request.Request("http://127.0.0.1:%d/api/batch/events%s" %
+                               (s.port, query), headers=headers or {})
+    f = urllib.request.urlopen(r, timeout=secs)
+    assert f.headers["Content-Type"] == "text/event-stream"
+    end = time.time() + secs
+
+    def snaps():
+        with f:
+            eid = None
+            for line in f:
+                assert time.time() < end, "no such snapshot in time"
+                line = line.decode().rstrip("\n")
+                if line.startswith("id: "):
+                    eid = int(line[4:])
+                elif line.startswith("data: "):
+                    x = json.loads(line[6:])
+                    assert eid == x["rev"]
+                    yield x
+    return snaps()
+
+
+def first(snaps, ok):
+    return next(x for x in snaps if ok(x))
+
+
+def test_batch_events(held):
+    """a snapshot at once, then one per change: queued, running, ended,
+    dropped"""
+    previewed(held)
+    snaps = batch_stream(held)
+    s0 = next(snaps)
+    assert s0["jobs"] == [{"id": 1, "op": "preview", "strip": "a",
+                           "state": "done", "exit": 0}]
+    held.hold.touch()
+    held.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
+    held.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
+    s1 = first(snaps, lambda x: [j["state"] for j in x["jobs"]] ==
+               ["done", "running", "queued"])
+    assert s1["rev"] > s0["rev"]
+    held.req("DELETE", "/api/tasks/3")
+    first(snaps, lambda x: [j["id"] for j in x["jobs"]] == [1, 2])
+    held.hold.unlink()
+    s3 = first(snaps, lambda x: x["jobs"][-1]["state"] == "done")
+    assert s3["jobs"][-1] == {"id": 2, "op": "scan", "strip": "a",
+                              "state": "done", "exit": 0}
+
+
+def test_batch_events_resume(held):
+    """since= or Last-Event-ID: the current snapshot at once if the batch
+    has changed since, else the next change's (a PUT and a clear count)"""
+    previewed(held)
+    rev = next(batch_stream(held))["rev"]
+    held.hold.touch()
+    _, a = held.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
+    _, b = held.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
+    for kw in ({"query": "?since=%d" % rev},
+               {"headers": {"Last-Event-ID": str(rev)}}):
+        s = next(batch_stream(held, **kw))
+        assert s["rev"] > rev
+        assert [j["state"] for j in s["jobs"]] == ["done", "running",
+                                                   "queued"]
+    now = next(batch_stream(held))["rev"]
+    snaps = batch_stream(held, query="?since=%d" % now)
+    job = (held.cwd / "strips" / "a" / "strip.job").read_text()
+    assert held.req("PUT", "/api/tasks/%d/job" % b["id"], job) == \
+        (200, {"ok": True})
+    s = next(snaps)
+    assert s["rev"] == now + 1
+    assert held.req("DELETE", "/api/tasks?state=queued") == \
+        (200, {"dropped": 1})
+    s = next(snaps)
+    assert s["rev"] == now + 2
+    assert [j["id"] for j in s["jobs"]] == [1, a["id"]]
+    held.hold.unlink()
+
+
 def test_stop(slow):
     slow.req("POST", "/api/strips", {"name": "a"})
     code, t = slow.req("POST", "/api/tasks",

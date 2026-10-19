@@ -581,3 +581,29 @@ long task_events(int id, long *since, char *out, size_t n, int wait_s,
     pthread_mutex_unlock(&T.mu);
     return (long)k;
 }
+
+long task_batch(long *rev, char *out, size_t n, int wait_s)
+{
+    struct timespec ts;
+    char jobs[BATCH_MAX * 512];
+    int k;
+    pthread_mutex_lock(&T.mu);
+    ts.tv_sec = time(NULL) + wait_s;
+    ts.tv_nsec = 0;
+    while (*rev == T.rev)
+        if (pthread_cond_timedwait(&T.cv, &T.mu, &ts))
+            break;
+    if (*rev == T.rev) {
+        pthread_mutex_unlock(&T.mu);
+        return 0;
+    }
+    if (batch_json(jobs, sizeof jobs) < 0) {
+        pthread_mutex_unlock(&T.mu);
+        return -1;
+    }
+    k = snprintf(out, n, "id: %ld\ndata: {\"rev\":%ld,\"jobs\":%s}\n\n",
+                 T.rev, T.rev, jobs);
+    *rev = T.rev;
+    pthread_mutex_unlock(&T.mu);
+    return k < 0 || (size_t)k >= n ? -1 : (long)k;
+}
