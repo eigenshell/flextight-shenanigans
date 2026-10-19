@@ -2,7 +2,6 @@
 /* task.h: one ftpoc child at a time, a reader thread splitting its output
  * into numbered lines (on '\n' or '\r': ftpoc's human counters use '\r'),
  * and waiters woken per line. */
-#include <dirent.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,37 +31,6 @@ static struct {
     char part[LINE];            /* the line being read */
     size_t npart;
 } T = { .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER };
-
-/* a scan numbers its windows from 1 (strip_winNN.raw + .cal/.txt/.faul):
- * an earlier run's files move to strip_rK_winNN... (K: the next free run)
- * so a rescan does not overwrite frames scanned before */
-static void keep_runs(const char *strip)
-{
-    char dir[300], from[700], to[700];
-    struct dirent *de;
-    DIR *d;
-    int k, runs = 0, any = 0;
-    snprintf(dir, sizeof dir, "%s/%s", T.cfg.strips, strip);
-    if (!(d = opendir(dir)))
-        return;
-    while ((de = readdir(d)) != NULL) {
-        if (sscanf(de->d_name, "strip_r%d_win", &k) == 1 && k > runs)
-            runs = k;
-        any |= strncmp(de->d_name, "strip_win", 9) == 0;
-    }
-    if (any) {
-        rewinddir(d);
-        while ((de = readdir(d)) != NULL) {
-            if (strncmp(de->d_name, "strip_win", 9) != 0)
-                continue;
-            snprintf(from, sizeof from, "%s/%s", dir, de->d_name);
-            snprintf(to, sizeof to, "%s/strip_r%d_%s", dir, runs + 1,
-                     de->d_name + 6);
-            rename(from, to);
-        }
-    }
-    closedir(d);
-}
 
 void task_init(const task_cfg *cfg)
 {
@@ -97,25 +65,48 @@ static void feed(const char *b, long n)
     }
 }
 
+/* 0, or -1 if from cannot be read or to written */
+static int copy_file(const char *from, const char *to)
+{
+    char buf[4096];
+    FILE *in = fopen(from, "rb"), *out;
+    size_t n;
+    int rc = 0;
+    if (!in)
+        return -1;
+    out = fopen(to, "wb");
+    if (!out) {
+        fclose(in);
+        return -1;
+    }
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0)
+        rc |= fwrite(buf, 1, n, out) != n;
+    rc |= ferror(in) != 0;
+    fclose(in);
+    rc |= fclose(out) != 0;
+    return rc ? -1 : 0;
+}
+
+/* b[0..n) as path; 0 or -1 */
+static int write_file(const char *path, const char *b, size_t n)
+{
+    FILE *f = fopen(path, "wb");
+    int rc;
+    if (!f)
+        return -1;
+    rc = fwrite(b, 1, n, f) != n;
+    rc |= fclose(f) != 0;
+    return rc ? -1 : 0;
+}
+
 /* a good preview: keep its job as strip.preview.job, the planner's
  * starting point (re-plans exclude frames from strip.job) */
 static void keep_preview_job(void)
 {
-    char a[300], b[300], buf[4096];
-    FILE *in, *out;
-    size_t n;
+    char a[300], b[300];
     snprintf(a, sizeof a, "%s/%s/strip.job", T.cfg.strips, T.strip);
     snprintf(b, sizeof b, "%s/%s/strip.preview.job", T.cfg.strips, T.strip);
-    in = fopen(a, "rb");
-    if (!in)
-        return;
-    out = fopen(b, "wb");
-    if (out) {
-        while ((n = fread(buf, 1, sizeof buf, in)) > 0)
-            fwrite(buf, 1, n, out);
-        fclose(out);
-    }
-    fclose(in);
+    copy_file(a, b);
 }
 
 /* under T.mu: run step i; its command (to copy to a terminal) is the
@@ -203,16 +194,11 @@ static int select_ok(const char *s)
 
 int task_start(const task_req *rq, int *id, char *err, size_t errn)
 {
-    char base[300], job[310], abase[300], ajob[310];
+    char base[300], from[310], job[310], abase[300], ajob[310];
     const char *f = rq->film;
     pthread_t th;
     int ns = 0;
 
-    snprintf(base, sizeof base, "%s/%s/strip", T.cfg.strips, rq->strip);
-    snprintf(job, sizeof job, "%s.job", base);
-    snprintf(abase, sizeof abase, "%s/%s/strip",
-             T.cfg.archive ? T.cfg.archive : "", rq->strip);
-    snprintf(ajob, sizeof ajob, "%s.job", abase);
     if (strcmp(rq->op, "preview") && strcmp(rq->op, "scan")) {
         snprintf(err, errn, "unknown op '%s'", rq->op);
         return -1;
@@ -244,6 +230,16 @@ int task_start(const task_req *rq, int *id, char *err, size_t errn)
         pthread_mutex_unlock(&T.mu);
         return 1;
     }
+    /* the task's id names its files: strip_j<id>.job, and ftpoc names
+     * the outputs after the job (strip_j<id>_winNN.raw), so a rescan
+     * never overwrites an earlier scan */
+    snprintf(base, sizeof base, "%s/%s/strip", T.cfg.strips, rq->strip);
+    snprintf(from, sizeof from, "%s.job", base);
+    snprintf(job, sizeof job, "%s/%s/strip_j%d.job", T.cfg.strips,
+             rq->strip, T.id + 1);
+    snprintf(abase, sizeof abase, "%s/%s/strip_j%d",
+             T.cfg.archive ? T.cfg.archive : "", rq->strip, T.id + 1);
+    snprintf(ajob, sizeof ajob, "%s.job", abase);
     if (strcmp(rq->op, "preview") == 0) {
         /* preview + detection, every whole frame planned at 4MP (no
          * 3-point focus check; ~40 s); the page re-plans sizes */
@@ -261,15 +257,23 @@ int task_start(const task_req *rq, int *id, char *err, size_t errn)
                             NULL };
         const char *b[] = { T.cfg.ftpoc, "scan", "--job", ajob, "--progress",
                             NULL };
-        if (rq->share)
+        if (rq->share) {
+            if (rq->job ? write_file(job, rq->job, rq->njob)
+                        : copy_file(from, job)) {
+                if (rq->job)
+                    snprintf(err, errn, "cannot write %s", job);
+                else
+                    snprintf(err, errn, "no strip.job to scan (send job=)");
+                pthread_mutex_unlock(&T.mu);
+                return -1;
+            }
             set_step(ns++, a);
+        }
         if (rq->arc) {
             set_step(ns++, d);
             set_step(ns++, b);
         }
     }
-    if (strcmp(rq->op, "scan") == 0 && rq->share)
-        keep_runs(rq->strip);
     T.nsteps = ns;
     T.nlines = 0;
     T.npart = 0;

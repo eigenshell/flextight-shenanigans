@@ -101,9 +101,10 @@ async function load(){const s=cur;
   const before=landed.slice();await cut(n,1);const nw=landed.filter(x=>!before.includes(x));if(s!==cur)return;
   await reprint();await thumbs(landed.slice());jobs();drawStrip();if(landed.includes(sel))await pick(sel);if(i===wins.length-1)st("")}).catch(e=>st(e.message,1))}
 const img=src=>new Promise(y=>{const i=new Image();i.onload=()=>y(i);i.onerror=()=>y(null);i.src=src});
-// window scans, earlier runs first (strip_rK_winNN), the latest last
-function winFiles(names){const k=n=>{const m=n.match(/^strip_(?:r(\d+)_)?win(\d\d)\.raw$/);return m?[m[1]?+m[1]:1e9,+m[2]]:null};
- return names.filter(k).sort((a,b)=>{const x=k(a),y=k(b);return x[0]-y[0]||x[1]-y[1]})}
+// window scans: earlier runs first (old strips: strip_rK_winNN, then
+// strip_winNN), then per job in id order (strip_j<id>_winNN)
+function winFiles(names){const k=n=>{const m=n.match(/^strip_(?:r(\d+)_|j(\d+)_)?win(\d\d)\.raw$/);return m?[m[1]?0:m[2]?2:1,m[1]?+m[1]:m[2]?+m[2]:0,+m[3]]:null};
+ return names.filter(k).sort((a,b)=>{const x=k(a),y=k(b);return x[0]-y[0]||x[1]-y[1]||x[2]-y[2]})}
 // a scanned window: its raw streamed (fetchBig), then cut. Never throws:
 // a window not fetched is said (#fbad) and its frames wait for a reload
 async function cut(name,quiet){const s=cur;let fr=[],mb="";try{
@@ -267,7 +268,7 @@ function onLine(t){const lg=$("log");lg.textContent+=t+"\n";if(lg.textContent.le
  else if(w[1]==="lines"){const[k,n]=w[2].split("/").map(Number);$("pb").style.width=((run.i-1+k/n)/run.n*100).toFixed(1)+"%";st(run.kind+" "+run.i+"/"+run.n+" · line "+k+"/"+n);
   if(task&&task.op==="preview")liveGrow(n)}
  else if(/^(focus|focused|sharp)$/.test(w[1]))onFocus(w);
- else if(w[1]==="file"){const m=t.match(/[\\/]([^\\/]+)[\\/](strip_win\d\d\.raw)$/);if(m&&m[1]===cur&&task.op==="scan")land(m[2])}
+ else if(w[1]==="file"){const m=t.match(/[\\/]([^\\/]+)[\\/](strip_(?:j\d+_)?win\d\d\.raw)$/);if(m&&m[1]===cur&&task.op==="scan")land(m[2])}
  else if(w[1]==="end"){if(w[2]==="ok")$("pb").style.width="100%";st(run.kind+" "+w[2],w[2]!=="ok")}}
 let landQ=Promise.resolve();
 const land=n=>landQ=landQ.then(async()=>{const before=landed.slice();await cut(n);const nw=landed.filter(x=>!before.includes(x)||queued.has(x));

@@ -24,16 +24,21 @@ typedef struct {
     const char *film;           /* "neg" | "slide" (preview, ARC) */
     int share;                  /* scan: the share windows of strip.job */
     const char *arc;            /* scan: ARC frames "1,3-4" (NULL: none) */
+    const char *job;            /* scan + share: the job's text, kept as
+                                   strip_j<id>.job (NULL: a copy of
+                                   strip.job) */
+    size_t njob;
 } task_req;
 
 void task_init(const task_cfg *cfg);
 /* preview: ftpoc frames (film neg|slide) -> strip.job + strip.png.
  * scan: up to three steps, each run after the last one exits 0: the
- * share windows (scan --job strip.job), then the ARC frames as a
- * detailed scan into <archive>/<strip>/ (frames --detail neg --select,
- * then scan --job on that job). Each step's command is an event line.
- * 0 with *id set; 1 busy (err names the running task); -1 bad request or
- * spawn failure (err) */
+ * share windows (scan --job strip_j<id>.job; ftpoc names the outputs
+ * after the job: strip_j<id>_winNN.raw), then the ARC frames as a
+ * detailed scan into <archive>/<strip>/ (frames --detail neg --select
+ * -o strip_j<id>, then scan --job on that job). Each step's command is
+ * an event line. 0 with *id set; 1 busy (err names the running task);
+ * -1 bad request, no job to scan or spawn failure (err) */
 int task_start(const task_req *rq, int *id, char *err, size_t errn);
 /* 0 delivered, -1 not running or not delivered, -2 no such task */
 int task_stop(int id);

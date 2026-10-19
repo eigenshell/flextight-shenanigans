@@ -536,7 +536,7 @@ def test_page_end_to_end(built, tmp_path):
     check_end_to_end(tmp_path, *run_page(built, tmp_path))
 
 
-WIN = re.compile(r"GET /api/strips/[^/ ]+/files/strip_win01\.raw ")
+WIN = re.compile(r"GET /api/strips/[^/ ]+/files/strip_j\d+_win01\.raw ")
 
 
 def broken(px, head):
@@ -570,7 +570,7 @@ def test_page_lost_window_does_not_wedge(built, tmp_path):
     frame's print the CLI's"""
     out, box, dl = run_page(built, tmp_path, lost, "fail")
     assert out["cut"] and all(n == 0 for _, n in out["cut"])
-    assert re.match(r"strip_win01\.raw: stopped at 0 MB: ", out["bad"]), \
+    assert re.match(r"strip_j2_win01\.raw: stopped at 0 MB: ", out["bad"]), \
         out["bad"]
     assert out["landedFail"] == [] and out["landed"] == [1]
     assert not out["restarted"]
@@ -582,14 +582,14 @@ def test_page_lost_window_does_not_wedge(built, tmp_path):
     strip = box / "strips" / s
     job = tmp_path / "job1.job"
     job.write_text(out["job1"])
-    subprocess.run([str(FTDEV), "cut", str(strip / "strip_win01.raw")],
+    subprocess.run([str(FTDEV), "cut", str(strip / "strip_j2_win01.raw")],
                    check=True, capture_output=True)
-    r = subprocess.run([str(FTDEV), "print", str(strip / "strip_frame01.dng"),
+    r = subprocess.run([str(FTDEV), "print", str(strip / "strip_j2_frame01.dng"),
                         "--roll", str(strip / "strip.print"), "--job",
                         str(job)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert (dl / (s + "_frame01.jpg")).read_bytes() == \
-        (strip / "strip_frame01.jpg").read_bytes()
+        (strip / "strip_j2_frame01.jpg").read_bytes()
 
 
 def check_end_to_end(tmp_path, out, box, dl):
@@ -647,31 +647,31 @@ def check_end_to_end(tmp_path, out, box, dl):
         % (h, h) in seen, seen
     assert out["plot"]
     # a crop on a scanned frame asked; R rescanned it in a run of its own,
-    # the first run's windows kept beside it
+    # in a job of its own (its own window files)
     assert out["question"] == ("Frame 1 is already scanned. A new crop "
                                "needs a rescan.")
     log = [json.loads(l) for l in (box / "fake_ftpoc.log").read_text()
            .splitlines()]
     assert [a[0] for a in log] == ["frames", "scan", "scan"]
-    assert {"strip_r1_win01.raw", "strip_win01.raw"} <= set(out["files"])
+    assert {"strip_j2_win01.raw", "strip_j3_win01.raw"} <= set(out["files"])
     assert 1 in out["landed"]
     # the keymap overlay lists the dvorak keys
     assert "'" in out["keymapText"] and "turn right" in out["keymapText"]
     # the downloads (after the first run) are the CLI's prints of it
     job = tmp_path / "job1.job"
     job.write_text(j1)
-    for w in sorted(strip.glob("strip_r1_win*.raw")):
+    for w in sorted(strip.glob("strip_j2_win*.raw")):
         subprocess.run([str(FTDEV), "cut", str(w)], check=True,
                        capture_output=True)
-    dngs = [str(strip / "strip_r1_frame01.dng")]
+    dngs = [str(strip / "strip_j2_frame01.dng")]
     r = subprocess.run([str(FTDEV), "print", *dngs, "--roll",
                         str(strip / "strip.print"), "--job", str(job)],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     page = dl / (s + "_frame01.jpg")
-    assert page.read_bytes() == (strip / "strip_r1_frame01.jpg").read_bytes()
+    assert page.read_bytes() == (strip / "strip_j2_frame01.jpg").read_bytes()
     assert (dl / (s + "_frame01.jpg.txt")).read_bytes() == \
-        (strip / "strip_r1_frame01.jpg.txt").read_bytes()
+        (strip / "strip_j2_frame01.jpg.txt").read_bytes()
     assert "\ncmyd=2 -1 0 0\n" in page.with_suffix(".jpg.txt").read_text()
     assert "\nrotate=90\n" in page.with_suffix(".jpg.txt").read_text()
     with zipfile.ZipFile(dl / (s + ".zip")) as z:
@@ -679,4 +679,4 @@ def check_end_to_end(tmp_path, out, box, dl):
         assert z.namelist() == [s + "_frame01.jpg", s + "_frame01.jpg.txt"]
         for n in z.namelist():
             assert z.read(n) == \
-                (strip / ("strip_r1" + n[len(s):])).read_bytes(), n
+                (strip / ("strip_j2" + n[len(s):])).read_bytes(), n

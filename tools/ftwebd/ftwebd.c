@@ -35,7 +35,10 @@
  *   GET|PUT /api/strips/{s}/strip.review  "<frame> pending|confirmed|
  *                                         skipped" lines (PUT: checked)
  *   POST /api/tasks  op=preview&strip=&film=neg|slide
- *                    op=scan&strip=[&share=0|1][&arc=1,3-4&film=]
+ *                    op=scan&strip=[&share=0|1][&job=][&arc=1,3-4&film=]
+ *                    (job: the share job's text, kept as strip_j<id>.job;
+ *                    none: a copy of strip.job. ftpoc's outputs are
+ *                    named after it: strip_j<id>_winNN.raw)
  *                                         202 {id} | 409 busy
  *   GET  /api/tasks/current, /api/tasks/{id}
  *   GET  /api/tasks/{id}/events?since=k   SSE, id = line number
@@ -326,9 +329,25 @@ static void api_put(sock_t s, const char *dir, const char *name,
         http_json(s, 200, "{\"ok\":true}");
 }
 
+/* a job's text checked as ftpoc reads it, and against this scanner's
+ * optics (ftpoc moves by it); 0, or -1 with msg */
+static int job_ok(const char *text, size_t n, char *msg, size_t cap)
+{
+    static ft_job j;
+    ft_err e;
+    int rc;
+    pthread_mutex_lock(&g_put_mu);
+    rc = ft_job_parse(&j, text, n, &e) || ft_job_validate(&j, &g_lens, &e);
+    pthread_mutex_unlock(&g_put_mu);
+    if (rc)
+        snprintf(msg, cap, "%s", e.msg);
+    return rc ? -1 : 0;
+}
+
 static void api_task_start(sock_t s, const http_req *r)
 {
     char op[16], strip[80], film[16], share[8], arc[80], err[300], p[400];
+    char msg[310], *job;
     const char *body = r->body ? r->body : "";
     task_req rq;
     int id, rc;
@@ -357,7 +376,25 @@ static void api_task_start(sock_t s, const http_req *r)
             return;
         }
     }
+    /* job=: the share job's text (else the box copies strip.job) */
+    job = malloc(HTTP_BODY_MAX);
+    if (!job) {
+        http_error(s, 500, "out of memory");
+        return;
+    }
+    if (http_param(body, "job", job, HTTP_BODY_MAX)) {
+        free(job);
+        job = NULL;
+    } else if (job_ok(job, strlen(job), err, sizeof err)) {
+        snprintf(msg, sizeof msg, "job: %s", err);
+        free(job);
+        http_error(s, 422, msg);
+        return;
+    }
+    rq.job = job;
+    rq.njob = job ? strlen(job) : 0;
     rc = task_start(&rq, &id, err, sizeof err);
+    free(job);
     if (rc == 1)
         http_error(s, 409, err);
     else if (rc)

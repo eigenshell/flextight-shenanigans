@@ -153,10 +153,10 @@ try {
     const bad = await ev('document.getElementById("fbad").textContent');
     const landedFail = await ev("landed.slice()");
     const restarted = await ev('!document.getElementById("toast").hidden || !!startT || task.state === "running"');
-    const job1 = await ev('fetch(S("strip.job")).then(r=>r.text())');
+    const job1 = await ev('fetch(F("strip_j"+task.id+".job")).then(r=>r.text())');
     // a window landing after it (here the same one, now through) lands
     await ev('fetch("/_proxy/open")');
-    await ev('land("strip_win01.raw")');
+    await ev('land("strip_j"+task.id+"_win01.raw")');
     await ev("landQ");
     const landed = await ev("landed.slice()");
     const badAfter = await ev('document.getElementById("fbad").textContent');
@@ -171,7 +171,7 @@ try {
     await until('task && task.op === "scan" && task.state === "done" && landed.length > 0', "scan", 90000);
     await ev("landQ");
     const review = await ev('fetch(S("strip.review")).then(r=>r.text())');
-    const job1 = await ev('fetch(S("strip.job")).then(r=>r.text())');
+    const job1 = await ev('fetch(F("strip_j"+task.id+".job")).then(r=>r.text())');
     const landed1 = await ev("landed.slice()");
     const states = await ev('frames.map(f=>stateOf(f))');
     const ppin = await ev('document.getElementById("ppin").textContent');
@@ -194,7 +194,7 @@ try {
     await sleep(300);
     const out = await ev('(async()=>({landed: landed.slice(), seen: stSeen, plot: !document.getElementById("fz").hidden,' +
       ' notes: document.getElementById("notes").textContent, print: await fetch(S("strip.print")).then(r=>r.text()),' +
-      ' files: (await api(S("files"))).map(f=>f.name), job2: await fetch(S("strip.job")).then(r=>r.text())}))()');
+      ' files: (await api(S("files"))).map(f=>f.name), job2: await fetch(F("strip_j"+task.id+".job")).then(r=>r.text())}))()');
     console.log(JSON.stringify(Object.assign({ strip, res, holder, recent, scanFile, before, after, review,
       job1, landed1, states, ppin, uc, ucSaid, question, keymapText }, out)));
   }

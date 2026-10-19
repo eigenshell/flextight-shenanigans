@@ -136,6 +136,13 @@ def argv_log(s):
             (s.cwd / "fake_ftpoc.log").read_text().splitlines()]
 
 
+def only(text, keep):
+    """a job's text with only the frames in keep included"""
+    return re.sub(r"(\[frame (\d+)\]\ntype = \w+\ninclude = )yes",
+                  lambda m: m.group(0) if int(m.group(2)) in keep
+                  else m.group(1) + "no", text)
+
+
 def test_preview_argv_events_and_files(srv):
     tid = previewed(srv)
     # the client names an op; ftwebd builds the argv
@@ -167,16 +174,19 @@ def test_preview_argv_events_and_files(srv):
 
 
 def test_scan_share_only(srv):
+    """a scan's job is its own file, strip_j<id>.job (a copy of strip.job
+    when the POST sends none); ftpoc names the outputs after it"""
     previewed(srv)
     code, t = srv.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
-    assert code == 202
+    assert code == 202 and t["id"] == 2
     assert srv.wait(t["id"])["exit"] == 0
-    assert argv_log(srv)[-1] == ["scan", "--job", "strips/a/strip.job",
+    assert argv_log(srv)[-1] == ["scan", "--job", "strips/a/strip_j2.job",
                                  "--progress"]
     d = srv.cwd / "strips" / "a"
-    assert (d / "strip_win01.raw").exists()
-    # ftpoc marks the finished windows done in the job
-    assert "done = yes" in (d / "strip.job").read_text()
+    assert (d / "strip_j2_win01.raw").exists()
+    # ftpoc marks the finished windows done in the job it ran
+    assert "done = yes" in (d / "strip_j2.job").read_text()
+    assert "done = yes" not in (d / "strip.job").read_text()
 
 
 @pytest.fixture
@@ -193,9 +203,9 @@ def test_scan_chain_share_then_archive(arc):
                                              "arc": "4,6", "film": "neg"})
     assert code == 202
     assert arc.wait(t["id"])["exit"] == 0
-    base = str(arc.cwd / "nas" / "a" / "strip")
+    base = str(arc.cwd / "nas" / "a" / "strip_j2")
     assert argv_log(arc)[1:] == [
-        ["scan", "--job", "strips/a/strip.job", "--progress"],
+        ["scan", "--job", "strips/a/strip_j2.job", "--progress"],
         ["frames", "--detail", "neg", "--ppi", "3150", "--film", "neg",
          "--select", "4,6", "--progress", "-o", base],
         ["scan", "--job", base + ".job", "--progress"]]
@@ -206,7 +216,7 @@ def test_scan_chain_share_then_archive(arc):
     assert ev[0] == cmds[0]
     assert [d for d in ev if d.startswith("ftwebd exit")] == \
         ["ftwebd exit 0"]
-    assert (arc.cwd / "nas" / "a" / "strip_win01.raw").exists()
+    assert (arc.cwd / "nas" / "a" / "strip_j2_win01.raw").exists()
     # archive only: no share step
     code, t = arc.req("POST", "/api/tasks", {"op": "scan", "strip": "a",
                                              "share": "0", "arc": "2",
@@ -214,6 +224,7 @@ def test_scan_chain_share_then_archive(arc):
     assert code == 202 and arc.wait(t["id"])["exit"] == 0
     assert argv_log(arc)[-2][0:2] == ["frames", "--detail"]
     assert argv_log(arc)[-2][5:7] == ["--film", "slide"]
+    assert argv_log(arc)[-2][-1] == str(arc.cwd / "nas" / "a" / "strip_j3")
 
 
 def test_microcode_passed_to_every_step(binary, tmp_path):
@@ -521,18 +532,40 @@ def test_preview_job_put_validated(srv):
     assert (d / "strip.preview.job").read_text() == moved
 
 
-def test_scan_keeps_earlier_runs(srv):
-    """a second scan of a strip (a rescan) numbers its windows from 1
-    again: the earlier run's window files move to strip_rK_winNN first,
-    so frames scanned before are not overwritten"""
+def test_scan_job_per_task(srv):
+    """a rescan is a later job: its own job file and windows, nothing of
+    an earlier scan renamed or overwritten"""
     previewed(srv)
     d = srv.cwd / "strips" / "a"
-    for k in (1, 2):
+    for k in (1, 2, 3):
         code, t = srv.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
         assert code == 202 and srv.wait(t["id"])["exit"] == 0
     names = sorted(p.name for p in d.iterdir() if "win" in p.name)
-    assert "strip_win01.raw" in names and "strip_r1_win01.raw" in names
-    assert "strip_r1_win01.raw.txt" in names
-    code, t = srv.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
-    assert srv.wait(t["id"])["exit"] == 0
-    assert (d / "strip_r2_win01.raw").exists()
+    assert [n for n in names if n.endswith(".raw")] == \
+        ["strip_j2_win01.raw", "strip_j3_win01.raw", "strip_j4_win01.raw"]
+    assert not [n for n in names if "_r1_" in n]
+
+
+def test_scan_job_from_the_post(srv):
+    """job= on the POST: checked like a PUT strip.job, kept as
+    strip_j<id>.job, the job ftpoc scans"""
+    previewed(srv)
+    d = srv.cwd / "strips" / "a"
+    job = only((d / "strip.job").read_text(), {2, 3})
+    code, t = srv.req("POST", "/api/tasks",
+                      {"op": "scan", "strip": "a", "job": job})
+    assert code == 202 and srv.wait(t["id"])["exit"] == 0
+    kept = (d / ("strip_j%d.job" % t["id"])).read_text()
+    assert re.findall(r"include = (\w+)", kept) == \
+        re.findall(r"include = (\w+)", job)
+    code, e = srv.req("POST", "/api/tasks", {"op": "scan", "strip": "a",
+                                             "job": "[strip]\nbogus = 1\n"})
+    assert code == 422 and e["error"].startswith("job: ")
+    assert "bogus" in e["error"]
+
+
+def test_scan_needs_a_job(srv):
+    srv.req("POST", "/api/strips", {"name": "a"})
+    assert srv.req("POST", "/api/tasks", {"op": "scan", "strip": "a"}) == \
+        (422, {"error": "no strip.job to scan (send job=)"})
+    assert not (srv.cwd / "fake_ftpoc.log").exists()
