@@ -18,7 +18,9 @@ Otherwise windows are 64 zero bytes. FAKE_FTPOC_PREVIEW: a preview's base
 lines as they come), then the rest (else 64 zero bytes). FAKE_FTPOC_HOLD: a path; each scan window waits while that file exists
 (after its "progress unit" line), so a test holds a job running.
 FAKE_FTPOC_FAIL: a scan whose job path contains it fails (exit 1) at its
-first window, after the hold. FAKE_FTPOC_ROWS: a scan
+first window, after the hold. FAKE_FTPOC_LINGER: a path; a scan that ended
+well closes its output, then waits while that file exists (a stop
+ignored) and exits 0, so a test stops a step whose output has ended. FAKE_FTPOC_ROWS: a scan
 window's rows (default 1890; a progress line per 50), so a test fills
 ftwebd's line ring. scan says what focus does: window 1 a bracket, the rest carry
 it."""
@@ -37,6 +39,7 @@ HERE = Path(__file__).resolve().parent
 DELAY = float(os.environ.get("FAKE_FTPOC_DELAY", "0.01"))
 HOLD = os.environ.get("FAKE_FTPOC_HOLD")
 FAIL = os.environ.get("FAKE_FTPOC_FAIL")
+LINGER = os.environ.get("FAKE_FTPOC_LINGER")
 ROWS = int(os.environ.get("FAKE_FTPOC_ROWS", "1890"))
 stopped = False
 
@@ -193,6 +196,12 @@ def scan(args):
         Path(job).write_text(text)
         say("progress file " + raw)
     say("progress end ok")
+    if LINGER and os.path.exists(LINGER):
+        os.close(1)
+        os.close(2)
+        while os.path.exists(LINGER):
+            time.sleep(0.02)
+        os._exit(0)
     return 0
 
 

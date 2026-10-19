@@ -312,6 +312,41 @@ def test_stop_ends_the_chain(binary, tmp_path):
         s.close()
 
 
+def test_stop_after_the_steps_output(binary, tmp_path):
+    """a stop that lands once a step's output has ended (the step then
+    exits 0): the job ends stopped and its next step never runs"""
+    linger = tmp_path / "linger"
+    s = Server(binary, tmp_path, 0.001, args=["--archive", tmp_path / "nas"],
+               env={"FAKE_FTPOC_LINGER": str(linger)})
+    try:
+        previewed(s)
+        linger.touch()
+        code, t = s.req("POST", "/api/tasks", {"op": "scan", "strip": "a",
+                                               "share": "1", "arc": "4",
+                                               "film": "neg"})
+        assert code == 202
+        # the window written: the share step no longer heeds a stop and
+        # soon lingers, its output closed
+        w = tmp_path / "strips" / "a" / ("strip_j%d_win01.raw.txt" % t["id"])
+        for _ in range(250):
+            if w.exists():
+                break
+            time.sleep(0.02)
+        time.sleep(0.2)
+        assert s.req("DELETE", "/api/tasks/%d" % t["id"]) == \
+            (200, {"ok": True, "was": "running"})
+        linger.unlink()
+        done = s.wait(t["id"])
+        assert (done["state"], done["stopped"], done["exit"]) == \
+            ("stopped", True, 0)
+        assert [a[0] for a in argv_log(s)] == ["frames", "scan"]
+        # stop on an ended job: 409, as before
+        assert s.req("POST", "/api/tasks/%d/stop" % t["id"])[0] == 409
+    finally:
+        linger.unlink(missing_ok=True)
+        s.close()
+
+
 def test_jobs_run_in_order(held):
     """a POST while the scanner is busy is queued (no more 409): the
     jobs run one after the other in order; a job's lines stay readable

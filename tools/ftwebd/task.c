@@ -228,7 +228,7 @@ static void finish(int code)
     add_line(end, strlen(end));
     j->exit_code = code;
     j->last = T.nlines;
-    j->state = code == 0 ? JOB_DONE : j->stopped ? JOB_STOPPED : JOB_FAILED;
+    j->state = j->stopped ? JOB_STOPPED : code ? JOB_FAILED : JOB_DONE;
     T.run = NULL;
     changed();
 }
@@ -405,17 +405,27 @@ int task_start(const task_req *rq, int *id, char *err, size_t errn)
     return 0;
 }
 
+/* under T.mu: the running job j stops. Marked first: the reader checks
+ * the mark under T.mu before a next step, so a step that has already
+ * exited (the signal too late, or undelivered: it is reaped) still ends
+ * the chain */
+static void stop_running(batch_job *j)
+{
+    j->stopped = 1;
+    proc_stop(&T.p);
+    changed();
+}
+
 int task_stop(int id)
 {
     batch_job *j;
     int rc = -1;
     pthread_mutex_lock(&T.mu);
     j = batch_find(id);
-    if (!j)
+    if (!j) {
         rc = -2;
-    else if (j == T.run && proc_stop(&T.p) == 0) {
-        j->stopped = 1;
-        changed();
+    } else if (j == T.run) {
+        stop_running(j);
         rc = 0;
     }
     pthread_mutex_unlock(&T.mu);
@@ -475,13 +485,8 @@ int task_delete(int id)
         drop_job(j);
         rc = 0;
     } else if (j == T.run) {
-        if (proc_stop(&T.p)) {
-            rc = -3;
-        } else {
-            j->stopped = 1;
-            changed();
-            rc = 1;
-        }
+        stop_running(j);
+        rc = 1;
     } else {
         rc = -1;
     }

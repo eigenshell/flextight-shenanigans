@@ -606,8 +606,6 @@ static void route(http_req *r)
                 http_error(s, 404, "no such task");
             else if (rc == -1)
                 http_error(s, 409, "ended");
-            else if (rc == -3)
-                http_error(s, 500, "cannot stop it");
             else
                 http_json(s, 200, "{\"ok\":true,\"was\":\"%s\"}",
                           rc ? "running" : "queued");

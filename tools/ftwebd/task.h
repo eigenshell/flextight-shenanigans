@@ -46,7 +46,9 @@ void task_init(const task_cfg *cfg);
  * no job to scan, or (idle, nothing queued) its first step cannot start
  * (err; no job kept) */
 int task_start(const task_req *rq, int *id, char *err, size_t errn);
-/* 0 delivered, -1 not running or not delivered, -2 no such task */
+/* the running job stopped: it ends "stopped" and no further step of it
+ * starts, whether the signal reached the step or it had already exited.
+ * 0 stopping, -1 not running, -2 no such task */
 int task_stop(int id);
 /* a queued share scan's job file replaced by text[0..n) (checked by the
  * caller), under the lock that starts jobs: it lands before the start or
@@ -55,8 +57,8 @@ int task_stop(int id);
 int task_put_job(int id, const char *text, size_t n, char *err,
                  size_t errn);
 /* a queued job dropped (its job file removed), or the running one
- * stopped (it ends "stopped", the next runs). 0 dropped, 1 stopping,
- * -1 it has ended, -2 no such task, -3 the stop was not delivered */
+ * stopped (as task_stop; the next runs). 0 dropped, 1 stopping, -1 it
+ * has ended, -2 no such task */
 int task_delete(int id);
 /* every queued job dropped (as task_delete); how many */
 int task_clear(void);
