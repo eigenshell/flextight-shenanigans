@@ -28,7 +28,7 @@ WCC = $(WASI_SDK)/bin/clang --target=wasm32-wasip1
 WCFLAGS = -std=c99 -O2 -Wall -Wextra -Wpedantic -I$(LIBFT)
 WLDFLAGS = -Wl,-z,stack-size=1048576 -Wl,--gc-sections -Wl,--strip-all
 WEB_UNITS = ft ft_curve ft_render ft_render_auto ft_density ft_dplan \
-	ft_plan ft_geom ft_share ft_output ft_icc ft_resize ft_atrous \
+	ft_plan ft_dmax ft_geom ft_share ft_output ft_icc ft_resize ft_atrous \
 	ft_noise_model ft_nr ft_sharpen ft_look ft_print ft_pm_classic \
 	ft_pm_stock ft_pm_frontier ft_pm_lut3d ft_emulsion ft_print_file \
 	ft_image ft_job ft_focus ft_holder ft_jpeg ft_zip ft_share_cut \

@@ -68,7 +68,7 @@ async function landing(){
   $("em").innerHTML="";for(const e of ems)$("em").append(new Option(e.name,e.id));
   $("holder").innerHTML="";for(const h of hs)$("holder").append(new Option(h.label,h.name));
   $("res").innerHTML="";for(const r of res){const b=document.createElement("button");b.className="res";b.dataset.ppi=r.ppi;
-   b.innerHTML="<b>"+r.ppi+"</b><small>ppi · "+r.mp.toFixed(1)+" MP</small><small>Dmax: "+(r.dmax==null?"#N/A":r.dmax.toFixed(2))+"</small>";
+   b.innerHTML="<b>"+r.ppi+"</b><small>ppi · "+r.mp.toFixed(1)+" MP</small><small>Dmax"+(r.dmax==null?": #N/A":" ≈ "+r.dmax.toFixed(1))+"</small>";
    b.onclick=()=>pickRes(r.ppi);$("res").append(b)}
   pickRes(+ls("ppi")||1730);if(ls("em"))$("em").value=ls("em");if(ls("holder"))$("holder").value=ls("holder")}catch(e){st("engine: "+e.message,1)}
  try{const sc=await api("/api/scans"),tb=$("recent");tb.innerHTML="";
