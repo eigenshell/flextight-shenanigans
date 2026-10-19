@@ -317,7 +317,6 @@ static void api_put(sock_t s, const char *dir, const char *name,
     const char *body = r->body ? r->body : "";
     char p[400], m[120];
     ft_err e;
-    FILE *f;
     int rc;
     pthread_mutex_lock(&g_put_mu);
     if (strcmp(name, "strip.review") == 0
@@ -331,12 +330,7 @@ static void api_put(sock_t s, const char *dir, const char *name,
         return;
     }
     snprintf(p, sizeof p, "%s/%s", dir, name);
-    f = fopen(p, "wb");
-    rc = !f;
-    if (f) {
-        rc = fwrite(body, 1, r->nbody, f) != r->nbody;
-        rc |= fclose(f) != 0;
-    }
+    rc = task_write_file(p, body, r->nbody);    /* a GET: old or new */
     pthread_mutex_unlock(&g_put_mu);
     snprintf(m, sizeof m, "cannot write %s", name);
     if (rc)

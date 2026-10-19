@@ -50,6 +50,10 @@ int task_start(const task_req *rq, int *id, char *err, size_t errn);
  * starts, whether the signal reached the step or it had already exited.
  * 0 stopping, -1 not running, -2 no such task */
 int task_stop(int id);
+/* b[0..n) as path: written to path.tmp and renamed over it, so a reader
+ * has the old file or the new one, whole, and a failed write leaves path
+ * as it was. 0 or -1 */
+int task_write_file(const char *path, const char *b, size_t n);
 /* a queued share scan's job file replaced by text[0..n) (checked by the
  * caller), under the lock that starts jobs: it lands before the start or
  * not at all. 0 written; 1 the job has started (err); -1 not a share

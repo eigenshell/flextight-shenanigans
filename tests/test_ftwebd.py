@@ -964,6 +964,55 @@ def test_preview_job_put_validated(srv):
     assert (d / "strip.preview.job").read_text() == moved
 
 
+def test_get_during_put_is_whole(srv):
+    """a GET while the page PUTs the same file (a crop's strip.preview.job,
+    polled) has the old file or the new one, whole: a PUT that truncated
+    in place cut it short of its Content-Length (Chromium: "Failed to
+    fetch")"""
+    import threading
+    srv.req("POST", "/api/strips", {"name": "a"})
+    p = "/api/strips/a/strip.review"
+    bodies = ["".join("%d pending\n" % i for i in range(1, k)).encode()
+              for k in (200, 400)]
+    stop = threading.Event()
+
+    def putter():
+        k = 0
+        while not stop.is_set():
+            b = bodies[k % 2]
+            k += 1
+            with socket.create_connection(("127.0.0.1", srv.port)) as c:
+                c.sendall(b"PUT %s HTTP/1.1\r\nContent-Length: %d\r\n\r\n"
+                          % (p.encode(), len(b)) + b)
+                while c.recv(65536):
+                    pass
+    srv.req("PUT", p, bodies[0].decode())
+    th = threading.Thread(target=putter)
+    th.start()
+    seen, bad = 0, []
+    try:
+        t0 = time.time()
+        while time.time() - t0 < 2:
+            with socket.create_connection(("127.0.0.1", srv.port)) as c:
+                c.sendall(b"GET %s HTTP/1.1\r\n\r\n" % p.encode())
+                data = b""
+                while True:
+                    d = c.recv(65536)
+                    if not d:
+                        break
+                    data += d
+            head, _, body = data.partition(b"\r\n\r\n")
+            assert head.startswith(b"HTTP/1.1 200 "), head
+            n = int(re.search(rb"Content-Length: (\d+)", head).group(1))
+            seen += 1
+            if (n, body) not in ((len(b), b) for b in bodies):
+                bad.append((n, len(body)))
+    finally:
+        stop.set()
+        th.join()
+    assert seen > 100 and not bad, (seen, len(bad), bad[:5])
+
+
 def test_scan_job_per_task(srv):
     """a rescan is a later job: its own job file and windows, nothing of
     an earlier scan renamed or overwritten"""

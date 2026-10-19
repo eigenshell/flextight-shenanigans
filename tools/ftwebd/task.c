@@ -80,41 +80,17 @@ static void feed(const char *b, long n)
     }
 }
 
-/* 0, or -1 if from cannot be read or to written */
-static int copy_file(const char *from, const char *to)
-{
-    char buf[4096];
-    FILE *in = fopen(from, "rb"), *out;
-    size_t n;
-    int rc = 0;
-    if (!in)
-        return -1;
-    out = fopen(to, "wb");
-    if (!out) {
-        fclose(in);
-        return -1;
-    }
-    while ((n = fread(buf, 1, sizeof buf, in)) > 0)
-        rc |= fwrite(buf, 1, n, out) != n;
-    rc |= ferror(in) != 0;
-    fclose(in);
-    rc |= fclose(out) != 0;
-    return rc ? -1 : 0;
-}
+/* every file ftwebd writes goes to path.tmp and is renamed over path:
+ * a reader (a GET in flight) has the old file or the new one, whole,
+ * never one cut short by the write (the page PUTs strip.preview.job
+ * while it polls it). file_mu keeps two writers of one path off one
+ * path.tmp; it is taken last, under T.mu or the PUT lock */
+static pthread_mutex_t file_mu = PTHREAD_MUTEX_INITIALIZER;
 
-/* b[0..n) as path, written to path.tmp and renamed over it, so a failed
- * write leaves path as it was; 0 or -1 */
-static int write_file(const char *path, const char *b, size_t n)
+/* under file_mu: tmp (closed; rc its write's result) renamed over path,
+ * or removed; 0 or -1 */
+static int replace(const char *tmp, const char *path, int rc)
 {
-    char tmp[320];
-    FILE *f;
-    int rc;
-    snprintf(tmp, sizeof tmp, "%s.tmp", path);
-    f = fopen(tmp, "wb");
-    if (!f)
-        return -1;
-    rc = fwrite(b, 1, n, f) != n;
-    rc |= fclose(f) != 0;
 #ifdef _WIN32
     /* rename() does not replace an existing file there */
     rc = rc || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING);
@@ -124,6 +100,56 @@ static int write_file(const char *path, const char *b, size_t n)
     if (rc)
         remove(tmp);
     return rc ? -1 : 0;
+}
+
+/* 0, or -1 if from cannot be read or to written (to as it was) */
+static int copy_file(const char *from, const char *to)
+{
+    char buf[4096], tmp[420];
+    FILE *in = fopen(from, "rb"), *out;
+    size_t n;
+    int rc = 0;
+    if (!in)
+        return -1;
+    if ((size_t)snprintf(tmp, sizeof tmp, "%s.tmp", to) >= sizeof tmp) {
+        fclose(in);
+        return -1;
+    }
+    pthread_mutex_lock(&file_mu);
+    out = fopen(tmp, "wb");
+    if (!out) {
+        pthread_mutex_unlock(&file_mu);
+        fclose(in);
+        return -1;
+    }
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0)
+        rc |= fwrite(buf, 1, n, out) != n;
+    rc |= ferror(in) != 0;
+    fclose(in);
+    rc |= fclose(out) != 0;
+    rc = replace(tmp, to, rc);
+    pthread_mutex_unlock(&file_mu);
+    return rc;
+}
+
+int task_write_file(const char *path, const char *b, size_t n)
+{
+    char tmp[420];
+    FILE *f;
+    int rc;
+    if ((size_t)snprintf(tmp, sizeof tmp, "%s.tmp", path) >= sizeof tmp)
+        return -1;
+    pthread_mutex_lock(&file_mu);
+    f = fopen(tmp, "wb");
+    if (!f) {
+        pthread_mutex_unlock(&file_mu);
+        return -1;
+    }
+    rc = fwrite(b, 1, n, f) != n;
+    rc |= fclose(f) != 0;
+    rc = replace(tmp, path, rc);
+    pthread_mutex_unlock(&file_mu);
+    return rc;
 }
 
 /* a share scan's job file: <strips>/<strip>/strip_j<id>.job */
@@ -379,7 +405,7 @@ int task_start(const task_req *rq, int *id, char *err, size_t errn)
         job_file(job, sizeof job, j);
         snprintf(from, sizeof from, "%s/%s/strip.job", T.cfg.strips,
                  rq->strip);
-        if (rq->job ? write_file(job, rq->job, rq->njob)
+        if (rq->job ? task_write_file(job, rq->job, rq->njob)
                     : copy_file(from, job)) {
             if (rq->job)
                 snprintf(err, errn, "cannot write %s", job);
@@ -452,7 +478,7 @@ int task_put_job(int id, const char *text, size_t n, char *err,
         rc = 1;
     } else {
         job_file(job, sizeof job, j);
-        if (write_file(job, text, n)) {
+        if (task_write_file(job, text, n)) {
             snprintf(err, errn, "cannot write %s", job);
             rc = -3;
         } else {
