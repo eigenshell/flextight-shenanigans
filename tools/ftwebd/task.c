@@ -15,6 +15,9 @@
 #include "http.h"
 #include "proc.h"
 #include "task.h"
+#ifdef _WIN32
+#include <windows.h>            /* after http.h's winsock2.h */
+#endif
 
 #define RING 4096               /* lines kept; older ones are dropped */
 #define LINE 320
@@ -99,15 +102,27 @@ static int copy_file(const char *from, const char *to)
     return rc ? -1 : 0;
 }
 
-/* b[0..n) as path; 0 or -1 */
+/* b[0..n) as path, written to path.tmp and renamed over it, so a failed
+ * write leaves path as it was; 0 or -1 */
 static int write_file(const char *path, const char *b, size_t n)
 {
-    FILE *f = fopen(path, "wb");
+    char tmp[320];
+    FILE *f;
     int rc;
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    f = fopen(tmp, "wb");
     if (!f)
         return -1;
     rc = fwrite(b, 1, n, f) != n;
     rc |= fclose(f) != 0;
+#ifdef _WIN32
+    /* rename() does not replace an existing file there */
+    rc = rc || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING);
+#else
+    rc = rc || rename(tmp, path) != 0;
+#endif
+    if (rc)
+        remove(tmp);
     return rc ? -1 : 0;
 }
 
@@ -213,7 +228,7 @@ static void finish(int code)
     add_line(end, strlen(end));
     j->exit_code = code;
     j->last = T.nlines;
-    j->state = JOB_DONE;
+    j->state = code == 0 ? JOB_DONE : j->stopped ? JOB_STOPPED : JOB_FAILED;
     T.run = NULL;
     changed();
 }
@@ -258,17 +273,17 @@ static int run_job(batch_job *j, char *err, size_t errn)
 }
 
 /* under T.mu, when idle: the oldest queued job runs. A job whose first
- * step cannot start ends at once (its error, exit -1) */
+ * step cannot start ends at once (its error, exit -1; failed) and the
+ * next is tried */
 static void start_next(void)
 {
     char err[300];
     batch_job *j;
-    if (T.run || !(j = batch_next()))
-        return;
-    if (run_job(j, err, sizeof err)) {
-        add_line(err, strlen(err));
-        finish(-1);
-    }
+    while (!T.run && (j = batch_next()) != NULL)
+        if (run_job(j, err, sizeof err)) {
+            add_line(err, strlen(err));
+            finish(-1);
+        }
 }
 
 static void *reader(void *arg)
@@ -298,8 +313,7 @@ static void *reader(void *arg)
         pthread_mutex_unlock(&T.mu);
     }
     finish(code);
-    if (code == 0)                      /* a failure halts the batch */
-        start_next();
+    start_next();                       /* failed or stopped: the next */
     pthread_mutex_unlock(&T.mu);
     return NULL;
 }
@@ -435,6 +449,57 @@ int task_put_job(int id, const char *text, size_t n, char *err,
     }
     pthread_mutex_unlock(&T.mu);
     return rc;
+}
+
+/* under T.mu: a queued job and its job file gone */
+static void drop_job(batch_job *j)
+{
+    char job[310];
+    if (j->share) {
+        job_file(job, sizeof job, j);
+        remove(job);
+    }
+    batch_drop(j);
+    changed();
+}
+
+int task_delete(int id)
+{
+    batch_job *j;
+    int rc;
+    pthread_mutex_lock(&T.mu);
+    j = batch_find(id);
+    if (!j) {
+        rc = -2;
+    } else if (j->state == JOB_QUEUED) {
+        drop_job(j);
+        rc = 0;
+    } else if (j == T.run) {
+        if (proc_stop(&T.p)) {
+            rc = -3;
+        } else {
+            j->stopped = 1;
+            changed();
+            rc = 1;
+        }
+    } else {
+        rc = -1;
+    }
+    pthread_mutex_unlock(&T.mu);
+    return rc;
+}
+
+int task_clear(void)
+{
+    batch_job *j;
+    int n = 0;
+    pthread_mutex_lock(&T.mu);
+    while ((j = batch_next()) != NULL) {
+        drop_job(j);
+        n++;
+    }
+    pthread_mutex_unlock(&T.mu);
+    return n;
 }
 
 int task_json(int id, char *out, size_t n)

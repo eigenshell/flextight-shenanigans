@@ -25,6 +25,7 @@ static const char *reason(int code)
     case 413: return "Payload Too Large";
     case 422: return "Unprocessable Entity";
     case 500: return "Internal Server Error";
+    case 507: return "Insufficient Storage";
     default: return "Error";
     }
 }

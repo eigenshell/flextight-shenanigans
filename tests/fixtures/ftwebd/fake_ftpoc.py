@@ -16,7 +16,9 @@ Otherwise windows are 64 zero bytes. FAKE_FTPOC_PREVIEW: a preview's base
 (<p>.raw, .raw.cal, .raw.txt) frames writes as strip.raw while it
 "scans" (each progress line a share of the bytes, as ftpoc writes the
 lines as they come), then the rest (else 64 zero bytes). FAKE_FTPOC_HOLD: a path; each scan window waits while that file exists
-(after its "progress unit" line), so a test holds a job running. FAKE_FTPOC_ROWS: a scan
+(after its "progress unit" line), so a test holds a job running.
+FAKE_FTPOC_FAIL: a scan whose job path contains it fails (exit 1) at its
+first window, after the hold. FAKE_FTPOC_ROWS: a scan
 window's rows (default 1890; a progress line per 50), so a test fills
 ftwebd's line ring. scan says what focus does: window 1 a bracket, the rest carry
 it."""
@@ -34,6 +36,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DELAY = float(os.environ.get("FAKE_FTPOC_DELAY", "0.01"))
 HOLD = os.environ.get("FAKE_FTPOC_HOLD")
+FAIL = os.environ.get("FAKE_FTPOC_FAIL")
 ROWS = int(os.environ.get("FAKE_FTPOC_ROWS", "1890"))
 stopped = False
 
@@ -155,6 +158,9 @@ def scan(args):
         say("progress unit window %d %d" % (i, g))
         if not held():
             say("progress end stopped")
+            return 1
+        if FAIL and FAIL in job:
+            say("progress end failed")
             return 1
         first = min(n for n, inc, gg, _, _ in secs if inc and gg == g)
         if i == 1:

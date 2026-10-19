@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /* ftpoc tasks: the client names an op, ftwebd builds the argv (never the
  * client). Tasks are the batch's jobs (batch.h): queued in order, run one
- * at a time (the scanner has one holder), the next as one ends. A job's
+ * at a time (the scanner has one holder), the next as one ends (whether
+ * it ended well, failed or was stopped). A job's
  * output is numbered lines (1..): line 1 is the built command, the last
  * "ftwebd exit <code>". Events resume with since = the last number
  * seen. */
@@ -40,7 +41,8 @@ void task_init(const task_cfg *cfg);
  * a detailed scan into <archive>/<strip>/ (frames --detail neg --select
  * -o strip_j<id>, then scan --job on that job). Each step's command is
  * an event line (a step that cannot start: its error, then the exit
- * line, -1). 0 with *id set; 1 the batch is full (err); -1 bad request,
+ * line, -1; failed, and the next runs). 0 with *id set; 1 the batch is
+ * full (err); -1 bad request,
  * no job to scan, or (idle, nothing queued) its first step cannot start
  * (err; no job kept) */
 int task_start(const task_req *rq, int *id, char *err, size_t errn);
@@ -52,7 +54,13 @@ int task_stop(int id);
  * scan (err); -2 no such task; -3 cannot write (err) */
 int task_put_job(int id, const char *text, size_t n, char *err,
                  size_t errn);
-/* {"id":..,"op":..,"strip":..,"state":"queued|running|done","exit":..,
+/* a queued job dropped (its job file removed), or the running one
+ * stopped (it ends "stopped", the next runs). 0 dropped, 1 stopping,
+ * -1 it has ended, -2 no such task, -3 the stop was not delivered */
+int task_delete(int id);
+/* every queued job dropped (as task_delete); how many */
+int task_clear(void);
+/* {"id":..,"op":..,"strip":..,"state":"queued|running|done|failed|stopped","exit":..,
  * "stopped":..,"lines":..} for id, or the running (else the latest) job
  * when id is 0. 0, or -1 if there is none (out: "null") */
 int task_json(int id, char *out, size_t n);

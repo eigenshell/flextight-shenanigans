@@ -39,13 +39,16 @@
  *                    (job: the share job's text, kept as strip_j<id>.job;
  *                    none: a copy of strip.job. ftpoc's outputs are
  *                    named after it: strip_j<id>_winNN.raw)
- *                    202 {id}: queued at the batch's tail (409: the
- *                    batch is full)
+ *                    202 {id}: queued at the batch's tail (507: 8 jobs
+ *                    queued or running)
  *   GET  /api/tasks/current, /api/tasks/{id}
  *   GET  /api/tasks/{id}/events?since=k   SSE, id = line number
  *   POST /api/tasks/{id}/stop
  *   PUT  /api/tasks/{id}/job              a queued scan's job (validated);
  *                                         409 once it has started
+ *   DELETE /api/tasks/{id}                a queued job dropped, or the
+ *                                         running one stopped
+ *   DELETE /api/tasks?state=queued        every queued job dropped
  *
  * A good preview's job is kept as strip.preview.job: the page plans
  * every size choice from it (the planner excludes frames). */
@@ -419,7 +422,7 @@ static void api_task_start(sock_t s, const http_req *r)
     rc = task_start(&rq, &id, err, sizeof err);
     free(job);
     if (rc == 1)
-        http_error(s, 409, err);
+        http_error(s, 507, err);
     else if (rc)
         http_error(s, 422, err);
     else
@@ -518,6 +521,7 @@ static void route(http_req *r)
     int get = strcmp(r->method, "GET") == 0;
     int post = strcmp(r->method, "POST") == 0;
     int put = strcmp(r->method, "PUT") == 0;
+    int del = strcmp(r->method, "DELETE") == 0;
 
     if (n <= 1 && (n == 0 || name_ok(seg[0]))) {   /* the page's files */
         snprintf(p, sizeof p, "%s/%s", g_www, n ? seg[0] : "index.html");
@@ -578,6 +582,16 @@ static void route(http_req *r)
             api_task_start(s, r);
             return;
         }
+        if (n == 2 && del) {
+            char st[16];
+            if (http_param(r->query, "state", st, sizeof st) ||
+                strcmp(st, "queued") != 0) {
+                http_error(s, 422, "DELETE /api/tasks?state=queued only");
+                return;
+            }
+            http_json(s, 200, "{\"dropped\":%d}", task_clear());
+            return;
+        }
         if (n < 3) {
             http_error(s, 404, "not found");
             return;
@@ -586,6 +600,17 @@ static void route(http_req *r)
         if (n == 3 && get) {
             task_json(id, js, sizeof js);
             http_send(s, 200, "application/json", js, strlen(js));
+        } else if (n == 3 && del && id > 0) {
+            int rc = task_delete(id);
+            if (rc == -2)
+                http_error(s, 404, "no such task");
+            else if (rc == -1)
+                http_error(s, 409, "ended");
+            else if (rc == -3)
+                http_error(s, 500, "cannot stop it");
+            else
+                http_json(s, 200, "{\"ok\":true,\"was\":\"%s\"}",
+                          rc ? "running" : "queued");
         } else if (n == 4 && strcmp(seg[3], "events") == 0 && get && id > 0) {
             api_events(s, id, r);
         } else if (n == 4 && strcmp(seg[3], "job") == 0 && put && id > 0) {

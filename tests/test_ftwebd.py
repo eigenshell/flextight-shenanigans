@@ -97,9 +97,10 @@ class Server:
         return out
 
     def wait(self, tid):
+        """the task once it has ended (done, failed or stopped)"""
         for _ in range(500):
             code, t = self.req("GET", "/api/tasks/%d" % tid)
-            if t["state"] == "done":
+            if t and t["state"] not in ("queued", "running"):
                 return t
             time.sleep(0.02)
         raise RuntimeError("task did not end")
@@ -473,6 +474,94 @@ def test_put_job_while_queued(held):
     kept = (d / ("strip_j%d.job" % b["id"])).read_text()
     done = dict(re.findall(r"\[frame (\d)\][^\[]*?\ndone = (\w+)", kept))
     assert (done["1"], done["2"], done["3"]) == ("no", "yes", "yes")
+    # ended: 409, as once started
+    assert held.req("PUT", p, job) == \
+        (409, {"error": "job %d has started" % b["id"]})
+    assert (d / ("strip_j%d.job" % b["id"])).read_text() == kept
+    assert not (d / ("strip_j%d.job.tmp" % b["id"])).exists()
+
+
+def test_failed_job_skipped(binary, tmp_path):
+    """a job that fails is marked failed; the next one runs"""
+    hold = tmp_path / "hold"
+    s = Server(binary, tmp_path, 0.001,
+               env={"FAKE_FTPOC_HOLD": str(hold),
+                    "FAKE_FTPOC_FAIL": "strip_j2.job"})
+    try:
+        previewed(s)
+        hold.touch()
+        _, a = s.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
+        _, b = s.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})
+        assert (a["id"], b["id"]) == (2, 3)
+        hold.unlink()
+        t = s.wait(3)
+        assert (t["state"], t["exit"]) == ("done", 0)
+        t = s.req("GET", "/api/tasks/2")[1]
+        assert (t["state"], t["exit"], t["stopped"]) == ("failed", 1, False)
+        d = tmp_path / "strips" / "a"
+        assert (d / "strip_j3_win01.raw").exists()
+        assert not (d / "strip_j2_win01.raw").exists()
+    finally:
+        hold.unlink(missing_ok=True)
+        s.close()
+
+
+def test_delete_queued_and_running(held):
+    """DELETE drops a queued job (and its job file) or stops the running
+    one (marked stopped; the next runs); ?state=queued clears the queue"""
+    previewed(held)
+    d = held.cwd / "strips" / "a"
+    held.hold.touch()
+    ids = [held.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})[1]["id"]
+           for _ in range(4)]
+    assert ids == [2, 3, 4, 5]
+    assert held.req("DELETE", "/api/tasks/3") == \
+        (200, {"ok": True, "was": "queued"})
+    assert not (d / "strip_j3.job").exists()
+    assert held.req("GET", "/api/tasks/3")[1] is None
+    # job 2's fake ftpoc has started (it traps SIGINT before it logs)
+    for _ in range(250):
+        if ["scan", "--job", "strips/a/strip_j2.job"] in \
+                [a[:3] for a in argv_log(held)]:
+            break
+        time.sleep(0.02)
+    assert held.req("DELETE", "/api/tasks/2") == \
+        (200, {"ok": True, "was": "running"})
+    t = held.wait(2)
+    assert (t["state"], t["stopped"]) == ("stopped", True)
+    for _ in range(100):
+        if held.req("GET", "/api/tasks/4")[1]["state"] == "running":
+            break
+        time.sleep(0.02)
+    assert held.req("GET", "/api/tasks/4")[1]["state"] == "running"
+    assert held.req("DELETE", "/api/tasks?state=queued") == \
+        (200, {"dropped": 1})
+    assert held.req("GET", "/api/tasks/5")[1] is None
+    assert not (d / "strip_j5.job").exists()
+    held.hold.unlink()
+    assert held.wait(4)["state"] == "done"
+    assert held.req("DELETE", "/api/tasks/2") == (409, {"error": "ended"})
+    assert held.req("DELETE", "/api/tasks/99")[0] == 404
+    assert held.req("DELETE", "/api/tasks?state=done")[0] == 422
+    assert [a[2] for a in argv_log(held) if a[0] == "scan"] == \
+        ["strips/a/strip_j2.job", "strips/a/strip_j4.job"]
+
+
+def test_batch_full(held):
+    """8 jobs queued or running: the next POST is refused with 507 (ended
+    jobs' slots are recycled)"""
+    previewed(held)
+    held.hold.touch()
+    for _ in range(8):
+        assert held.req("POST", "/api/tasks", {"op": "scan", "strip": "a"})[0] \
+            == 202
+    assert held.req("GET", "/api/tasks/1")[1] is None   # the preview's slot
+    assert held.req("POST", "/api/tasks", {"op": "scan", "strip": "a"}) == \
+        (507, {"error": "the batch is full: 8 jobs queued or running"})
+    assert held.req("DELETE", "/api/tasks?state=queued") == \
+        (200, {"dropped": 7})
+    held.hold.unlink()
+    assert held.wait(2)["state"] == "done"
 
 
 def test_stop(slow):
@@ -485,6 +574,7 @@ def test_stop(slow):
         (200, {"ok": True})
     done = slow.wait(t["id"])
     assert done["stopped"] and done["exit"] == 1
+    assert done["state"] == "stopped"
     ev = slow.events(t["id"])
     assert [d for _, d in ev[-2:]] == ["progress end stopped",
                                        "ftwebd exit 1"]
