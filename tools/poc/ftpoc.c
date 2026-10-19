@@ -410,6 +410,12 @@ static void put_be32(BYTE *d, int off, long v)
     d[off + 3] = (BYTE)v;
 }
 
+static unsigned long get_le32(const BYTE *d)
+{
+    return (unsigned long)d[0] | ((unsigned long)d[1] << 8) |
+           ((unsigned long)d[2] << 16) | ((unsigned long)d[3] << 24);
+}
+
 /* Captured scan setups. Each pairs a scan descriptor with the end
  * descriptor FlexColor sent after it. */
 static const struct preset {
@@ -653,8 +659,15 @@ static int cmd_inquiry(void)
     printf("  product: %.16s\n", buf + 16);
     printf("  version: %.4s\n", buf + 32);
     printf("  raw    :");
-    for (i = 0; i < 36; i++) printf(" %02x", buf[i]);
+    for (i = 0; i < r; i++)
+        printf("%s %02x", i && i % 16 == 0 ? "\n          " : "", buf[i]);
     printf("\n");
+    /* microcode live fields (firmware walkthrough §4, handler 3000:2199) */
+    if (r > 0x36 && !ft_upload_is_loader(buf, (size_t)r))
+        printf("  live   : sensors(0x310) %02x  ring write 8614 %lu  "
+               "read 8610 %lu  state 8ecd %u  phase 8f36 %u\n",
+               buf[0x24], (unsigned long)get_le32(buf + 0x25),
+               (unsigned long)get_le32(buf + 0x29), buf[0x35], buf[0x36]);
     /* Loader identity means the microcode upload dance is required first. */
     if (ft_upload_is_loader(buf, (size_t)r))
         printf("  NOTE: loader firmware (after a power-up) — any other "
@@ -1243,6 +1256,85 @@ static int cmd_grab(long blocks, WORD blklen, const char *out)
     return bad;
 }
 
+/* GET WINDOW (0x25, handler 3000:22ee): the firmware writes the live CCD
+ * (8ed8) and lens (8ee0) positions big-endian at @56/@60 of its window
+ * buffer and returns it. Length in CDB bytes 6-7, as SET WINDOW. */
+static int cmd_getwin(void)
+{
+    static const BYTE cdb[10] = { 0x25, 0, 0, 0, 0, 0, 0, 0x54, 0, 0 };
+    BYTE buf[0x100];
+    int r, i;
+    memset(buf, 0, sizeof buf);
+    r = srb_exec(cdb, 10, SRB_DIR_IN, buf, 0x54, TIMEOUT_MS);
+    if (r < 0) { printf("getwin: %s\n", srb_errstr(r)); return 1; }
+    printf("getwin: %d bytes", r);
+    for (i = 0; i < r && i < 0x54; i++)
+        printf("%s %02x", i % 16 == 0 ? "\n  " : "", buf[i]);
+    printf("\n  @56 ccd %ld  @60 lens %ld\n", be32(buf, F_CCD),
+           be32(buf, F_OPTIC));
+    return 0;
+}
+
+/* --probe L[:kinds][,L...] and --stall L:ms (scan, crop): verification
+ * hooks in the image flood only (not calibration). At kept line L the read
+ * queue is drained, then: i = INQUIRY (live ring indices, state), g = GET
+ * WINDOW, p = peek 4000:8ed0 (drum pos + target). Default kinds "i".
+ * A stall stops reading for ms at line L (host-stall test). */
+#define MAX_PROBES 16
+static struct { long line; char kinds[4]; } g_probe[MAX_PROBES];
+static int g_nprobe;
+static long g_stall_line = -1;
+static DWORD g_stall_ms;
+static int g_hooks_on;           /* set around the image flood only */
+
+static int parse_probe(const char *s)
+{
+    while (*s) {
+        char *e;
+        long l = strtol(s, &e, 10);
+        size_t k = 0;
+        if (e == s || l < 0 || g_nprobe == MAX_PROBES) return 1;
+        g_probe[g_nprobe].line = l;
+        if (*e == ':')
+            for (e++; *e && *e != ',' && k < 3; e++) {
+                if (!strchr("igp", *e)) return 1;
+                g_probe[g_nprobe].kinds[k++] = *e;
+            }
+        if (!k) g_probe[g_nprobe].kinds[k++] = 'i';
+        g_probe[g_nprobe].kinds[k] = 0;
+        g_nprobe++;
+        if (*e == ',') e++;
+        else if (*e) return 1;
+        s = e;
+    }
+    return 0;
+}
+
+static void run_probe(long line, const char *kinds, DWORD t)
+{
+    BYTE cdb[10], buf[96];
+    ft_err e;
+    int r, i;
+    printf("\nprobe line %ld (+%lu ms):\n", line, (unsigned long)t);
+    for (; *kinds; kinds++) {
+        if (*kinds == 'i') {
+            cmd_inquiry();
+        } else if (*kinds == 'g') {
+            cmd_getwin();
+        } else if (*kinds == 'p' &&
+                   ft_maint_peek(0x4000, 0x8ed0, 8, cdb, &e) >= 0) {
+            memset(buf, 0, sizeof buf);
+            r = srb_exec(cdb, 10, SRB_DIR_IN, buf, 8, TIMEOUT_MS);
+            if (r < 0) { printf("peek 8ed0: %s\n", srb_errstr(r)); continue; }
+            printf("peek 4000:8ed0:");
+            for (i = 0; i < r; i++) printf(" %02x", buf[i]);
+            printf("  drum pos %ld  tgt %ld\n", (long)get_le32(buf),
+                   (long)get_le32(buf + 4));
+        }
+    }
+    fflush(stdout);
+}
+
 /* Pipelined flood: keep DEPTH overlapped ReadExt requests queued so the
  * port driver issues them back-to-back (FlexColor reaches ~1700 reads/s;
  * one-at-a-time reads top out at ~460/s).
@@ -1265,7 +1357,8 @@ static long read_flood(long n, WORD blklen, FILE *f)
     BYTE cdb[10];
     long issued = 0, done = 0, kept = 0, shorts = 0, short_bytes = 0;
     DWORD last_full;
-    int i, err = 0;
+    int i, err = 0, hook_due = 0, stalled = 0;
+    char probed[MAX_PROBES] = { 0 };
     DWORD t0 = GetTickCount(), dt;
 
     sl = calloc(DEPTH, sizeof *sl);
@@ -1287,7 +1380,30 @@ static long read_flood(long n, WORD blklen, FILE *f)
         }
         /* top up the queue: empty reads are normal, so the number of reads
          * is open-ended; stop issuing once the queue could fill n */
-        while (!err && kept + (issued - done) < n && issued - done < DEPTH) {
+        if (g_hooks_on && !err) {
+            hook_due = !stalled && g_stall_line >= 0 && kept >= g_stall_line;
+            for (i = 0; i < g_nprobe; i++)
+                if (!probed[i] && kept >= g_probe[i].line) hook_due = 1;
+        }
+        /* a hook runs on an empty queue: stop issuing until it has */
+        if (hook_due && done == issued) {
+            for (i = 0; i < g_nprobe; i++)
+                if (!probed[i] && kept >= g_probe[i].line) {
+                    probed[i] = 1;
+                    run_probe(kept, g_probe[i].kinds, GetTickCount() - t0);
+                }
+            if (!stalled && g_stall_line >= 0 && kept >= g_stall_line) {
+                stalled = 1;
+                printf("\nstall at line %ld: no reads for %lu ms\n", kept,
+                       (unsigned long)g_stall_ms);
+                fflush(stdout);
+                Sleep(g_stall_ms);
+            }
+            hook_due = 0;
+            last_full = GetTickCount();
+        }
+        while (!err && !hook_due && kept + (issued - done) < n &&
+               issued - done < DEPTH) {
             struct slot *q = &sl[issued % DEPTH];
             BYTE *srb = q->srb;
             memset(srb, 0, sizeof q->srb);
@@ -1311,8 +1427,10 @@ static long read_flood(long n, WORD blklen, FILE *f)
             q->busy = 1;
             issued++;
         }
-        if (done == issued)
+        if (done == issued) {
+            if (hook_due) continue;
             break;
+        }
         if (GetTickCount() - last_full > 5000) {
             printf("\nno full block for 5 s; scan data ended?\n");
             err = 1;
@@ -1589,7 +1707,9 @@ static int cmd_scan(const struct preset *p, long y, long keep,
     printf("reading %ld lines -> %s\n", keep, out);
     f = fopen(out, "wb");
     if (!f) { perror(out); send_end(p); return 1; }
+    g_hooks_on = 1;
     got = read_flood(keep, blklen, f);
+    g_hooks_on = 0;
     fclose(f);
     printf("\nwrote %ld x %u B -> %s%s\n", got, blklen, out,
            got == keep ? "" : " (INCOMPLETE)");
@@ -4479,7 +4599,18 @@ int main(int argc, char **argv)
     for (i = k = 1; i < argc; i++)
         if (strcmp(argv[i], "--progress") == 0)
             g_progress = 1;
-        else if (strcmp(argv[i], "--microcode") == 0) {
+        else if (strcmp(argv[i], "--probe") == 0 && i + 1 < argc) {
+            if (parse_probe(argv[++i])) {
+                fprintf(stderr, "ftpoc: --probe L[:igp][,L...]\n");
+                return 2;
+            }
+        } else if (strcmp(argv[i], "--stall") == 0 && i + 1 < argc) {
+            if (sscanf(argv[++i], "%ld:%lu", &g_stall_line,
+                       &g_stall_ms) != 2) {
+                fprintf(stderr, "ftpoc: --stall L:ms\n");
+                return 2;
+            }
+        } else if (strcmp(argv[i], "--microcode") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "ftpoc: --microcode needs a path\n");
                 return 2;
@@ -4496,6 +4627,7 @@ int main(int argc, char **argv)
             "  inquiry            identity (run first)\n"
             "  poll [n]           n ScannerReady polls (default 10)\n"
             "  win                one SetWindow exchange (idle template), hexdump\n"
+            "  getwin             GET WINDOW: live CCD/lens positions (@56/@60)\n"
             "  park               rest position (FlexColor's shutdown descriptor)\n"
             "  goto <ppi*10000>   idle template with @10 set, 0..63000000\n"
             "  move <+/-d> [n]    n relative @10 steps of d (max 5000000, 50 steps)\n"
@@ -4564,6 +4696,9 @@ int main(int argc, char **argv)
             "  --progress         (frames, scan) machine-readable progress lines\n"
             "                     for the web server: progress begin|unit|lines|\n"
             "                     file|end ... (libft/ft_progress.h)\n"
+            "  --probe L[:igp],.. (scan, crop) at image line L: INQUIRY (i), GET\n"
+            "                     WINDOW (g), peek drum 4000:8ed0 (p); default i\n"
+            "  --stall L:ms       (scan, crop) stop reading for ms at image line L\n"
             "  --microcode PATH   the MICROCOD.3XX to upload (default: beside\n"
             "                     ftpoc.exe, then the current directory)\n"
             "\n"
@@ -4608,6 +4743,8 @@ int main(int argc, char **argv)
         } else if (strcmp(cmd, "poll") == 0) {
             int n = argc > 2 ? atoi(argv[2]) : 10;
             rc = cmd_poll(n, n > 20);
+        } else if (strcmp(cmd, "getwin") == 0) {
+            rc = cmd_getwin();
         } else if (strcmp(cmd, "win") == 0) {
             rc = cmd_win();
         } else if (strcmp(cmd, "park") == 0) {
