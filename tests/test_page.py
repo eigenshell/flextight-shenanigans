@@ -568,6 +568,8 @@ def test_page_batch_queue(built, tmp_path):
     it is queued), which runs after it"""
     out, box, dl = run_page(built, tmp_path, mode="batch")
     s = out["strip"]
+    # a full batch (507): re-armed once a job ended, not by every snapshot
+    assert out["rearm"] == [[0, 0, 1, 1], 0]
     assert out["first"] == [[2, "running", [1]]]
     assert out["jobs"] == [[2, "running", [1]], [3, "queued", [2, 3]]]
     inc = dict(re.findall(r"\[frame (\d)\]\ntype = \w+\ninclude = (\w+)",

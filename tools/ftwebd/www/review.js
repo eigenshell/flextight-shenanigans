@@ -247,7 +247,9 @@ const ended=s=>/^(done|failed|stopped)$/.test(s);
 // the open job a frame is in: queued, running, or ended with its end not
 // handled here yet (its windows landing)
 const jobOf=n=>[...bj.values()].find(j=>!j.closed&&j.frames.includes(n));
-let startT=0,startMs=3000,bq=Promise.resolve(),full=0;
+// full: a POST got 507; live: the box's queued|running job ids, as the
+// last snapshot had them
+let startT=0,startMs=3000,bq=Promise.resolve(),full=0,live=new Set();
 const todoFrames=()=>frames.filter(f=>!blocked(f)&&dec[f.n]==="confirmed"&&!jobOf(f.n)&&!failed.has(f.n)&&
  (!landed.includes(f.n)&&!unfetched.has(f.n)||rescan.has(f.n))).map(f=>f.n);
 // each decision starts the countdown again; at its end the confirmed
@@ -293,16 +295,19 @@ async function put(j,ns){const p=await planFor(ns),r=await fetch("/api/tasks/"+j
 
 // the batch (SSE, a snapshot per change): its jobs' states; a job of
 // this strip that runs is followed; one that ended unseen is replayed
-// from its first line (the box keeps its lines) for its windows
+// from its first line (the box keeps its lines) for its windows. After
+// a 507 the frames wait until a job leaves the queued|running set (ended
+// or dropped: a slot free), not for any snapshot
 function batchWatch(){if(bes)bes.close();bes=new EventSource("/api/batch/events");bes.onmessage=e=>onBatch(JSON.parse(e.data))}
-const onBatch=b=>bq=bq.then(async()=>{const top=Math.max(0,...b.jobs.map(x=>x.id));
+const onBatch=b=>bq=bq.then(async()=>{const top=Math.max(0,...b.jobs.map(x=>x.id)),
+  now=new Set(b.jobs.filter(x=>!ended(x.state)).map(x=>x.id)),freed=[...live].some(id=>!now.has(id));live=now;
  for(const x of b.jobs){if(x.strip!==cur)continue;const j=bj.get(x.id);if(j)j.state=x.state;
   if(x.state==="running"&&(!task||task.id!==x.id))watch({id:x.id,state:"running",strip:x.strip,op:x.op});
   else if(j&&ended(x.state)&&!j.closed&&!j.watched)watch({id:x.id,state:x.state,strip:x.strip,op:x.op})}
  // queued jobs gone from the box (dropped); a snapshot older than a job
  // just posted does not list it yet
  for(const[id,j]of bj)if(j.state==="queued"&&id<top&&!b.jobs.some(x=>x.id===id))bj.delete(id);
- jobs();for(const f of frames)badge(f);if(full){full=0;maybeStart()}}).catch(e=>st(e.message,1));
+ jobs();for(const f of frames)badge(f);if(full&&freed){full=0;maybeStart()}}).catch(e=>st(e.message,1));
 
 // tasks: start (a preview), follow (SSE: a stream per job, from its
 // first line to its end), stop

@@ -82,6 +82,14 @@ async function batchFlow() {
   const out = {}, scans = '[...bj.values()].filter(j=>j.op==="scan")',
     jobsNow = scans + '.map(j=>[j.id,j.state,j.frames]).sort((a,b)=>a[0]-b[0])',
     badges = ns => ev("[" + ns + '].map(n=>document.getElementById("th"+n).querySelector(".b").textContent)');
+  // after a 507 (full=1) the frames wait: a snapshot re-arms them only
+  // when a job left the batch's queued|running set (none of this strip's
+  // jobs exist yet; maybeStart counted, not run)
+  out.rearm = await ev('(async()=>{const m=maybeStart;let c=0;maybeStart=()=>{c++};try{' +
+    'const J=(id,s)=>({id,op:"scan",strip:"other",state:s,exit:0}),n=[];full=1;' +
+    'for(const js of [[J(1,"running"),J(2,"queued")],[J(1,"running"),J(2,"queued")],' +
+    '[J(1,"done"),J(2,"running")],[J(1,"done"),J(2,"running")]]){await onBatch({rev:0,jobs:js});n.push(c)}' +
+    'return [n,full]}finally{maybeStart=m}})()');
   writeFileSync(hold, "");
   await ev("startMs=200");
   await key("Enter");
