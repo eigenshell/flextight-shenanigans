@@ -152,10 +152,47 @@ async function batchFlow() {
   await key("Enter");
   await ev("openGate();bq");
   out.again = await ev("[jobOf(2)&&jobOf(2).frames,dec[2]]");
+  // a reload: the batch rebuilt from the box (its snapshot + job files)
+  await until(fileHas("strip.review", "/^3 pending$/m"), "review kept");
+  out.before = await ev(jobsNow + '.filter(x=>x[1]!=="done")');
+  await cdp("Page.reload", {}, sid);
+  await until('typeof bj === "object" && document.querySelectorAll(".th").length === 6 && ' +
+    scans + '.filter(j=>!j.closed).length === 2 && document.getElementById("th1").querySelector(".b").textContent === "scanning"', "rebuilt", 30000);
+  out.after = await ev(jobsNow + '.filter(x=>x[1]!=="done")');
+  out.badgesAfter = await badges([1, 2, 3]);
+  out.bat = await ev('document.getElementById("bat").textContent');
+  await ev("startMs=200");
+  // Stop: the running job ends stopped, its frame to retry; the next runs
+  await until('!document.getElementById("stop").disabled', "stop enabled");
+  await ev('document.getElementById("stop").click()');
+  await until('document.getElementById("th1").querySelector(".b").textContent === "retry"', "frame 1 to retry", 20000);
+  out.retry = (await badges([1]))[0];
+  // Confirm on it: a retry, a job of its own
+  await ev("pick(1)");
+  await until("sel === 1", "frame 1");
+  await key("Enter");
+  await until("jobOf(1) && jobOf(1).id === 5", "retried", 20000);
   rmSync(hold);
   await until(scans + ".every(j=>j.closed) && landed.includes(1) && landed.includes(2)", "batch landed", 90000);
   await ev("landQ");
   out.landed = await ev("landed.slice()");
+  // Clear: the queued job dropped, its frame to retry
+  writeFileSync(hold, "");
+  await ev("pick(4)");
+  await until("sel === 4", "frame 4");
+  await key("Enter");
+  await until('jobOf(4) && jobOf(4).state === "running"', "frame 4 running", 20000);
+  await ev("pick(5)");
+  await until("sel === 5", "frame 5");
+  await key("Enter");
+  await until('jobOf(5) && jobOf(5).state === "queued" && !document.getElementById("clr").hidden', "frame 5 queued", 20000);
+  await ev('document.getElementById("clr").click()');
+  await until('document.getElementById("th5").querySelector(".b").textContent === "retry"', "cleared", 20000);
+  out.cleared = await badges([4, 5]);
+  rmSync(hold);
+  await until('landed.includes(4) && document.getElementById("bat").textContent === "" && document.getElementById("clr").hidden', "frame 4 landed", 90000);
+  await ev("landQ");
+  out.landed2 = await ev("landed.slice()");
   out.files = await ev('api(S("files")).then(l=>l.map(f=>f.name))');
   return out;
 }

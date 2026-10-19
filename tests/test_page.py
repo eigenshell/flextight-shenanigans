@@ -594,14 +594,25 @@ def test_page_batch_queue(built, tmp_path):
     # before its unconfirm ran stays in its job
     assert out["late"] == [False, "pending"]
     assert out["again"] == [[2], "confirmed"]
+    # a reload: the same jobs, rebuilt from the box
+    assert out["before"] == out["after"] == [[2, "running", [1]],
+                                             [4, "queued", [2]]]
+    assert out["badgesAfter"] == ["scanning", "queued", "pending"]
+    assert out["bat"] == "Scanning · 2 frames left"
+    # stopped: frame 1 to retry; Confirm sent it again (job 5)
+    assert out["retry"] == "retry"
     assert out["landed"] == [1, 2]
+    # Clear: job 7 (frame 5) dropped before it ran
+    assert out["cleared"] == ["scanning", "retry"]
+    assert out["landed2"] == [1, 2, 4]
     files = set(out["files"])
-    assert {"strip_j2_win01.raw", "strip_j4_win01.raw"} <= files
+    assert {"strip_j4_win01.raw", "strip_j5_win01.raw"} <= files
+    assert "strip_j2_win01.raw" not in files  # stopped before its window
     assert "strip_j3.job" not in files       # the dropped job's file
     log = [json.loads(l) for l in (box / "fake_ftpoc.log").read_text()
            .splitlines()]
     assert [a[2] for a in log if a[0] == "scan"] == \
-        ["strips/%s/strip_j2.job" % s, "strips/%s/strip_j4.job" % s]
+        ["strips/%s/strip_j%d.job" % (s, i) for i in (2, 4, 5, 6)]
 
 
 def lost(px, head):

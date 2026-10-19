@@ -32,7 +32,7 @@ dialog{background:var(--panel);color:var(--ink);border:1px solid var(--amber);ma
 #km td{padding:3px 10px 3px 0;border:0}kbd{color:var(--amber);font:inherit}`;
 const HTML=`<div class="bar"><canvas id="live" width="1" height="1" aria-label="the strip"></canvas></div>
 <div class="prog"><div id="pb"></div></div>
-<div class="row"><span class="st" id="rst"></span><button id="again" hidden>Preview again</button><button id="stop" class="stop" disabled>Stop</button></div>
+<div class="row"><span class="st" id="rst"></span><span class="note" id="bat"></span><button id="clr" hidden>Clear queue</button><button id="again" hidden>Preview again</button><button id="stop" class="stop" disabled>Stop</button></div>
 <div class="note"><span id="fet"></span> <span id="fbad"></span></div>
 <canvas id="fz" hidden></canvas>
 <div id="thumbs"></div>
@@ -57,6 +57,8 @@ let pv=null,pvImg=null,kk={},scanning=new Set(),rescan=new Set(),cropped=new Set
 // groups, dofs, rescan, watched, exited, closed}; frames whose job ended
 // without them (to retry: never sent again by themselves)
 let bj=new Map(),failed=new Set(),bes=null;
+// windows cut here (a replayed job announces them again)
+const cutDone=new Set();
 // frames of a window scanned but not fetched (no rescan for them; a
 // reload fetches again), and why, per window
 let unfetched=new Set(),fe={};
@@ -72,7 +74,7 @@ const started=f=>/queued|scanning|done/.test(stateOf(f));
 // ---------------------------------------------------------------- screen
 async function review(s){
  if(!$("live")){const st_=document.createElement("style");st_.textContent=CSS;document.head.append(st_);$("rv").innerHTML=HTML;wire()}
- frames=[];dec={};landed=[];sel=0;kk={};scanning.clear();bj.clear();failed.clear();for(const e of ess.values())e.close();ess.clear();task=null;batchWatch();rescan.clear();cropped.clear();groups={};dofs={};pv=null;pvImg=null;unfetched.clear();fe={};fetchBad();fetching("");
+ frames=[];dec={};landed=[];sel=0;kk={};scanning.clear();bj.clear();failed.clear();cutDone.clear();for(const e of ess.values())e.close();ess.clear();task=null;batchWatch();rescan.clear();cropped.clear();groups={};dofs={};pv=null;pvImg=null;unfetched.clear();fe={};fetchBad();fetching("");
  $("thumbs").innerHTML="";$("jobs").innerHTML="";$("notes").textContent="";$("ppin").textContent="";$("log").textContent="";$("pb").style.width="0";
  $("again").hidden=true;drawBig();
  const t=await api("/api/tasks/current").catch(()=>null);
@@ -111,14 +113,14 @@ function winFiles(names){const k=n=>{const m=n.match(/^strip_(?:r(\d+)_|j(\d+)_)
  return names.filter(k).sort((a,b)=>{const x=k(a),y=k(b);return x[0]-y[0]||x[1]-y[1]||x[2]-y[2]})}
 // a scanned window: its raw streamed (fetchBig), then cut. Never throws:
 // a window not fetched is said (#fbad) and its frames wait for a reload
-async function cut(name,quiet){const s=cur;let fr=[],mb="";try{
+async function cut(name,quiet){const s=cur;let fr=[],mb="";if(cutDone.has(name))return;try{
  const[cal,mt,faul]=await Promise.all([get(F(name+".cal"),1),get(F(name+".txt"),1),get(F(name+".faul"),1)]);
  if(s!==cur)return;if(!cal||!mt)return quiet||st(name+": files missing",1);
  fr=(new TextDecoder().decode(mt).match(/^share_frame=\d+/gm)||[]).map(x=>+x.slice(12));
  const raw=await fetchBig(F(name),(k,n)=>{if(s!==cur)return 0;const m=MB(k)+"/"+MB(n);if(m!==mb){mb=m;fetching(name+": fetching "+m+" MB")}return 1});
  if(s!==cur)return;if(!raw)return quiet||st(name+": files missing",1);
  for(const x of fr)unfetched.delete(x);delete fe[name];fetchBad();
- try{const r=await ft("cut",raw,cal,mt,faul);for(const f of r.frames){if(!landed.includes(f.frame))landed.push(f.frame);rescan.delete(f.frame)}landed.sort((a,b)=>a-b)}
+ try{const r=await ft("cut",raw,cal,mt,faul);for(const f of r.frames){if(!landed.includes(f.frame))landed.push(f.frame);rescan.delete(f.frame)}landed.sort((a,b)=>a-b);cutDone.add(name)}
  catch(e){if(!quiet)st(name+": "+e.message,1)}}
  catch(e){if(s!==cur)return;for(const x of fr)unfetched.add(x);fe[name]=name+": "+e.message;fetchBad()}
  finally{if(s===cur)fetching("")}}
@@ -158,7 +160,8 @@ function drawStrip(){const c=$("live"),i=pvImg;if(!i)return;c.width=i.naturalWid
 
 // thumbnails: each frame as it will print (scanned: the scan's print)
 async function thumbs(only){const t=$("thumbs");if(!only){t.innerHTML="";for(const f of frames){const b=document.createElement("button");b.className="th";b.id="th"+f.n;
-  b.innerHTML='<canvas></canvas><span class="n">'+f.n+'</span><span class="b"></span>';b.onclick=()=>pick(f.n);t.append(b)}}
+  b.innerHTML='<canvas></canvas><span class="n">'+f.n+'</span><span class="b"></span>';b.onclick=()=>pick(f.n);t.append(b)}
+  for(const f of frames)badge(f)}       // every state at once, the prints after
  for(const f of frames)if(!only||only.includes(f.n)){badge(f);await paintTo($("th"+f.n).querySelector("canvas"),f.n,240).catch(()=>{})}}
 function badge(f){if(f.n===sel){const r=inRun(f);$("skip").disabled=r;$("skip").title=r?RUN(f):""}
  const b=$("th"+f.n);if(!b)return;const s=stateOf(f);b.classList.toggle("sel",f.n===sel);const e=b.querySelector(".b");e.className="b "+s;e.textContent=s}
@@ -236,6 +239,7 @@ function decide(d){const f=frame(sel);if(!f)return;
  const j=jobOf(f.n);want[f.n]=d;
  if(j&&d!=="confirmed"&&stateOf(f)!=="done"){if(j.state!=="queued")return st(RUN(f),1);return unconfirm(f,j,d)}
  if(started(f)&&d==="pending")return st("frame "+f.n+" is "+stateOf(f)+": its decision stays",1);
+ if(d==="confirmed")failed.delete(f.n);   // a retry: sent again
  dec[f.n]=d;saveReview();badge(f);jobs();drawStrip();
  if(d!=="pending"){const i=frames.indexOf(f),nx=frames.slice(i+1).concat(frames.slice(0,i)).find(g=>stateOf(g)==="pending");if(nx)pick(nx.n);else pick(f.n)}
  maybeStart()}
@@ -264,7 +268,28 @@ function step(d){const i=frames.findIndex(f=>f.n===sel)+d;if(i>=0&&i<frames.leng
 // run one after the other) a moment after the last decision
 function jobs(){const t=$("jobs");t.innerHTML="<tr><th>Frame</th><th>Name</th><th>State</th></tr>";
  for(const f of frames){const r=t.insertRow();r.insertCell().textContent=f.n;r.insertCell().textContent=autoName(f.n);r.insertCell().textContent=stateOf(f);
-  ft("name",f.n).then(v=>{if(v)r.cells[1].textContent=v}).catch(()=>{})}}
+  ft("name",f.n).then(v=>{if(v)r.cells[1].textContent=v}).catch(()=>{})}batInd()}
+// the batch, said: this strip's frames still to come; Clear (shown with
+// a queued job) drops the queued jobs, box-wide, their frames to retry
+function batInd(){const left=new Set();let q=0;
+ for(const j of bj.values())if(!j.closed&&j.op==="scan"){if(j.state==="queued")q=1;for(const n of j.frames)if(!landed.includes(n)||rescan.has(n))left.add(n)}
+ $("bat").textContent=left.size?"Scanning · "+left.size+" frame"+(left.size>1?"s":"")+" left":"";$("clr").hidden=!q}
+// through bq: no enqueue or unconfirm between the DELETE and the frames
+// marked
+const clearQ=()=>bq=bq.then(async()=>{await api("/api/tasks?state=queued",{method:"DELETE"});
+ for(const[id,j]of bj)if(j.state==="queued"){for(const n of j.frames)failed.add(n);bj.delete(id)}
+ jobs();for(const f of frames)badge(f);st("queue cleared: its frames to retry (Confirm)")}).catch(e=>st(e.message,1));
+// a job of this strip the page did not plan (a reload, another tab):
+// its frames from its job file on the box; an ended one's frames not
+// done are to retry
+async function adopt(x){if(bj.has(x.id))return;const j={id:x.id,op:x.op,state:x.state,frames:[],groups:{},dofs:{}};bj.set(x.id,j);
+ const left=[];if(x.op==="scan"){const t=await get(F("strip_j"+x.id+".job"))||"";
+  for(const c of t.split(/^(?=\[frame \d+\])/m)){const m=c.match(/^\[frame (\d+)\]/);if(!m||!/^include = yes/m.test(c))continue;
+   const n=+m[1],g=c.match(/^group = (\d+)/m);j.frames.push(n);if(g)j.groups[n]=+g[1];if(/^done = no/m.test(c))left.push(n)}}
+ if(ended(x.state)){j.closed=1;if(x.state!=="done")for(const n of left)failed.add(n)}
+ // the job followed here already (its replayed lines may come before its
+ // file): its windows' frames now known
+ if(task&&task.id===x.id){groups=j.groups;dofs=j.dofs;if(run.kind==="window")scanning=new Set(Object.keys(groups).filter(n=>groups[n]===run.g).map(Number).filter(n=>!landed.includes(n)||rescan.has(n)))}}
 const ended=s=>/^(done|failed|stopped)$/.test(s);
 // the open job a frame is in: queued, running, or ended with its end not
 // handled here yet (its windows landing)
@@ -322,11 +347,12 @@ async function put(j,ns){const p=await planFor(ns),r=await fetch("/api/tasks/"+j
 // a 507 the frames wait until a job leaves the queued|running set (ended
 // or dropped: a slot free), not for any snapshot
 function batchWatch(){if(bes)bes.close();bes=new EventSource("/api/batch/events");bes.onmessage=e=>onBatch(JSON.parse(e.data))}
-const onBatch=b=>bq=bq.then(async()=>{const top=Math.max(0,...b.jobs.map(x=>x.id)),
+const onBatch=b=>bq=bq.then(async()=>{const s=cur,top=Math.max(0,...b.jobs.map(x=>x.id)),
   now=new Set(b.jobs.filter(x=>!ended(x.state)).map(x=>x.id)),freed=[...live].some(id=>!now.has(id));live=now;
- for(const x of b.jobs){if(x.strip!==cur)continue;const j=bj.get(x.id);if(j)j.state=x.state;
+ for(const x of b.jobs)if(x.strip===s)await adopt(x);if(s!==cur)return;
+ for(const x of b.jobs){if(x.strip!==cur)continue;const j=bj.get(x.id);j.state=x.state;
   if(x.state==="running"&&(!task||task.id!==x.id))watch({id:x.id,state:"running",strip:x.strip,op:x.op});
-  else if(j&&ended(x.state)&&!j.closed&&!j.watched)watch({id:x.id,state:x.state,strip:x.strip,op:x.op})}
+  else if(ended(x.state)&&!j.closed&&!j.watched)watch({id:x.id,state:x.state,strip:x.strip,op:x.op})}
  // queued jobs gone from the box (dropped); a snapshot older than a job
  // just posted does not list it yet
  for(const[id,j]of bj)if(j.state==="queued"&&id<top&&!b.jobs.some(x=>x.id===id))bj.delete(id);
@@ -422,7 +448,7 @@ function wire(){
  const b=$("big");b.onpointerdown=onDown;b.onpointermove=onMove;b.onpointerup=onUp;b.onpointercancel=()=>{drag=null;drawBig()};
  $("name").onchange=setName;$("tl").onclick=()=>turn(-90);$("tr").onclick=()=>turn(90);$("zm").onclick=toggleZoom;
  $("prev").onclick=()=>step(-1);$("next").onclick=()=>step(1);$("ok").onclick=()=>decide("confirmed");$("skip").onclick=()=>decide("skipped");
- $("dl").onclick=download;$("all").onclick=zipAll;$("tc").onclick=cancelStart;$("kh").onclick=e=>{e.preventDefault();keymap()};
+ $("dl").onclick=download;$("all").onclick=zipAll;$("tc").onclick=cancelStart;$("clr").onclick=clearQ;$("kh").onclick=e=>{e.preventDefault();keymap()};
  $("stop").onclick=async()=>{try{await api("/api/tasks/"+task.id+"/stop",{method:"POST"});cancelStart();st("stopping at the next line …")}catch(e){st(e.message,1)}};
  $("again").onclick=async()=>{try{await start({op:"preview",film:filmOf(emOf())});liveReset()}catch(e){st(e.message,1)}};
  addEventListener("keydown",onKey);addEventListener("resize",()=>{if(sel&&!zoomed){bigPrint=null;drawBig()}})}
