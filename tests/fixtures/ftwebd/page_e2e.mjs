@@ -111,6 +111,10 @@ try {
   await until(fileHas("strip.print", '/\\[frame 2\\]\\nname = dog\\ncmyd = 0 0 0 1\\nrotate = 90\\n/'), "frame 2 saved");
   await key("Enter");
   await until("sel === 3", "frame 3");
+  // the large view laid out for frame 3 (Enter's pick is not awaited: sel
+  // turns 3 at once, G holds frame 2's view until its drawBig): the drag
+  // is aimed through G
+  await ev("pick(3)");
   // frame 3: a crop (its right edge dragged in), kept as the job's window
   const before = await ev('fetch(S("strip.preview.job")).then(r=>r.text())');
   await dragRight(40);
