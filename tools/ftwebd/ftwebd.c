@@ -44,6 +44,8 @@
  *   GET  /api/tasks/current, /api/tasks/{id}
  *   GET  /api/tasks/{id}/events?since=k   SSE, id = line number
  *   POST /api/tasks/{id}/stop
+ *   PUT  /api/tasks/{id}/job              a queued scan's job (validated);
+ *                                         409 once it has started
  *
  * A good preview's job is kept as strip.preview.job: the page plans
  * every size choice from it (the planner excludes frames). */
@@ -424,6 +426,29 @@ static void api_task_start(sock_t s, const http_req *r)
         http_json(s, 202, "{\"id\":%d}", id);
 }
 
+/* PUT /api/tasks/{id}/job: a queued job's share job, checked first */
+static void api_task_job(sock_t s, int id, const http_req *r)
+{
+    char msg[300];
+    const char *body = r->body ? r->body : "";
+    int rc;
+    if (job_ok(body, r->nbody, msg, sizeof msg)) {
+        http_error(s, 422, msg);
+        return;
+    }
+    rc = task_put_job(id, body, r->nbody, msg, sizeof msg);
+    if (rc == -2)
+        http_error(s, 404, "no such task");
+    else if (rc == 1)
+        http_error(s, 409, msg);
+    else if (rc == -1)
+        http_error(s, 422, msg);
+    else if (rc)
+        http_error(s, 500, msg);
+    else
+        http_json(s, 200, "{\"ok\":true}");
+}
+
 static void api_events(sock_t s, int id, const http_req *r)
 {
     char v[24], *buf;
@@ -563,6 +588,8 @@ static void route(http_req *r)
             http_send(s, 200, "application/json", js, strlen(js));
         } else if (n == 4 && strcmp(seg[3], "events") == 0 && get && id > 0) {
             api_events(s, id, r);
+        } else if (n == 4 && strcmp(seg[3], "job") == 0 && put && id > 0) {
+            api_task_job(s, id, r);
         } else if (n == 4 && strcmp(seg[3], "stop") == 0 && post && id > 0) {
             int rc = task_stop(id);
             if (rc == -2)

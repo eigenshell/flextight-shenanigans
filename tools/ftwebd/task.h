@@ -46,6 +46,12 @@ void task_init(const task_cfg *cfg);
 int task_start(const task_req *rq, int *id, char *err, size_t errn);
 /* 0 delivered, -1 not running or not delivered, -2 no such task */
 int task_stop(int id);
+/* a queued share scan's job file replaced by text[0..n) (checked by the
+ * caller), under the lock that starts jobs: it lands before the start or
+ * not at all. 0 written; 1 the job has started (err); -1 not a share
+ * scan (err); -2 no such task; -3 cannot write (err) */
+int task_put_job(int id, const char *text, size_t n, char *err,
+                 size_t errn);
 /* {"id":..,"op":..,"strip":..,"state":"queued|running|done","exit":..,
  * "stopped":..,"lines":..} for id, or the running (else the latest) job
  * when id is 0. 0, or -1 if there is none (out: "null") */

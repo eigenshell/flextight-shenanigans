@@ -442,6 +442,39 @@ def test_job_that_cannot_start(held):
     assert code == 202 and t["id"] == 5 and held.wait(5)["exit"] == 0
 
 
+def test_put_job_while_queued(held):
+    """PUT /api/tasks/{id}/job replaces a queued job's file (checked like
+    strip.job); once the job has started: 409, the file as ftpoc has it.
+    One lock covers state and file: a PUT lands before the start or not
+    at all"""
+    previewed(held)
+    d = held.cwd / "strips" / "a"
+    job = (d / "strip.job").read_text()
+    held.hold.touch()
+    _, a = held.req("POST", "/api/tasks", {"op": "scan", "strip": "a",
+                                           "job": only(job, {1})})
+    _, b = held.req("POST", "/api/tasks", {"op": "scan", "strip": "a",
+                                           "job": only(job, {2})})
+    p = "/api/tasks/%d/job" % b["id"]
+    assert held.req("PUT", p, only(job, {2, 3})) == (200, {"ok": True})
+    assert (d / ("strip_j%d.job" % b["id"])).read_text() == only(job, {2, 3})
+    code, e = held.req("PUT", p, "[strip]\nbogus = 1\n")
+    assert code == 422 and "bogus" in e["error"]
+    assert (d / ("strip_j%d.job" % b["id"])).read_text() == only(job, {2, 3})
+    code, e = held.req("PUT", "/api/tasks/%d/job" % a["id"], only(job, {1, 2}))
+    assert (code, e["error"]) == (409, "job %d has started" % a["id"])
+    assert (d / ("strip_j%d.job" % a["id"])).read_text() == only(job, {1})
+    assert held.req("PUT", "/api/tasks/99/job", job)[0] == 404
+    assert held.req("PUT", "/api/tasks/1/job", job) == \
+        (422, {"error": "job 1 has no share job"})
+    held.hold.unlink()
+    assert held.wait(b["id"])["exit"] == 0
+    # ftpoc scanned what the PUT left: frames 2 and 3 done
+    kept = (d / ("strip_j%d.job" % b["id"])).read_text()
+    done = dict(re.findall(r"\[frame (\d)\][^\[]*?\ndone = (\w+)", kept))
+    assert (done["1"], done["2"], done["3"]) == ("no", "yes", "yes")
+
+
 def test_stop(slow):
     slow.req("POST", "/api/strips", {"name": "a"})
     code, t = slow.req("POST", "/api/tasks",

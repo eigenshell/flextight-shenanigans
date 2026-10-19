@@ -408,6 +408,35 @@ int task_stop(int id)
     return rc;
 }
 
+int task_put_job(int id, const char *text, size_t n, char *err,
+                 size_t errn)
+{
+    char job[310];
+    batch_job *j;
+    int rc = 0;
+    pthread_mutex_lock(&T.mu);
+    j = batch_find(id);
+    if (!j) {
+        rc = -2;
+    } else if (!j->share) {
+        snprintf(err, errn, "job %d has no share job", id);
+        rc = -1;
+    } else if (j->state != JOB_QUEUED) {
+        snprintf(err, errn, "job %d has started", id);
+        rc = 1;
+    } else {
+        job_file(job, sizeof job, j);
+        if (write_file(job, text, n)) {
+            snprintf(err, errn, "cannot write %s", job);
+            rc = -3;
+        } else {
+            changed();
+        }
+    }
+    pthread_mutex_unlock(&T.mu);
+    return rc;
+}
+
 int task_json(int id, char *out, size_t n)
 {
     char op[40], strip[200];
