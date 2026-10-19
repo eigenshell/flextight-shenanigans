@@ -90,6 +90,18 @@ async function batchFlow() {
     'for(const js of [[J(1,"running"),J(2,"queued")],[J(1,"running"),J(2,"queued")],' +
     '[J(1,"done"),J(2,"running")],[J(1,"done"),J(2,"running")]]){await onBatch({rev:0,jobs:js});n.push(c)}' +
     'return [n,full]}finally{maybeStart=m}})()');
+  // jobs of this strip the page did not plan (synthetic snapshots): a job
+  // file that cannot be fetched (a network error) is not kept, so the
+  // next snapshot tries again; an ended job without a file (it never
+  // started: the box removed it) leaves its confirmed frames to retry,
+  // not sent again by themselves
+  out.adopt = await ev('(async()=>{const g=get,J=(id,s)=>({id,op:"scan",strip:cur,state:s,exit:-1});try{' +
+    'get=async p=>{if(/strip_j98\\.job$/.test(p))throw new TypeError("Failed to fetch");return g(p)};' +
+    'await onBatch({rev:0,jobs:[J(98,"queued")]});const kept=bj.has(98);get=g;' +
+    'await onBatch({rev:0,jobs:[J(98,"queued")]});const again=bj.has(98);' +
+    'dec[3]="confirmed";await onBatch({rev:0,jobs:[J(99,"failed")]});' +
+    'return [kept,again,stateOf(frame(3)),todoFrames()]}' +
+    'finally{get=g;bj.delete(98);bj.delete(99);failed.clear();delete dec[3];live.clear();for(const f of frames)badge(f)}})()');
   writeFileSync(hold, "");
   await ev("startMs=200");
   await key("Enter");

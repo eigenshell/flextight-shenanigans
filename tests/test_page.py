@@ -570,6 +570,9 @@ def test_page_batch_queue(built, tmp_path):
     s = out["strip"]
     # a full batch (507): re-armed once a job ended, not by every snapshot
     assert out["rearm"] == [[0, 0, 1, 1], 0]
+    # adopted jobs: a failed fetch tried again; an ended job without its
+    # file leaves its confirmed frames to retry
+    assert out["adopt"] == [False, True, "retry", []]
     assert out["first"] == [[2, "running", [1]]]
     assert out["jobs"] == [[2, "running", [1]], [3, "queued", [2, 3]]]
     inc = dict(re.findall(r"\[frame (\d)\]\ntype = \w+\ninclude = (\w+)",

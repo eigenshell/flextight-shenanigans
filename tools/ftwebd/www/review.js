@@ -93,7 +93,7 @@ async function load(){const s=cur;
  const p=await get(S("strip.print"));
  try{if(p)await ft("printLoad",p);else await ft("printNew",emOf())}catch(e){st("strip.print: "+e.message,1);await ft("printNew",emOf())}
  meta=await get(F("strip.raw.txt"))||"";const j=await ft("jobJson",meta);frames=j.frames;
- dec={};for(const l of(await get(S("strip.review"))||"").split("\n")){const m=l.match(/^(\d+) (\w+)$/);if(m)dec[+m[1]]=m[2]}
+ dec={};for(const l of(await get(S("strip.review"))||"").split("\n")){const m=l.match(/^(\d+) (\w+)$/);if(m)dec[+m[1]]=m[2]}noFile();
  const[raw,cal,faul]=await Promise.all([get(F("strip.raw"),1),get(F("strip.raw.cal"),1),get(F("strip.raw.faul"),1)]);
  if(s!==cur)return;
  if(raw&&cal&&meta){pv=[raw,cal,meta,faul];try{await ft("previewLoad",...pv)}catch(e){pv=null;st("preview: "+e.message,1)}}
@@ -120,7 +120,7 @@ async function cut(name,quiet){const s=cur;let fr=[],mb="";if(cutDone.has(name))
  const raw=await fetchBig(F(name),(k,n)=>{if(s!==cur)return 0;const m=MB(k)+"/"+MB(n);if(m!==mb){mb=m;fetching(name+": fetching "+m+" MB")}return 1});
  if(s!==cur)return;if(!raw)return quiet||st(name+": files missing",1);
  for(const x of fr)unfetched.delete(x);delete fe[name];fetchBad();
- try{const r=await ft("cut",raw,cal,mt,faul);for(const f of r.frames){if(!landed.includes(f.frame))landed.push(f.frame);rescan.delete(f.frame)}landed.sort((a,b)=>a-b);cutDone.add(name)}
+ try{const r=await ft("cut",raw,cal,mt,faul);for(const f of r.frames){if(!landed.includes(f.frame))landed.push(f.frame);rescan.delete(f.frame);failed.delete(f.frame)}landed.sort((a,b)=>a-b);cutDone.add(name)}
  catch(e){if(!quiet)st(name+": "+e.message,1)}}
  catch(e){if(s!==cur)return;for(const x of fr)unfetched.add(x);fe[name]=name+": "+e.message;fetchBad()}
  finally{if(s===cur)fetching("")}}
@@ -281,15 +281,23 @@ const clearQ=()=>bq=bq.then(async()=>{await api("/api/tasks?state=queued",{metho
  jobs();for(const f of frames)badge(f);st("queue cleared: its frames to retry (Confirm)")}).catch(e=>st(e.message,1));
 // a job of this strip the page did not plan (a reload, another tab):
 // its frames from its job file on the box; an ended one's frames not
-// done are to retry
-async function adopt(x){if(bj.has(x.id))return;const j={id:x.id,op:x.op,state:x.state,frames:[],groups:{},dofs:{}};bj.set(x.id,j);
- const left=[];if(x.op==="scan"){const t=await get(F("strip_j"+x.id+".job"))||"";
-  for(const c of t.split(/^(?=\[frame \d+\])/m)){const m=c.match(/^\[frame (\d+)\]/);if(!m||!/^include = yes/m.test(c))continue;
+// done are to retry. Kept once its file is read: a fetch that fails
+// leaves it to the next snapshot. An ended one without a file never
+// started (the box removed it): this strip's confirmed frames not landed
+// and in no open job are to retry, not sent again by themselves
+async function adopt(x){if(bj.has(x.id))return;const j={id:x.id,op:x.op,state:x.state,frames:[],groups:{},dofs:{}};
+ const left=[];if(x.op==="scan"){let t;try{t=await get(F("strip_j"+x.id+".job"))}catch(e){return}
+  if(t==null&&ended(x.state))j.nofile=1;
+  for(const c of(t||"").split(/^(?=\[frame \d+\])/m)){const m=c.match(/^\[frame (\d+)\]/);if(!m||!/^include = yes/m.test(c))continue;
    const n=+m[1],g=c.match(/^group = (\d+)/m);j.frames.push(n);if(g)j.groups[n]=+g[1];if(/^done = no/m.test(c))left.push(n)}}
- if(ended(x.state)){j.closed=1;if(x.state!=="done")for(const n of left)failed.add(n)}
+ bj.set(x.id,j);noFile();if(ended(x.state)){j.closed=1;if(x.state!=="done")for(const n of left)failed.add(n)}
  // the job followed here already (its replayed lines may come before its
  // file): its windows' frames now known
  if(task&&task.id===x.id){groups=j.groups;dofs=j.dofs;if(run.kind==="window")scanning=new Set(Object.keys(groups).filter(n=>groups[n]===run.g).map(Number).filter(n=>!landed.includes(n)||rescan.has(n)))}}
+// adopted ended jobs without a file, once the frames are known (a
+// reload's first snapshot may come before them)
+function noFile(){if(!frames.length)return;for(const j of bj.values())if(j.nofile===1){j.nofile=2;
+ for(const f of frames)if(!blocked(f)&&dec[f.n]==="confirmed"&&!landed.includes(f.n)&&!jobOf(f.n))failed.add(f.n)}}
 const ended=s=>/^(done|failed|stopped)$/.test(s);
 // the open job a frame is in: queued, running, or ended with its end not
 // handled here yet (its windows landing)
@@ -350,7 +358,7 @@ function batchWatch(){if(bes)bes.close();bes=new EventSource("/api/batch/events"
 const onBatch=b=>bq=bq.then(async()=>{const s=cur,top=Math.max(0,...b.jobs.map(x=>x.id)),
   now=new Set(b.jobs.filter(x=>!ended(x.state)).map(x=>x.id)),freed=[...live].some(id=>!now.has(id));live=now;
  for(const x of b.jobs)if(x.strip===s)await adopt(x);if(s!==cur)return;
- for(const x of b.jobs){if(x.strip!==cur)continue;const j=bj.get(x.id);j.state=x.state;
+ for(const x of b.jobs){if(x.strip!==cur)continue;const j=bj.get(x.id);if(!j)continue;j.state=x.state;
   if(x.state==="running"&&(!task||task.id!==x.id))watch({id:x.id,state:"running",strip:x.strip,op:x.op});
   else if(ended(x.state)&&!j.closed&&!j.watched)watch({id:x.id,state:x.state,strip:x.strip,op:x.op})}
  // queued jobs gone from the box (dropped); a snapshot older than a job
