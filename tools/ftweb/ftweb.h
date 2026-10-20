@@ -107,9 +107,10 @@ int ftw_cut(ftw *w, const unsigned short *raw, size_t raw_n,
 /* the landed frames' numbers, ascending, into frames (cap); the count */
 int ftw_frames(const ftw *w, int *frames, int cap);
 
-/* the strip's colour balance over every landed frame (ftdev print
- * --roll over them): rerun as frames land. -> out: notes, one per line
- * (the "[frame N] not in the job" warning, few frames, estimated base) */
+/* each landed frame's colour balance, measured from the frame alone
+ * (per-frame balance: ftdev print --roll on that one frame, its own
+ * film base): rerun as frames land. -> out: notes, one per line (the
+ * "[frame N] not in the job" warning, estimated base) */
 int ftw_measure(ftw *w);
 /* one frame's share JPEG (-> out) and its text (ftw_text) with its
  * clicks from strip.print */
@@ -121,8 +122,8 @@ int ftw_display(ftw *w, int frame, int long_edge, int *pw, int *ph);
  * standard 525 ppi preview) with the preview's job (ftw_job_load): each
  * frame's box cut as a share frame is (x along). Returns the number of
  * frames; replaces any earlier preview. ftw_preview_display: one of them
- * printed with strip.print's emulsion, the strip's balance over the
- * preview's frames, the job's film base, no clicks and no turn, at most
+ * printed with strip.print's emulsion, its own balance (per-frame, as
+ * the share prints it), the job's film base, no clicks and no turn, at most
  * long_edge px -> out: RGBA rows; *pw x *ph. */
 int ftw_preview_load(ftw *w, const unsigned short *raw, size_t raw_n,
                      const unsigned short *cal, size_t cal_n,
@@ -141,6 +142,28 @@ int ftw_preview_px(void);
  * calibration: the colour is only roughly right. */
 int ftw_live_rows(ftw *w, const unsigned short *raw, size_t n, int px,
                   int neg, int first);
+/* the streamed preview: frames found as the preview arrives.
+ * ftw_stream_begin: strip.raw.cal (written before the raw), .faul
+ * (NULL/0: none), strip.raw.txt (a standard preview) and the film (slide
+ * 1, else negative), sizes in bytes as ftw_preview_load's; starts an
+ * empty base job (the stream's frames,
+ * holder 24x217) and drops any earlier preview. ftw_stream_feed: the
+ * next whole raw lines (n bytes), as the live bar reads them:
+ * calibrated (develop's stages, line by line), kept and fed to the
+ * streaming detector (ft_stream_detect.h); every frame it seals joins
+ * the base job and the preview (ftw_preview_print, its own balance).
+ * ftw_stream_end: the strip ended: the open run sealed too. Both return
+ * the frames newly sealed, out: {"lines","grid","frames":[...]} with
+ * ftw_job_json's frame objects; "grid": some frame came from the holder
+ * grid (no gap seen). The same frames whatever the chunking.
+ * ftw_stream_windows: the windows of a job the page wrote (its crops)
+ * onto the stream's frames of the same number; the frames moved. */
+int ftw_stream_begin(ftw *w, const unsigned short *cal, size_t cal_n,
+                     const char *faul, size_t faul_n, const char *meta,
+                     size_t meta_n, int slide);
+int ftw_stream_feed(ftw *w, const unsigned short *raw, size_t n);
+int ftw_stream_end(ftw *w);
+int ftw_stream_windows(ftw *w, const char *text, size_t n);
 /* every landed frame's JPEG and text, <base>_frameNN.jpg(.txt), in a
  * store-only zip -> out */
 int ftw_zip(ftw *w, const char *base);

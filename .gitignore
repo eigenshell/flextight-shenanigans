@@ -54,6 +54,7 @@ libft/test/test_*
 !libft/test/test_*.c
 libft/test/png_dump
 libft/test/window_dump
+libft/test/stream_dump
 libft/test/web/*.o
 
 # ssh credential helper (local-only credential, notes/ already ignored)

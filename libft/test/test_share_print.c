@@ -154,6 +154,40 @@ int main(void)
           == 0);
     CHECK(j2 == NULL && n2 == 0);
 
+    /* per-frame balance: measured from the frame alone (a roll of one),
+     * whatever else is on the strip; a roll's balance of the same frame
+     * with another differs */
+    {
+        ft_image im2, proxy2;
+        const ft_image *two[2];
+        ft_print_frame pf1, pf2[2];
+        ft_print_roll r1, r2;
+        unsigned char *ja, *jb;
+        size_t na, nb;
+        ft_image_init(&im2);
+        ft_image_init(&proxy2);
+        CHECK(ft_image_alloc(&im2, 300, 200, &e) == 0);
+        for (x = 0; x < 300 * 200 * 3; x++)      /* denser, greener */
+            im2.rgb[x] = im.rgb[x] * (x % 3 == 1 ? 0.5f : 0.3f);
+        CHECK(ft_share_print_proxy(&im2, &proxy2, &e) == 0);
+        CHECK(ft_share_print_balance(em, base, &proxy, &r1, &pf1, &e) == 0);
+        CHECK(r1.nframes == 1 && r1.has_ref == roll.has_ref &&
+              r1.ref_d == roll.ref_d && pf1.mean[1] == pf.mean[1]);
+        two[0] = &proxy;
+        two[1] = &proxy2;
+        CHECK(ft_print_roll_measure(em, base, two, 2, pf2, &r2, &e) == 0);
+        CHECK(ft_share_print_frame(em, &r1, &pf1, k, 0, &im, NULL, 4, &ja,
+                                   &na, t2, &info, &e) == 0);
+        CHECK(ft_share_print_frame(em, &r2, &pf2[0], k, 0, &im, NULL, 4, &jb,
+                                   &nb, t2, &info, &e) == 0);
+        CHECK(na == n && memcmp(ja, jpg, n) == 0);
+        CHECK(na != nb || memcmp(ja, jb, na) != 0);
+        free(ja);
+        free(jb);
+        ft_image_free(&proxy2);
+        ft_image_free(&im2);
+    }
+
     free(jpg);
     ft_image_free(&proxy);
     ft_image_free(&im);

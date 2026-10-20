@@ -8,14 +8,23 @@ Every call appends its argv (JSON) to fake_ftpoc.log in the cwd.
 
 `frames --detail ...` (the ARC chain) writes its job the same way.
 
-FAKE_FTPOC_DELAY: seconds per progress line (default 0.01).
+FAKE_FTPOC_DELAY: seconds per progress line (default 0.01);
+FAKE_FTPOC_PREVIEW_DELAY: the preview's (default FAKE_FTPOC_DELAY).
 FAKE_FTPOC_WINDOW: a window scan's base (libft/test/window_dump: <w>.raw,
 .raw.cal, .raw.txt); scan copies it as each window, the window's first
 frame as its share_frame, so the page can cut and print real pixels.
 Otherwise windows are 64 zero bytes. FAKE_FTPOC_PREVIEW: a preview's base
-(<p>.raw, .raw.cal, .raw.txt) frames writes as strip.raw while it
-"scans" (each progress line a share of the bytes, as ftpoc writes the
-lines as they come), then the rest (else 64 zero bytes). scan says what focus does: window 1 a bracket, the rest carry
+(<p>.raw, .raw.cal, .raw.txt) frames writes as ftpoc does: strip.raw.cal
+(and .raw.faul) first, strip.raw while it "scans" (each progress line a
+share of the bytes, as ftpoc writes the lines as they come), then the
+rest and strip.raw.txt (else 64 zero bytes). FAKE_FTPOC_HOLD: a path; each scan window waits while that file exists
+(after its "progress unit" line), so a test holds a job running.
+FAKE_FTPOC_FAIL: a scan whose job path contains it fails (exit 1) at its
+first window, after the hold. FAKE_FTPOC_LINGER: a path; a scan that ended
+well closes its output, then waits while that file exists (a stop
+ignored) and exits 0, so a test stops a step whose output has ended. FAKE_FTPOC_ROWS: a scan
+window's rows (default 1890; a progress line per 50), so a test fills
+ftwebd's line ring. scan says what focus does: window 1 a bracket, the rest carry
 it."""
 import json
 import os
@@ -30,6 +39,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DELAY = float(os.environ.get("FAKE_FTPOC_DELAY", "0.01"))
+PREVIEW_DELAY = float(os.environ.get("FAKE_FTPOC_PREVIEW_DELAY", DELAY))
+HOLD = os.environ.get("FAKE_FTPOC_HOLD")
+FAIL = os.environ.get("FAKE_FTPOC_FAIL")
+LINGER = os.environ.get("FAKE_FTPOC_LINGER")
+ROWS = int(os.environ.get("FAKE_FTPOC_ROWS", "1890"))
 stopped = False
 
 
@@ -40,6 +54,15 @@ def on_int(signum, frame):
 
 def say(line):
     print(line, flush=True)
+
+
+def held():
+    """waits while FAKE_FTPOC_HOLD's file exists; False if stopped"""
+    while HOLD and os.path.exists(HOLD):
+        if stopped:
+            return False
+        time.sleep(0.02)
+    return not stopped
 
 
 def png(path, w, h, boxes):
@@ -63,14 +86,14 @@ def png(path, w, h, boxes):
         chunk(b"IDAT", raw) + chunk(b"IEND", b""))
 
 
-def lines(total, on=None):
+def lines(total, on=None, delay=None):
     for k in range(50, total + 1, 50):
         if stopped:
             return False
         if on:
             on(k, total)
         say("progress lines %d/%d" % (k, total))
-        time.sleep(DELAY)
+        time.sleep(DELAY if delay is None else delay)
     say("progress lines %d/%d" % (total, total))
     return True
 
@@ -81,21 +104,25 @@ def frames(args):
     say("progress unit preview 1 1")
     pv = os.environ.get("FAKE_FTPOC_PREVIEW")
     data = Path(pv + ".raw").read_bytes() if pv else b""
+    if pv:                       # the calibration (and Faul Pixs) first
+        for ext in (".raw.faul", ".raw.cal"):
+            if Path(pv + ext).exists():
+                shutil.copy(pv + ext, base + ext)
     out = open(base + ".raw", "wb") if pv else None
 
     def grow(k, total):
         out.write(data[out.tell():len(data) * k // total])
         out.flush()
-    ok = lines(4795, grow if pv else None)
-    if out:
-        out.write(data[out.tell():])
+    ok = lines(4795, grow if pv else None, PREVIEW_DELAY)
+    if out:                      # stopped: the lines so far, as ftpoc
+        if ok:
+            out.write(data[out.tell():])
         out.close()
     if not ok:
         say("progress end stopped")
         return 1
     if pv:
-        for ext in (".raw.cal", ".raw.txt"):
-            shutil.copy(pv + ext, base + ext)
+        shutil.copy(pv + ".raw.txt", base + ".raw.txt")
     else:
         Path(base + ".raw").write_bytes(b"\0" * 64)
         Path(base + ".raw.txt").write_text("px=666\nx=2\nbin=12\n")
@@ -139,6 +166,12 @@ def scan(args):
     say("progress begin window %d" % len(groups))
     for i, g in enumerate(groups, 1):
         say("progress unit window %d %d" % (i, g))
+        if not held():
+            say("progress end stopped")
+            return 1
+        if FAIL and FAIL in job:
+            say("progress end failed")
+            return 1
         first = min(n for n, inc, gg, _, _ in secs if inc and gg == g)
         if i == 1:
             for k, (o, s) in enumerate(((-500, 0.031), (0, 0.044),
@@ -149,7 +182,7 @@ def scan(args):
             say("progress focused +250 measured")
         else:
             say("progress focused +250 carried")
-        if not lines(1890):
+        if not lines(ROWS):
             say("progress end stopped")
             return 1
         raw = "%s_win%02d.raw" % (base, g)
@@ -170,6 +203,12 @@ def scan(args):
         Path(job).write_text(text)
         say("progress file " + raw)
     say("progress end ok")
+    if LINGER and os.path.exists(LINGER):
+        os.close(1)
+        os.close(2)
+        while os.path.exists(LINGER):
+            time.sleep(0.02)
+        os._exit(0)
     return 0
 
 

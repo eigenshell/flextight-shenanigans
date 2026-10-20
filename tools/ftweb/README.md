@@ -21,8 +21,11 @@ message into one call, `make www` puts `ftweb.wasm` beside it.
 The engine runs `ftdev cut` then `ftdev print --roll` call for call
 (`ft_share_cut`, `ft_share_print_frame`) and keeps each frame as the DNG
 would keep it (16-bit samples, ppi and noise profile as stored, the
-sidecar through its text). So for the same windows, `strip.print` and
-clicks, the page's JPEGs are the CLI's, byte for byte, and the JPEG
+sidecar through its text). Each frame is balanced on its own (per-frame
+balance, `ft_share_print_balance`: the preview a frame is judged on
+predicts its share print), as `ftdev print --roll` balances one frame
+given alone. So for the same windows, `strip.print` and clicks, the
+page's JPEGs are the CLI's (one frame a call), byte for byte, and the JPEG
 encoder is libft's own (`ft_jpeg.c`, itself byte-identical to
 libjpeg-turbo with ftdev's settings). `tests/test_ftweb.py` checks both:
 `ftweb_cli` (the engine driven from files) against ftdev, and the wasm

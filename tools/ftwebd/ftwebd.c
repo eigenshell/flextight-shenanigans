@@ -35,14 +35,54 @@
  *   GET|PUT /api/strips/{s}/strip.review  "<frame> pending|confirmed|
  *                                         skipped" lines (PUT: checked)
  *   POST /api/tasks  op=preview&strip=&film=neg|slide
- *                    op=scan&strip=[&share=0|1][&arc=1,3-4&film=]
- *                                         202 {id} | 409 busy
+ *                    op=scan&strip=[&share=0|1][&job=][&arc=1,3-4&film=]
+ *                    (job: the share job's text, kept as strip_j<id>.job;
+ *                    none: a copy of strip.job. ftpoc's outputs are
+ *                    named after it: strip_j<id>_winNN.raw)
+ *                    202 {id}: queued at the batch's tail, started at
+ *                    once when idle (404 no such strip, 422 a bad
+ *                    request or job, 507: 8 jobs queued or running)
  *   GET  /api/tasks/current, /api/tasks/{id}
- *   GET  /api/tasks/{id}/events?since=k   SSE, id = line number
- *   POST /api/tasks/{id}/stop
+ *                    {id, op, strip, state, exit, stopped, lines}; state
+ *                    queued|running|done|failed|stopped; current: the
+ *                    running job, else the latest; null: none
+ *   GET  /api/tasks/{id}/events?since=k   SSE, id = line number (since=
+ *                                         or Last-Event-ID); a queued
+ *                                         job's waits for its start;
+ *                                         event end after its last line
+ *                                         (ftwebd exit <code>), gone:
+ *                                         dropped or its slot reused
+ *   POST /api/tasks/{id}/stop             the running job (409 not
+ *                                         running, 404 none)
+ *   PUT  /api/tasks/{id}/job              a queued scan's job (validated,
+ *                                         422; a preview's: 422); 409
+ *                                         once it has started, 404 none
+ *   DELETE /api/tasks/{id}                {"ok","was":"queued"}: dropped
+ *                                         (its job file too), "running":
+ *                                         stopped; 409 ended, 404 none
+ *   DELETE /api/tasks?state=queued        {"dropped":n}: every queued job
+ *                                         dropped (box-wide)
+ *   GET  /api/batch/events?since=rev      SSE, id = rev: {"rev","jobs":
+ *                                         [{id, op, strip, state, exit}]}
+ *                                         at once (unless since= or
+ *                                         Last-Event-ID is the current
+ *                                         rev) and on every change
+ *
+ * The batch: 8 slots, jobs run one after the other in the order queued;
+ * one that fails or is stopped is marked so and the next runs; ended
+ * jobs' slots are reused oldest first, their lines readable (one ring
+ * across jobs) until newer lines overwrite them.
+ *
+ * Every file written goes to <file>.tmp and is renamed over it, under
+ * one lock: a GET racing a write gets the old file or the new one. The
+ * sockets are close-on-exec (Windows: not inheritable): ftpoc children
+ * hold none of them.
  *
  * A good preview's job is kept as strip.preview.job: the page plans
  * every size choice from it (the planner excludes frames). */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE             /* accept4 */
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <pthread.h>
@@ -56,6 +96,7 @@
 #include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -68,6 +109,7 @@
 #include "ft_job.h"
 #include "ft_plan.h"
 #include "ft_print_file.h"
+#include "batch.h"              /* BATCH_MAX: the snapshot's size */
 #include "http.h"
 #include "proc.h"
 #include "task.h"
@@ -77,6 +119,7 @@ static ft_lens g_lens;
 static const char *g_archive, *g_archive_ppi = "6300";
 static const char *g_microcode;
 static pthread_mutex_t g_put_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_time_mu = PTHREAD_MUTEX_INITIALIZER;
 
 static void sock_close(sock_t s)
 {
@@ -85,6 +128,42 @@ static void sock_close(sock_t s)
 #else
     close(s);
 #endif
+}
+
+/* s kept from the children: an ftpoc that held a connection's socket
+ * kept it open past ftwebd's close (no EOF: a POST's answer "lasted" as
+ * long as the scan it started, and the browser's few connections per
+ * host ran out). The listening socket is set before any child runs */
+static void sock_private(sock_t s)
+{
+#ifdef _WIN32
+    SetHandleInformation((HANDLE)s, HANDLE_FLAG_INHERIT, 0);
+#else
+    int fl = fcntl(s, F_GETFD);
+    if (fl >= 0)
+        fcntl(s, F_SETFD, fl | FD_CLOEXEC);
+#endif
+}
+
+/* accept, the connection kept from the children. Linux: at once
+ * (accept4), so a child started meanwhile never gets it; elsewhere set
+ * right after (a child started in between could still take it) */
+static sock_t accept_private(sock_t ls)
+{
+    sock_t c;
+#if defined(__linux__) && defined(SOCK_CLOEXEC)
+    c = accept4(ls, NULL, NULL, SOCK_CLOEXEC);
+    if (c >= 0 || errno != ENOSYS)
+        return c;
+#endif
+    c = accept(ls, NULL, NULL);
+#ifdef _WIN32
+    if (c != INVALID_SOCKET)
+#else
+    if (c >= 0)
+#endif
+        sock_private(c);
+    return c;
 }
 
 /* strip and file names: [A-Za-z0-9._-], 1..64, no leading '.' */
@@ -190,7 +269,11 @@ static int scan_choices(const char *body, char *text, size_t cap,
         return snprintf(msg, mcap, "holder: no holder '%s'", holder), -1;
     if (!ft_emulsion_find(em))
         return snprintf(msg, mcap, "emulsion: no emulsion '%s'", em), -1;
+    /* localtime's struct is shared (a thread per connection; C99 has no
+     * localtime_r): copied out under a lock */
+    pthread_mutex_lock(&g_time_mu);
     strftime(when, sizeof when, "%Y-%m-%dT%H:%M:%S", localtime(&now));
+    pthread_mutex_unlock(&g_time_mu);
     snprintf(text, cap, "type = %s\nppi = %s\nholder = %s\nemulsion = %s\n"
                         "created = %s\n", type, ppi, holder, em, when);
     return 0;
@@ -298,7 +381,6 @@ static void api_put(sock_t s, const char *dir, const char *name,
     const char *body = r->body ? r->body : "";
     char p[400], m[120];
     ft_err e;
-    FILE *f;
     int rc;
     pthread_mutex_lock(&g_put_mu);
     if (strcmp(name, "strip.review") == 0
@@ -312,12 +394,7 @@ static void api_put(sock_t s, const char *dir, const char *name,
         return;
     }
     snprintf(p, sizeof p, "%s/%s", dir, name);
-    f = fopen(p, "wb");
-    rc = !f;
-    if (f) {
-        rc = fwrite(body, 1, r->nbody, f) != r->nbody;
-        rc |= fclose(f) != 0;
-    }
+    rc = task_write_file(p, body, r->nbody);    /* a GET: old or new */
     pthread_mutex_unlock(&g_put_mu);
     snprintf(m, sizeof m, "cannot write %s", name);
     if (rc)
@@ -326,9 +403,39 @@ static void api_put(sock_t s, const char *dir, const char *name,
         http_json(s, 200, "{\"ok\":true}");
 }
 
+/* 1 if the form text has key= (decodable or not) */
+static int has_param(const char *qs, const char *key)
+{
+    size_t kl = strlen(key);
+    const char *p = qs;
+    while (p && *p) {
+        if (strncmp(p, key, kl) == 0 && p[kl] == '=')
+            return 1;
+        p = strchr(p, '&');
+        p = p ? p + 1 : NULL;
+    }
+    return 0;
+}
+
+/* a job's text checked as ftpoc reads it, and against this scanner's
+ * optics (ftpoc moves by it); 0, or -1 with msg */
+static int job_ok(const char *text, size_t n, char *msg, size_t cap)
+{
+    static ft_job j;
+    ft_err e;
+    int rc;
+    pthread_mutex_lock(&g_put_mu);
+    rc = ft_job_parse(&j, text, n, &e) || ft_job_validate(&j, &g_lens, &e);
+    pthread_mutex_unlock(&g_put_mu);
+    if (rc)
+        snprintf(msg, cap, "%s", e.msg);
+    return rc ? -1 : 0;
+}
+
 static void api_task_start(sock_t s, const http_req *r)
 {
     char op[16], strip[80], film[16], share[8], arc[80], err[300], p[400];
+    char msg[310], *job;
     const char *body = r->body ? r->body : "";
     task_req rq;
     int id, rc;
@@ -357,13 +464,60 @@ static void api_task_start(sock_t s, const http_req *r)
             return;
         }
     }
+    /* job=: the share job's text (else the box copies strip.job); read
+     * only for a share step, refused when it does not decode (a NUL, a
+     * bad %XX, over HTTP_BODY_MAX) */
+    job = NULL;
+    if (strcmp(op, "scan") == 0 && rq.share && has_param(body, "job")) {
+        job = malloc(HTTP_BODY_MAX);
+        if (!job) {
+            http_error(s, 500, "out of memory");
+            return;
+        }
+        rc = http_param(body, "job", job, HTTP_BODY_MAX);
+        if (rc)
+            snprintf(err, sizeof err, "not form text (a NUL, a bad %%XX "
+                     "or too long)");
+        if (rc || job_ok(job, strlen(job), err, sizeof err)) {
+            snprintf(msg, sizeof msg, "job: %s", err);
+            free(job);
+            http_error(s, 422, msg);
+            return;
+        }
+    }
+    rq.job = job;
+    rq.njob = job ? strlen(job) : 0;
     rc = task_start(&rq, &id, err, sizeof err);
+    free(job);
     if (rc == 1)
-        http_error(s, 409, err);
+        http_error(s, 507, err);
     else if (rc)
         http_error(s, 422, err);
     else
         http_json(s, 202, "{\"id\":%d}", id);
+}
+
+/* PUT /api/tasks/{id}/job: a queued job's share job, checked first */
+static void api_task_job(sock_t s, int id, const http_req *r)
+{
+    char msg[300];
+    const char *body = r->body ? r->body : "";
+    int rc;
+    if (job_ok(body, r->nbody, msg, sizeof msg)) {
+        http_error(s, 422, msg);
+        return;
+    }
+    rc = task_put_job(id, body, r->nbody, msg, sizeof msg);
+    if (rc == -2)
+        http_error(s, 404, "no such task");
+    else if (rc == 1)
+        http_error(s, 409, msg);
+    else if (rc == -1)
+        http_error(s, 422, msg);
+    else if (rc)
+        http_error(s, 500, msg);
+    else
+        http_json(s, 200, "{\"ok\":true}");
 }
 
 static void api_events(sock_t s, int id, const http_req *r)
@@ -407,6 +561,36 @@ static void api_events(sock_t s, int id, const http_req *r)
     free(buf);
 }
 
+/* the batch's snapshots, one per change: the first at once, unless the
+ * client (since=, Last-Event-ID) has the current revision. The snapshot
+ * is copied out under the lock and sent without it */
+static void api_batch_events(sock_t s, const http_req *r)
+{
+    char v[24], buf[BATCH_MAX * 512 + 64];
+    long rev = -1;
+    if (http_param(r->query, "since", v, sizeof v) == 0)
+        rev = atol(v);
+    if (r->last_event_id[0])
+        rev = atol(r->last_event_id);
+    if (rev < 0)
+        rev = -1;
+    if (http_sse_head(s))
+        return;
+    for (;;) {
+        long n = task_batch(&rev, buf, sizeof buf, 15);
+        if (n < 0)
+            break;
+        if (n == 0) {
+            static const char ka[] = ": keepalive\n\n";
+            if (http_send_all(s, ka, sizeof ka - 1))
+                break;
+            continue;
+        }
+        if (http_send_all(s, buf, (size_t)n))
+            break;
+    }
+}
+
 /* the files the page writes (PUT, checked) */
 static int kept_file(const char *f)
 {
@@ -415,16 +599,27 @@ static int kept_file(const char *f)
            strcmp(f, "strip.review") == 0;
 }
 
-/* path split on '/': seg[0..n) point into a copy */
+/* path split on '/' (empty segments skipped): seg[0..n) point into a
+ * copy; -1 past max. No strtok: a thread serves each connection, and
+ * strtok's hidden state mixed paths in flight together (stray 404s) */
 static int split(const char *path, char *copy, size_t cap, char **seg,
                  int max)
 {
     int n = 0;
     char *p;
     snprintf(copy, cap, "%s", path);
-    for (p = strtok(copy, "/"); p && n < max; p = strtok(NULL, "/"))
+    for (p = copy; *p;) {
+        if (*p == '/') {
+            *p++ = 0;
+            continue;
+        }
+        if (n == max)
+            return -1;
         seg[n++] = p;
-    return p ? -1 : n;
+        while (*p && *p != '/')
+            p++;
+    }
+    return n;
 }
 
 static void route(http_req *r)
@@ -435,6 +630,7 @@ static void route(http_req *r)
     int get = strcmp(r->method, "GET") == 0;
     int post = strcmp(r->method, "POST") == 0;
     int put = strcmp(r->method, "PUT") == 0;
+    int del = strcmp(r->method, "DELETE") == 0;
 
     if (n <= 1 && (n == 0 || name_ok(seg[0]))) {   /* the page's files */
         snprintf(p, sizeof p, "%s/%s", g_www, n ? seg[0] : "index.html");
@@ -454,6 +650,11 @@ static void route(http_req *r)
     }
     if (n == 2 && strcmp(seg[1], "scans") == 0 && get) {
         http_json(s, 200, "[]");
+        return;
+    }
+    if (n == 3 && strcmp(seg[1], "batch") == 0 &&
+        strcmp(seg[2], "events") == 0 && get) {
+        api_batch_events(s, r);
         return;
     }
     if (strcmp(seg[1], "strips") == 0) {
@@ -495,6 +696,16 @@ static void route(http_req *r)
             api_task_start(s, r);
             return;
         }
+        if (n == 2 && del) {
+            char st[16];
+            if (http_param(r->query, "state", st, sizeof st) ||
+                strcmp(st, "queued") != 0) {
+                http_error(s, 422, "DELETE /api/tasks?state=queued only");
+                return;
+            }
+            http_json(s, 200, "{\"dropped\":%d}", task_clear());
+            return;
+        }
         if (n < 3) {
             http_error(s, 404, "not found");
             return;
@@ -503,8 +714,19 @@ static void route(http_req *r)
         if (n == 3 && get) {
             task_json(id, js, sizeof js);
             http_send(s, 200, "application/json", js, strlen(js));
+        } else if (n == 3 && del && id > 0) {
+            int rc = task_delete(id);
+            if (rc == -2)
+                http_error(s, 404, "no such task");
+            else if (rc == -1)
+                http_error(s, 409, "ended");
+            else
+                http_json(s, 200, "{\"ok\":true,\"was\":\"%s\"}",
+                          rc ? "running" : "queued");
         } else if (n == 4 && strcmp(seg[3], "events") == 0 && get && id > 0) {
             api_events(s, id, r);
+        } else if (n == 4 && strcmp(seg[3], "job") == 0 && put && id > 0) {
+            api_task_job(s, id, r);
         } else if (n == 4 && strcmp(seg[3], "stop") == 0 && post && id > 0) {
             int rc = task_stop(id);
             if (rc == -2)
@@ -644,6 +866,7 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);
 #endif
     ls = socket(AF_INET, SOCK_STREAM, 0);
+    sock_private(ls);
     setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof one);
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
@@ -661,7 +884,7 @@ int main(int argc, char **argv)
         sock_t *c = malloc(sizeof *c);
         if (!c)
             continue;
-        *c = accept(ls, NULL, NULL);
+        *c = accept_private(ls);
 #ifdef _WIN32
         if (*c == INVALID_SOCKET) {
 #else

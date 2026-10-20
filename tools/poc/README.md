@@ -85,6 +85,16 @@ microcode: a loader is used only when no `\\.\ScannerN` answers with the
 microcode, so a stale loader device never triggers a second upload.
 
 ```
+ftpoc getwin         GET WINDOW (0x25): the last window descriptor with the
+                     live CCD/lens positions at @56/@60 (motor detents, not
+                     the requested values)
+--probe L[:igp][,L...]  (scan, crop) at image line L the read queue drains,
+                     then INQUIRY (i: ring write/read index, state 0x35),
+                     GET WINDOW (g), peek drum 4000:8ed0 (p); default i.
+                     A peek maps the boot flash over E0000-FFFFF for its
+                     duration: a line DMA'd into a ring slot there is lost
+                     (preview: slots ~98-130), so probe elsewhere
+--stall L:ms         (scan, crop) stop reading for ms at image line L
 ftpoc scanstop       0xdb (kHwiScanStop) — device rejects it (CHECK COND.)
 ftpoc busreset       IOCTL_STORAGE_RESET_BUS on the Imacon's HBA port only;
                      does NOT clear the scanner's scan state

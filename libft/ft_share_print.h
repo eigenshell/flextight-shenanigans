@@ -53,6 +53,15 @@ int ft_share_finish(const ft_image *cut, double scale, double sharpen,
  * proxy ft_image_init'd by the caller */
 int ft_share_print_proxy(const ft_image *cut, ft_image *proxy, ft_err *e);
 
+/* per-frame balance: the frame's own range and balance, measured from
+ * its stats proxy alone (a roll of one frame), so a frame prints the
+ * same whatever else is on the strip and the preview predicts the
+ * share. base: the film base (neg, b&w) or black (slide). roll and pf
+ * go to ft_share_print_frame. -1 with e filled. */
+int ft_share_print_balance(const ft_emulsion *em, const float base[3],
+                           const ft_image *proxy, ft_print_roll *roll,
+                           ft_print_frame *pf, ft_err *e);
+
 /* how the print was made: the .txt beside the JPEG and its comment.
  * frame < 0: no frame line. snprintf's contract. */
 int ft_share_print_text(char *buf, size_t cap, const ft_emulsion *em,

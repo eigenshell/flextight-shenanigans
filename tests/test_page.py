@@ -417,6 +417,98 @@ def test_worker_preview_print(built, tmp_path):
     assert rep[9]["r"] == 666
 
 
+def test_worker_stream(built, tmp_path):
+    """the streamed preview through the worker: strip.raw.cal first, then
+    the raw in whole-line chunks as the live bar reads them: each frame as
+    its gap shows (the base job grows, its preview prints), the strip's
+    end; a crop cuts the frame again; the page's job puts its windows
+    back; plans start from the stream's frames"""
+    pytest.importorskip("numpy")
+    pv = (FIX / "preview.job").read_text()
+    meta = "px=666\nx=2\nbin=12\n"
+    boxes = worker(tmp_path, [{"op": "job", "a": [pv]},
+                              {"op": "jobJson", "a": [meta]}])[1]["r"]["frames"]
+    raw, cal, txt = preview_files(tmp_path, boxes)
+    data, row = raw.read_bytes(), 666 * 6
+    cuts = [0, 1000 * row, 2500 * row, len(data)]
+    for i in range(3):
+        (tmp_path / ("c%d" % i)).write_bytes(data[cuts[i]:cuts[i + 1]])
+    (tmp_path / "odd").write_bytes(data[:row + 3])
+    f = lambda n: {"file": str(tmp_path / n)}
+    moved = pv.replace("window = 80.000 1.600 36.000 24.400",
+                       "window = 81.000 2.000 34.000 23.000")
+    rep = worker(tmp_path, [
+        {"op": "printNew", "a": ["generic-neg"]},
+        {"op": "streamFeed", "a": [f("c0")]},
+        {"op": "streamBegin", "a": [None, meta, None, False]},
+        {"op": "streamBegin", "a": [{"file": str(cal)}, meta, None, False]},
+        {"op": "streamFeed", "a": [f("c0")]},                       # 4
+        {"op": "jobJson", "a": [meta]},
+        {"op": "previewPrint", "a": [1, 200]},
+        {"op": "streamFeed", "a": [f("odd")]},
+        {"op": "streamFeed", "a": [f("c1")]},                       # 8
+        {"op": "streamFeed", "a": [f("c2")]},
+        {"op": "streamEnd"},
+        {"op": "jobJson", "a": [meta]},                             # 11
+        {"op": "previewPrint", "a": [2, 2000]},
+        {"op": "frameBox", "a": [2, [boxes[1]["x"] + 40, boxes[1]["y"] + 10,
+                                     boxes[1]["w"] - 80, boxes[1]["h"] - 20],
+                                 meta]},
+        {"op": "previewPrint", "a": [2, 2000]},                     # 14
+        {"op": "streamWindows", "a": [moved]},
+        {"op": "jobJson", "a": [meta]},
+        {"op": "plan", "a": [[2452, 2452, 2452, 0, 0, 0]]},         # 17
+    ])
+    assert rep[1] == {"err": "stream: not begun"}
+    assert rep[2] == {"err": "stream: no calibration yet"}
+    one = rep[4]["r"]
+    assert [x["n"] for x in one["frames"]] == [1] and not one["grid"]
+    assert [x["n"] for x in rep[5]["r"]["frames"]] == [1]
+    assert rep[6]["r"]["w"] == 200 and rep[6]["r"]["h"] < 200
+    assert rep[7] == {"err": "stream: not whole lines"}
+    got = one["frames"] + rep[8]["r"]["frames"] + rep[9]["r"]["frames"] + \
+        rep[10]["r"]["frames"]
+    fr = rep[11]["r"]["frames"]
+    assert got == fr
+    assert [x["type"] for x in fr] == ["full"] * 5 + ["half"]
+    assert rep[10]["r"]["frames"] == [] and rep[10]["r"]["lines"] == 4795
+    for g, b in zip(fr, boxes):               # the box: padded 0.3 mm
+        assert abs(g["x"] - (b["x"] - 6.2)) < 4 and abs(g["y"] - b["y"]) < 8
+    a, b = rep[12]["r"], rep[14]["r"]
+    assert b["w"] < a["w"] - 70 and b["h"] < a["h"] - 15   # cut again
+    assert rep[15]["r"] == 6                  # every frame's window moved
+    f3 = rep[16]["r"]["frames"][2]
+    assert abs(f3["w"] - 34 / (25.4 / 525)) < 0.2
+    assert rep[17]["r"]["windows"] >= 1
+
+
+def test_worker_stream_grid(built, tmp_path):
+    """frames touching (no gap on the strip): the holder grid cuts them
+    every 36 mm, said ("grid") so the page can tell; flagged low"""
+    pytest.importorskip("numpy")
+    pv = (FIX / "preview.job").read_text()
+    for a, b in (("42.000", "40.000"), ("80.000", "76.000"),
+                 ("118.000", "112.000"), ("156.000", "148.000"),
+                 ("194.000 1.600 20.000", "184.000 1.600 36.000")):
+        pv = pv.replace("window = " + a, "window = " + b)
+    meta = "px=666\nx=2\nbin=12\n"
+    boxes = worker(tmp_path, [{"op": "job", "a": [pv]},
+                              {"op": "jobJson", "a": [meta]}])[1]["r"]["frames"]
+    raw, cal, txt = preview_files(tmp_path, boxes)
+    rep = worker(tmp_path, [
+        {"op": "streamBegin", "a": [{"file": str(cal)}, meta, None, False]},
+        {"op": "streamFeed", "a": [{"file": str(raw)}]},
+        {"op": "streamEnd"},
+    ])
+    r = rep[1]["r"]
+    assert r["grid"] and rep[2]["r"]["grid"]
+    fr = r["frames"] + rep[2]["r"]["frames"]
+    assert [f["type"] for f in fr] == ["full"] * 6
+    assert [f["low"] for f in fr] == [True] * 5 + [False]
+    for f, b in zip(fr, boxes):
+        assert abs(f["x"] - (b["x"] - 6.2)) < 4
+
+
 class Proxy:
     """a TCP pipe in front of ftwebd (one request per connection, as
     ftwebd answers), the box's slow Wi-Fi breaking: rule(head) -> None
@@ -490,13 +582,16 @@ class Proxy:
         self.ls.close()
 
 
-def run_page(built, tmp_path, rule=None, mode="full"):
+def run_page(built, tmp_path, rule=None, mode="full", preview_delay=0.12):
     """the page in Chromium: landing (2450 ppi), SCAN, the live bar, the
-    review by keys (qwerty on frame 1, dvorak on frame 2 with a name), a
-    crop dragged on frame 3, 4 and 5 skipped, 6 confirmed: the scan
+    review by keys while the preview streams (qwerty on frame 1, confirmed
+    before the preview ends; dvorak on frame 2 with a name), a crop
+    dragged on frame 3, 4 and 5 skipped, 6 (half) refused: the scan
     starts by itself; Download and All; then a crop on a scanned frame:
     the dialog, R, its rescan. rule: a Proxy's between page and box;
-    mode "fail": the scan's window does not come, then does"""
+    mode "fail": the scan's window does not come, then does; "replay": a
+    reload and Stop while the preview runs. preview_delay: seconds per
+    preview progress line (96 lines)"""
     pytest.importorskip("numpy")
     meta = "px=666\nx=2\nbin=12\n"
     boxes = worker(tmp_path, [
@@ -512,18 +607,22 @@ def run_page(built, tmp_path, rule=None, mode="full"):
     box.mkdir()
     dl = tmp_path / "dl"
     dl.mkdir()
+    hold = tmp_path / "hold"
     srv = Server(ROOT / "tools" / "ftwebd" / "ftwebd", box, 0.03,
                  env={"FAKE_FTPOC_WINDOW": str(win),
-                      "FAKE_FTPOC_PREVIEW": str(tmp_path / "pv" / "strip")})
+                      "FAKE_FTPOC_PREVIEW": str(tmp_path / "pv" / "strip"),
+                      "FAKE_FTPOC_HOLD": str(hold),
+                      "FAKE_FTPOC_PREVIEW_DELAY": str(preview_delay)})
     px = Proxy(srv.port, rule) if rule else None
     try:
         r = subprocess.run([NODE, "--no-warnings", str(FIX / "page_e2e.mjs"),
                             CHROME, "http://127.0.0.1:%d/" %
-                            (px or srv).port, str(dl), mode],
+                            (px or srv).port, str(dl), mode, str(hold)],
                            capture_output=True, text=True, timeout=300)
     finally:
         if px:
             px.close()
+        hold.unlink(missing_ok=True)
         srv.close()
     assert r.returncode == 0, r.stderr[-4000:]
     out = json.loads(r.stdout)
@@ -536,7 +635,27 @@ def test_page_end_to_end(built, tmp_path):
     check_end_to_end(tmp_path, *run_page(built, tmp_path))
 
 
-WIN = re.compile(r"GET /api/strips/[^/ ]+/files/strip_win01\.raw ")
+@pytest.mark.skipif(CHROME is None, reason="needs Chromium")
+def test_page_stream_replays_and_stops(built, tmp_path):
+    """frame 1 clicked and confirmed while the preview runs; the page
+    reloaded mid-preview replays the raw from its start: the same frame 1,
+    its decision and click re-attached by number; Stop: the sealed frames
+    stay (the open run dropped) and strip.job holds them; the box keeps
+    no strip.preview.job of a stopped preview"""
+    out, box, _ = run_page(built, tmp_path, mode="replay", preview_delay=0.25)
+    assert out["mid"]["running"] and out["confirmedMid"]
+    assert out["f1After"] == out["f1Mid"]
+    assert out["state1"] == "confirmed" and out["clicks1"] == [1, 0, 0, 0]
+    assert 2 <= out["nf"] < 6 and out["thumbsN"] == out["nf"]
+    assert re.findall(r"^\[frame (\d+)\]", out["job"], re.M) == \
+        [str(n) for n in range(1, out["nf"] + 1)]
+    assert out["pvJob"] == 404
+    log = [json.loads(l) for l in (box / "fake_ftpoc.log").read_text()
+           .splitlines()]
+    assert [a[0] for a in log] == ["frames"]
+
+
+WIN = re.compile(r"GET /api/strips/[^/ ]+/files/strip_j\d+_win01\.raw ")
 
 
 def broken(px, head):
@@ -558,6 +677,63 @@ def test_page_resumes_a_broken_transfer(built, tmp_path):
     check_end_to_end(tmp_path, out, box, dl)
 
 
+@pytest.mark.skipif(CHROME is None, reason="needs Chromium")
+def test_page_batch_queue(built, tmp_path):
+    """the first confirm starts a job; frames confirmed while it scans
+    collect into the next job (the batch's tail, re-planned by PUT while
+    it is queued), which runs after it"""
+    out, box, dl = run_page(built, tmp_path, mode="batch")
+    s = out["strip"]
+    # a full batch (507): re-armed once a job ended, not by every snapshot
+    assert out["rearm"] == [[0, 0, 1, 1], 0]
+    # adopted jobs: a failed fetch tried again; an ended job without its
+    # file leaves its confirmed frames to retry
+    assert out["adopt"] == [False, True, "retry", []]
+    assert out["first"] == [[2, "running", [1]]]
+    assert out["jobs"] == [[2, "running", [1]], [3, "queued", [2, 3]]]
+    inc = dict(re.findall(r"\[frame (\d)\]\ntype = \w+\ninclude = (\w+)",
+                          out["tailJob"]))
+    assert inc == {"1": "no", "2": "yes", "3": "yes", "4": "no", "5": "no",
+                   "6": "no"}
+    assert out["badges"] == ["scanning", "queued", "queued"]
+    # unconfirm: a queued frame out of its job (PUT), the job's last
+    # frame out drops it (DELETE); a frame of the running job cannot
+    # (Skip disabled, Stop offered)
+    inc = dict(re.findall(r"\[frame (\d)\]\ntype = \w+\ninclude = (\w+)",
+                          out["tailAfter"]))
+    assert (inc["2"], inc["3"]) == ("yes", "no")
+    assert out["badge3"] == "pending"
+    assert out["dropped"] is None
+    assert out["skipOff"] == [True, False]
+    assert out["running"] == ("frame 1 is in the job scanning now: Stop "
+                              "ends that job (its frames to retry)")
+    assert out["skipOn"] is False
+    # while the batch's changes wait, the last decision holds: a frame
+    # unconfirmed before its enqueue ran is not sent; one confirmed again
+    # before its unconfirm ran stays in its job
+    assert out["late"] == [False, "pending"]
+    assert out["again"] == [[2], "confirmed"]
+    # a reload: the same jobs, rebuilt from the box
+    assert out["before"] == out["after"] == [[2, "running", [1]],
+                                             [4, "queued", [2]]]
+    assert out["badgesAfter"] == ["scanning", "queued", "pending"]
+    assert out["bat"] == "Scanning · 2 frames left"
+    # stopped: frame 1 to retry; Confirm sent it again (job 5)
+    assert out["retry"] == "retry"
+    assert out["landed"] == [1, 2]
+    # Clear: job 7 (frame 5) dropped before it ran
+    assert out["cleared"] == ["scanning", "retry"]
+    assert out["landed2"] == [1, 2, 4]
+    files = set(out["files"])
+    assert {"strip_j4_win01.raw", "strip_j5_win01.raw"} <= files
+    assert "strip_j2_win01.raw" not in files  # stopped before its window
+    assert "strip_j3.job" not in files       # the dropped job's file
+    log = [json.loads(l) for l in (box / "fake_ftpoc.log").read_text()
+           .splitlines()]
+    assert [a[2] for a in log if a[0] == "scan"] == \
+        ["strips/%s/strip_j%d.job" % (s, i) for i in (2, 4, 5, 6)]
+
+
 def lost(px, head):
     """the window does not come at all until the page opens the proxy"""
     return 0 if WIN.match(head) and not px.open else None
@@ -570,7 +746,7 @@ def test_page_lost_window_does_not_wedge(built, tmp_path):
     frame's print the CLI's"""
     out, box, dl = run_page(built, tmp_path, lost, "fail")
     assert out["cut"] and all(n == 0 for _, n in out["cut"])
-    assert re.match(r"strip_win01\.raw: stopped at 0 MB: ", out["bad"]), \
+    assert re.match(r"strip_j2_win01\.raw: stopped at 0 MB: ", out["bad"]), \
         out["bad"]
     assert out["landedFail"] == [] and out["landed"] == [1]
     assert not out["restarted"]
@@ -582,14 +758,14 @@ def test_page_lost_window_does_not_wedge(built, tmp_path):
     strip = box / "strips" / s
     job = tmp_path / "job1.job"
     job.write_text(out["job1"])
-    subprocess.run([str(FTDEV), "cut", str(strip / "strip_win01.raw")],
+    subprocess.run([str(FTDEV), "cut", str(strip / "strip_j2_win01.raw")],
                    check=True, capture_output=True)
-    r = subprocess.run([str(FTDEV), "print", str(strip / "strip_frame01.dng"),
+    r = subprocess.run([str(FTDEV), "print", str(strip / "strip_j2_frame01.dng"),
                         "--roll", str(strip / "strip.print"), "--job",
                         str(job)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert (dl / (s + "_frame01.jpg")).read_bytes() == \
-        (strip / "strip_frame01.jpg").read_bytes()
+        (strip / "strip_j2_frame01.jpg").read_bytes()
 
 
 def check_end_to_end(tmp_path, out, box, dl):
@@ -607,16 +783,25 @@ def check_end_to_end(tmp_path, out, box, dl):
     assert out["recent"] == "coming soon"
     assert re.match(r"type = quick\nppi = 2450\nholder = 24x217\n"
                     r"emulsion = generic-neg\ncreated = ", out["scanFile"])
+    # the streamed preview: frame 1 shown and confirmed while it ran, the
+    # same frame (locked) at its end; strip.job the page's, the box's
+    # strip.preview.job (ft_detect's) untouched beside it
+    assert out["mid"]["running"] and out["mid"]["frames"] < 6
+    assert out["confirmedMid"]
+    assert out["f1End"] == out["f1Mid"] and out["state1"] == "confirmed"
+    assert out["previewJob"] == (FIX / "preview.job").read_text()
     # the review: keys (qwerty, then dvorak), a name, decisions kept
     assert out["print"] == ("emulsion = generic-neg\n\n[frame 1]\n"
                             "cmyd = 2 -1 0 0\nrotate = 90\n\n[frame 2]\n"
                             "name = dog\ncmyd = 0 0 0 1\nrotate = 90\n")
     assert out["review"] == ("1 confirmed\n2 confirmed\n3 confirmed\n"
                              "4 skipped\n5 skipped\n6 skipped\n")
-    # partial frames wait for per-frame resolution: under construction
+    # half (and partial) frames wait for per-frame resolution: under
+    # construction (the streaming detector: frame 6, 20 mm between gaps,
+    # is half)
     assert out["uc"] == "under construction"
-    assert out["ucSaid"] == ("frame 6 (partial): under construction: "
-                             "partial frames wait for per-frame resolution")
+    assert out["ucSaid"] == ("frame 6 (half): under construction: "
+                             "half frames wait for per-frame resolution")
     # the crop: frame 3's window shorter, the rest as detected
     w0 = re.findall(r"window = (\S+) (\S+) (\S+)", out["before"])
     w1 = re.findall(r"window = (\S+) (\S+) (\S+)", out["after"])
@@ -629,11 +814,17 @@ def check_end_to_end(tmp_path, out, box, dl):
     assert inc == [("1", "yes"), ("2", "yes"), ("3", "yes"), ("4", "no"),
                    ("5", "no"), ("6", "no")]
     assert "share = 3472" in j1
-    assert out["ppin"] == ("note: this scan runs at 2617 ppi, not 2450: "
+    # the window's ppi, from the job the page planned (frame 3 cropped
+    # shorter needs more for its 3472 px)
+    top = max(int(m) for m in re.findall(r"^ppi = (\d+)", j1, re.M))
+    assert top > 2450 + 1
+    assert out["ppin"] == ("note: this scan runs at %d ppi, not 2450: "
                            "every frame gets 3472 px on its long side, and "
-                           "frame 3 (cropped) needs more ppi for that")
+                           "frame 3 (cropped) needs more ppi for that" % top)
     assert out["landed1"] == [1]              # one window, one fake frame
-    assert out["states"] == ["done", "confirmed", "confirmed", "skipped",
+    # frames 2 and 3 were in the job, but the fake window holds frame 1
+    # only: to retry
+    assert out["states"] == ["done", "retry", "retry", "skipped",
                              "skipped", "under construction"]
     seen = "\n".join(out["seen"])
     assert "window 1/1 · focusing frame 1 · crop 1 at -500" in seen
@@ -642,36 +833,38 @@ def check_end_to_end(tmp_path, out, box, dl):
     sec = j1.split("\n[frame 1]")[1]
     ppi = float(sec.split("\nppi = ")[1].split()[0])
     b = int(sec.split("\nbin = ")[1].split()[0])
-    h = round(round(dof95(ppi * b, b)) / 2)
+    # the engine's %.0f, then the page's Math.round (halves up, not
+    # Python's to even)
+    h = int(round(dof95(ppi * b, b)) / 2 + 0.5)
     assert "window 1/1 · focus +250 (measured) · DOF ±%d steps |band %d" \
         % (h, h) in seen, seen
     assert out["plot"]
     # a crop on a scanned frame asked; R rescanned it in a run of its own,
-    # the first run's windows kept beside it
+    # in a job of its own (its own window files)
     assert out["question"] == ("Frame 1 is already scanned. A new crop "
                                "needs a rescan.")
     log = [json.loads(l) for l in (box / "fake_ftpoc.log").read_text()
            .splitlines()]
     assert [a[0] for a in log] == ["frames", "scan", "scan"]
-    assert {"strip_r1_win01.raw", "strip_win01.raw"} <= set(out["files"])
+    assert {"strip_j2_win01.raw", "strip_j3_win01.raw"} <= set(out["files"])
     assert 1 in out["landed"]
     # the keymap overlay lists the dvorak keys
     assert "'" in out["keymapText"] and "turn right" in out["keymapText"]
     # the downloads (after the first run) are the CLI's prints of it
     job = tmp_path / "job1.job"
     job.write_text(j1)
-    for w in sorted(strip.glob("strip_r1_win*.raw")):
+    for w in sorted(strip.glob("strip_j2_win*.raw")):
         subprocess.run([str(FTDEV), "cut", str(w)], check=True,
                        capture_output=True)
-    dngs = [str(strip / "strip_r1_frame01.dng")]
+    dngs = [str(strip / "strip_j2_frame01.dng")]
     r = subprocess.run([str(FTDEV), "print", *dngs, "--roll",
                         str(strip / "strip.print"), "--job", str(job)],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     page = dl / (s + "_frame01.jpg")
-    assert page.read_bytes() == (strip / "strip_r1_frame01.jpg").read_bytes()
+    assert page.read_bytes() == (strip / "strip_j2_frame01.jpg").read_bytes()
     assert (dl / (s + "_frame01.jpg.txt")).read_bytes() == \
-        (strip / "strip_r1_frame01.jpg.txt").read_bytes()
+        (strip / "strip_j2_frame01.jpg.txt").read_bytes()
     assert "\ncmyd=2 -1 0 0\n" in page.with_suffix(".jpg.txt").read_text()
     assert "\nrotate=90\n" in page.with_suffix(".jpg.txt").read_text()
     with zipfile.ZipFile(dl / (s + ".zip")) as z:
@@ -679,4 +872,4 @@ def check_end_to_end(tmp_path, out, box, dl):
         assert z.namelist() == [s + "_frame01.jpg", s + "_frame01.jpg.txt"]
         for n in z.namelist():
             assert z.read(n) == \
-                (strip / ("strip_r1" + n[len(s):])).read_bytes(), n
+                (strip / ("strip_j2" + n[len(s):])).read_bytes(), n

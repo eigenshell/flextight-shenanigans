@@ -32,7 +32,8 @@ WEB_UNITS = ft ft_curve ft_render ft_render_auto ft_density ft_dplan \
 	ft_noise_model ft_nr ft_sharpen ft_look ft_print ft_pm_classic \
 	ft_pm_stock ft_pm_frontier ft_pm_lut3d ft_emulsion ft_print_file \
 	ft_image ft_job ft_focus ft_holder ft_jpeg ft_zip ft_share_cut \
-	ft_dng ft_calib ft_develop ft_detect ft_preview ft_share_print
+	ft_dng ft_calib ft_develop ft_detect ft_preview ft_share_print \
+	ft_stream_detect
 WEB_OBJ = $(addprefix wasm/,$(addsuffix .o,$(WEB_UNITS)))
 EXPORTS = ftw_new ftw_free ftw_error ftw_out ftw_out_len ftw_text \
 	ftw_emulsions ftw_resolutions ftw_holders ftw_lens ftw_dof95 ftw_job_load ftw_plan_load ftw_job_json \
@@ -42,7 +43,8 @@ EXPORTS = ftw_new ftw_free ftw_error ftw_out ftw_out_len ftw_text \
 	ftw_print_set_name ftw_print_text ftw_cut \
 	ftw_frames ftw_measure ftw_jpeg ftw_display ftw_zip ftw_alloc \
 	ftw_preview_load ftw_preview_display ftw_preview_print \
-	ftw_preview_px ftw_live_rows \
+	ftw_preview_px ftw_live_rows ftw_stream_begin ftw_stream_feed \
+	ftw_stream_end ftw_stream_windows \
 	ftw_release
 
 wasm: ftweb.wasm ftweb_cli.wasm
