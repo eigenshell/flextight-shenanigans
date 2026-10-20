@@ -33,7 +33,7 @@ D800 = "3c00d800000000004200"
 POLL = "df0000000200"
 
 LOADER_INQ = b"\x06\x00\x02\x02\x1f\x00\x00\x00Imacon  SCSI Loader     L302"
-MICRO_INQ = b"\x06\x00\x02\x02\x1f\x00\x00\x00Imacon  FleXTight II    M333"
+MICRO_INQ = b"\x06\x00\x02\x02\x1f\x00\x00\x00Imacon  FlexTight II    M333"  # as read on hardware 2026-10-20
 
 FW = bytes((i * 7 + 3) & 0xFF for i in range(65536))
 
@@ -92,7 +92,7 @@ def test_happy_path_sends_exact_sequence():
     t, (path, inq), logs = _run(_happy_steps())
     assert t._pos == len(t._steps)          # every step consumed, in order
     assert path == "/dev/sgX" and inq == MICRO_INQ
-    assert any("FleXTight II" in m for m in logs)
+    assert any("FlexTight II" in m for m in logs)
 
 
 def test_refuses_when_not_loader():
@@ -172,7 +172,7 @@ def test_cli_upload_happy(tmp_path, capsys, monkeypatch):
     s = _script(tmp_path, _happy_steps())
     assert main(["--script", str(s), "upload-firmware", "--firmware", str(fw)]) == 0
     out = capsys.readouterr().out
-    assert "FleXTight II" in out and "upload complete" in out
+    assert "FlexTight II" in out and "upload complete" in out
 
 
 def test_cli_upload_refuses_microcode(tmp_path, capsys, monkeypatch):
