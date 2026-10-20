@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """The web page's engine (tools/ftweb) makes the CLI's JPEGs: ftweb_cli
 (the engine driven from files) against ftdev cut + ftdev print --roll on
-synthetic window scans; and the engine compiled to wasm32 makes the same
-bytes as native (skipped without the wasi-sdk or node)."""
+synthetic window scans, one frame a call (the engine balances each frame
+on its own: per-frame balance); and the engine compiled to wasm32 makes
+the same bytes as native (skipped without the wasi-sdk or node)."""
+import types
 import json
 import os
+import re
 import shutil
 import subprocess
 import zipfile
@@ -76,11 +79,16 @@ def both(tools, tmp_path_factory):
         r = subprocess.run([str(ftdev), "cut", str(w)], capture_output=True,
                            text=True)
         assert r.returncode == 0, r.stderr
-    dngs = [str(tmp / "cli" / ("job_frame%02d.dng" % n)) for n in (1, 2, 3)]
-    pr = subprocess.run([str(ftdev), "print", *dngs, "--roll",
-                         str(tmp / "cli" / "strip.print")],
-                        capture_output=True, text=True)
-    assert pr.returncode == 0, pr.stderr
+    # per-frame balance: the CLI's reference prints each frame alone
+    err = ""
+    for n in (1, 2, 3):
+        dng = str(tmp / "cli" / ("job_frame%02d.dng" % n))
+        r = subprocess.run([str(ftdev), "print", dng, "--roll",
+                            str(tmp / "cli" / "strip.print")],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        err += r.stderr
+    pr = types.SimpleNamespace(stderr=err)
     b = windows(tmp / "web")
     out = tmp / "web" / "out"
     out.mkdir()
@@ -101,7 +109,7 @@ def test_engine_makes_the_cli_jpegs(both):
         assert a == b, name
         assert (cli / (name + ".txt")).read_bytes() == \
             (web / (name + ".txt")).read_bytes()
-    # the clicks and the roll balance reached the prints
+    # the clicks reached the prints
     t2 = (web / "job_frame02.jpg.txt").read_text()
     assert "\ncmyd=3 -2 0 1\n" in t2
     # the turn: frame 2 portrait, the others as scanned
@@ -120,8 +128,31 @@ def test_engine_notes_are_the_cli_warnings(both):
     assert "[frame 9] is not in the job: ignored" in pr.stderr
     assert "warning: strip.print: [frame 9] is not in the job: ignored" \
         in wr.stderr
-    assert "note: 3 frames: print a roll's frames together" in pr.stderr
-    assert "note: 3 frames: print a roll's frames together" in wr.stderr
+    # per-frame balance: one frame is the whole "roll", said by the CLI;
+    # the engine balances every frame alone by design and says nothing
+    assert "note: 1 frame: print a roll's frames together" in pr.stderr
+    assert "print a roll's frames together" not in wr.stderr
+
+
+@needs_cc
+def test_engine_balances_each_frame_alone(tools, tmp_path):
+    """a frame's print does not depend on the other frames of the strip:
+    frame 1 printed with frame 3 (another film base) beside it is frame 1
+    printed alone"""
+    _, cli = tools
+    b = windows(tmp_path / "web")
+    outs = []
+    for k, wins in enumerate((b[:1], [b[0], b[2]])):
+        out = tmp_path / ("out%d" % k)
+        out.mkdir()
+        r = subprocess.run([str(cli), "--print", str(tmp_path / "web" /
+                                                     "strip.print"),
+                            "-o", str(out), *map(str, wins)],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        outs.append(out)
+    assert (outs[0] / "job_frame01.jpg").read_bytes() == \
+        (outs[1] / "job_frame01.jpg").read_bytes()
 
 
 @needs_cc
@@ -168,6 +199,105 @@ def test_engine_display_copy(both):
     assert len(data) == w * h * 4
     assert set(data[3::4]) == {255}               # opaque
     assert len(set(data[0::4])) > 20              # an image, not flat
+
+
+# the streamed preview: a synthetic standard preview (dark 400, white
+# 14000; film base, frames with content varying along and across)
+PV_FRAMES = [(4, 36), (42, 36), (80, 36), (118, 36), (156, 36), (194, 18)]
+
+
+def preview_raw(d, frames=PV_FRAMES, px=666, lines=4797):
+    """<d>/strip.raw, .raw.cal, .raw.txt: frames at (y0, len) mm along,
+    columns 60..560 across (2.9..27.1 mm)"""
+    np = pytest.importorskip("numpy")
+    ym = 25.4 / 525
+    dens = np.zeros((lines, px, 3))
+    dens[:] = (0.21, 0.40, 0.60)
+    for y0, ln in frames:
+        l0, l1 = int(round(y0 / ym)), int(round((y0 + ln) / ym))
+        ll = np.arange(l0, l1)[:, None]
+        cc = np.arange(60, 560)[None, :]
+        pat = 0.5 + 0.4 * np.sin(ll * 0.05 + y0) * np.cos(cc * 0.03)
+        dens[l0:l1, 60:560] += (0.3 + 0.9 * pat)[..., None] * \
+            np.array([1.0, 0.9, 0.8])
+    raw = 400.0 + 10 ** -dens * (14000.0 - 400.0)
+    cal = np.concatenate([np.full((200, px, 3), 400.0),
+                          np.full((50, px, 3), 14000.0)])
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "strip.raw").write_bytes(raw.round().astype("<u2").tobytes())
+    (d / "strip.raw.cal").write_bytes(cal.astype("<u2").tobytes())
+    (d / "strip.raw.txt").write_text("px=%d\nx=2\nbin=12\n" % px)
+    return d / "strip"
+
+
+def stream_run(cli, base, *args):
+    """ftweb_cli --stream: [(lines in, json)] per sealing call, the end's
+    json, the base job's text"""
+    r = subprocess.run([str(cli), "--stream", str(base), *map(str, args)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    feeds, end, job = [], None, []
+    for line in r.stdout.splitlines(True):
+        if line.startswith("feed "):
+            k, j = line[5:].split(": ", 1)
+            feeds.append((int(k), json.loads(j)))
+        elif line.startswith("end: "):
+            end = json.loads(line[5:])
+        else:
+            job.append(line)
+    return feeds, end, "".join(job)
+
+
+@needs_cc
+def test_engine_stream_whatever_the_chunking(tools, tmp_path):
+    """the preview fed one line a call, 13, 1..400 at random or all at
+    once: the same frames, the same base job; each frame sealed while the
+    preview is still coming, right after its gap"""
+    cli = tools[1]
+    base = preview_raw(tmp_path / "pv")
+    runs = [stream_run(cli, base, "--chunk", n) for n in (1, 13, 0, 99999)]
+    frames = [[f for _, j in fe for f in j["frames"]] + e["frames"]
+              for fe, e, _ in runs]
+    assert all(f == frames[0] for f in frames[1:])
+    assert all(r[2] == runs[0][2] for r in runs[1:])
+    fr = frames[0]
+    assert [f["type"] for f in fr] == ["full"] * 5 + ["half"]
+    assert [f["n"] for f in fr] == [1, 2, 3, 4, 5, 6]
+    ym = 25.4 / 525
+    one = runs[0][0]                      # one line a call
+    assert len(one) == 6 and runs[0][1]["frames"] == []
+    for (k, j), (y0, ln) in zip(one, PV_FRAMES):
+        f = j["frames"][0]
+        # the box: the frame padded 0.3 mm (6.2 lines) along (+-2 lines:
+        # the raw is written unshifted, the alignment moves R and G)
+        assert abs(f["x"] - (y0 - 0.3) / ym) < 4 and \
+            abs(f["w"] - (ln + 0.6) / ym) < 5
+        # sealed by the gap's 0.4 mm of lines (9; + 2 of RGB alignment)
+        assert (y0 + ln) / ym < k < (y0 + ln) / ym + 14
+    assert "film_base = 0.2100 0.4000 0.6000" in runs[0][2]
+
+
+@needs_cc
+def test_engine_stream_is_develop_then_detect(tools, tmp_path):
+    """the engine's line-by-line calibration is develop's (flat-field,
+    RGB alignment) to the bit: its frames are the detector's on the whole
+    developed preview (libft/test/stream_dump), to the 0.001 mm printed"""
+    cli = tools[1]
+    base = preview_raw(tmp_path / "pv")
+    make("-C", LIBFT, "test/stream_dump")
+    r = subprocess.run([str(LIBFT / "test" / "stream_dump"), str(base)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    want = [list(map(float, l.split()[3:7])) for l in r.stdout.splitlines()
+            if l.startswith("frame ")]
+    _, _, job = stream_run(cli, base, "--chunk", 0)
+    got = [list(map(float, w)) for w in
+           re.findall(r"window = (\S+) (\S+) (\S+) (\S+)", job)]
+    assert len(got) == len(want) == 6
+    for g, w in zip(got, want):
+        assert g[0] == w[0] and g[1] == w[2]
+        assert abs(g[0] + g[2] - w[1]) < 0.0015
+        assert abs(g[1] + g[3] - w[3]) < 0.0015
 
 
 # libft's ft_lens_dof95 (ft_focus.c, the focus survey 2026-10-15/16's

@@ -57,9 +57,9 @@ refused) until per-frame resolution.
 
 The box does no image or planning work. The page does, in C compiled to
 wasm (`tools/ftweb`, `ftweb.wasm` in a worker): it plans the share
-windows, cuts each window scan as it lands, measures the strip's colour
+windows, cuts each window scan as it lands, measures each frame's colour
 balance and prints, with the same bytes as `ftdev cut` + `ftdev print
---roll`. The server runs whitelisted `ftpoc` tasks and streams their
+--roll` (one frame a call). The server runs whitelisted `ftpoc` tasks and streams their
 output (the client never sends a command line), and keeps the strip's
 files, checking `strip.job` and `strip.print` with libft before it writes
 them.
@@ -88,20 +88,36 @@ put `MICROCOD.3XX` beside `ftpoc.exe`, or start ftwebd with
 `--microcode PATH` (e.g. `--microcode ..\poc\MICROCOD.3XX`), which it
 passes to every ftpoc task.
 
-Strips live in `strips\<name>\`: `strip.raw` + `strip.png` + `strip.job`
-from the preview, `strip.preview.job` (the preview's own job, crops
-included: every plan starts from it), `strip_j<id>.job` per scan job
-(the job the page planned; ftpoc marks its windows done in it) and
-`strip_j<id>_winNN.raw` (+ `.cal`, `.txt`) per scanned window (ftpoc
-names them after the job, so a rescan, a later job, never overwrites
-them; strips from before keep their `strip_winNN` / `strip_rK_winNN`
-names), `strip.scan` (the landing page's
+Strips live in `strips\<name>\`: `strip.raw` (+ `.cal`, written first,
+and `.txt`) and `strip.png` from the preview, `strip.preview.job` (the
+box's own detection of the preview, ft_detect: kept beside the page's for
+comparison, not used for frames), `strip.job` (the page's: the frames its
+streaming detector found as the preview arrived, crops included, as
+planned; written when the preview ends, or stops with a frame, and on a
+crop or a scan),
+`strip_j<id>.job` per scan job (the job the page planned; ftpoc marks its
+windows done in it) and `strip_j<id>_winNN.raw` (+ `.cal`, `.txt`) per
+scanned window (ftpoc names them after the job, so a rescan, a later
+job, never overwrites them; strips from before keep their `strip_winNN`
+/ `strip_rK_winNN` names), `strip.scan` (the landing page's
 choices), `strip.review` (each frame's decision) and `strip.print`
 (emulsion, names, clicks and turns). Reloading the page restores the
-strip from these files (the windows are cut again in the browser).
+strip from these files: the preview replayed through the streaming
+detector gives the same frames, the edits re-attach by frame number, the
+windows are cut again in the browser.
 Every file the box writes (a PUT, a job file, a kept preview job) goes
 to `<file>.tmp` and is renamed over it, under one lock: a GET racing a
 write gets the old file or the new one, whole.
+
+## Preview
+
+The page shows each frame as soon as the preview has passed the gap after
+it: the worker calibrates the raw lines the live bar reads
+(`strip.raw.cal` is written before them) and feeds them to the streaming
+detector (`libft/ft_stream_detect`); a sealed frame prints with its own
+balance and can be named, turned, nudged, cropped, confirmed or skipped
+at once; it stays as shown (later lines only add frames). Frames
+confirmed while the preview runs go to the batch once it has ended.
 
 ## Scan
 
@@ -138,8 +154,7 @@ not when the scan it started ends.
 
 ## Not yet
 
-Streamed frame detection (frames as the preview arrives); per-frame
-resolution; contrast, sharpening and NR per frame; recent scans; a vim
+Per-frame resolution; contrast, sharpening and NR per frame; recent scans; a vim
 keymap; scan to archive; pushing JPEGs to the phone (Web Share) or a
 NAS.
 
