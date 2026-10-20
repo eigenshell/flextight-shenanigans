@@ -7,23 +7,31 @@
  *                   none (absent), foreign (another vendor), dead (no
  *                   INQUIRY answer), loader ("SCSI Loader"), micro (the
  *                   microcode, "FlexTight II M333"), micro-empty (the
- *                   microcode, its polls come back empty)
+ *                   microcode, its polls come back empty), micro-scan
+ *                   (the microcode, scanning: see below)
  *   FTIO_FAKE_LOG   every command, one line: "<dev> <dir> <len> <cdb hex>
  *                   [<data hex>]" (data for host -> device only)
  *
  * Answers: INQUIRY by persona, ScannerReady 00 00 (idle), READ BUFFER
- * bytes i & 0xff, SetWindow accepted unchanged. The flood queue is not
- * faked (ioq_open fails): nothing here scans.
+ * bytes i & 0xff, SetWindow accepted unchanged. The flood queue fails to
+ * open, except for micro-scan: there the flood's reads alternate, as on
+ * Linux, an empty read (an underrun bringing the 10 bytes ff ff ff ff ff
+ * ff 00 00 00 00) and a full line (bytes 0x01, line k's first byte k &
+ * 0x7f), and one ScannerReady after every SetWindow and every flood says
+ * 08 00 (busy) so the settle and carriage waits go on. Time is virtual:
+ * io_sleep moves io_ms on.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include "ftio.h"
 
 io_dev g_dev = -1;
 static const char *g_device;
+static DWORD g_now;                     /* virtual ms: io_sleep moves it */
+static int g_busy;                      /* micro-scan: next poll is busy */
+static long g_lines;                    /* micro-scan: full lines so far */
 
 static const char *persona(int i)
 {
@@ -132,12 +140,18 @@ int srb_exec(const BYTE *cdb, int cdb_len, BYTE dir,
     if (dir == SRB_DIR_IN) {
         if (cdb[0] == 0xdf) {
             memset(data, 0, data_len);
+            if (g_busy && data_len >= 1) {
+                data[0] = 0x08;
+                g_busy = 0;
+            }
             return strcmp(p, "micro-empty") == 0 ? 0 : (int)data_len;
         }
         for (i = 0; i < data_len; i++)
             data[i] = (BYTE)i;
         return (int)data_len;
     }
+    if (cdb[0] == 0x24 && strcmp(p, "micro-scan") == 0)
+        g_busy = 1;
     return (int)data_len;
 }
 
@@ -150,35 +164,65 @@ const char *srb_errstr(int r)
     return buf;
 }
 
+struct io_queue {
+    BYTE *buf;
+    WORD blklen;
+    long seq;
+};
+
 io_queue *ioq_open(int depth, const BYTE cdb[10], WORD blklen,
                    DWORD timeout_ms)
 {
-    (void)depth; (void)cdb; (void)blklen; (void)timeout_ms;
-    return NULL;
+    const char *p = persona(g_dev);
+    io_queue *q;
+    (void)depth; (void)timeout_ms;
+    log_cmd(cdb, 10, SRB_DIR_IN, NULL, blklen);
+    if (!p || strcmp(p, "micro-scan") != 0 || !(q = calloc(1, sizeof *q)))
+        return NULL;
+    q->blklen = blklen;
+    if (!(q->buf = malloc(blklen))) {
+        free(q);
+        return NULL;
+    }
+    return q;
 }
 
 BYTE *ioq_buf(io_queue *q, int slot)
 {
-    (void)q; (void)slot;
-    return NULL;
+    (void)slot;
+    return q->buf;          /* one buffer: reaped before the next reap */
 }
 
 int ioq_issue(io_queue *q, int slot, long seq)
 {
     (void)q; (void)slot; (void)seq;
-    return -1;
+    return 0;
 }
 
 int ioq_reap(io_queue *q, int slot, long seq, DWORD timeout_ms, DWORD *got)
 {
-    (void)q; (void)slot; (void)seq; (void)timeout_ms;
-    *got = 0;
-    return IOQ_ERROR;
+    static const BYTE empty[10] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                                    0, 0, 0, 0 };
+    (void)slot; (void)timeout_ms;
+    if (seq % 2 == 0) {
+        memcpy(q->buf, empty, sizeof empty);
+        *got = sizeof empty;
+        return IOQ_SHORT;
+    }
+    memset(q->buf, 0x01, q->blklen);
+    q->buf[0] = (BYTE)(g_lines++ & 0x7f);
+    *got = q->blklen;
+    return IOQ_FULL;
 }
 
 void ioq_close(io_queue *q, int cancel)
 {
-    (void)q; (void)cancel;
+    (void)cancel;
+    if (!q)
+        return;
+    g_busy = 1;             /* the carriage moves after a batch */
+    free(q->buf);
+    free(q);
 }
 
 int io_busreset(void)
@@ -194,15 +238,12 @@ void io_catch_interrupt(volatile int *flag)
 
 DWORD io_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (DWORD)((unsigned long long)ts.tv_sec * 1000u +
-                   (unsigned long long)ts.tv_nsec / 1000000u);
+    return g_now;
 }
 
 void io_sleep(DWORD ms)
 {
-    (void)ms;
+    g_now += ms;
 }
 
 void io_exe_path(char exe[IO_PATH_MAX + 1])

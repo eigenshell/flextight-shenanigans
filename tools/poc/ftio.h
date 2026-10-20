@@ -79,7 +79,7 @@ BYTE *ioq_buf(io_queue *q, int slot);
 int ioq_issue(io_queue *q, int slot, long seq);
 /* Wait up to timeout_ms for the slot's command. IOQ_FULL: complete,
  * IOQ_SHORT: an underrun (normal: the host is ahead of the CCD; *got
- * bytes, maybe 0), IOQ_TIMEOUT, IOQ_ERROR (printed as "flood read
+ * bytes, maybe 0, never line data: Linux's empty read has 10), IOQ_TIMEOUT, IOQ_ERROR (printed as "flood read
  * <seq>: ..."). */
 int ioq_reap(io_queue *q, int slot, long seq, DWORD timeout_ms, DWORD *got);
 /* Free the queue; cancel: first cancel or drain what is still in flight */

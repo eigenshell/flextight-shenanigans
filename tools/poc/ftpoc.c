@@ -1085,8 +1085,8 @@ static int cmd_grab(long blocks, WORD blklen, const char *out)
  * overlapped on Windows, sg's async interface on Linux) so the port
  * driver issues them back-to-back (FlexColor reaches ~1700 reads/s;
  * one-at-a-time reads top out at ~460/s).
- * Most reads come back EMPTY (an underrun, 0 bytes; SRB 0x12 on
- * Windows): the CCD delivers ~130 lines/s and the flood is really a
+ * Most reads come back EMPTY (an underrun: 0 bytes, SRB 0x12 on
+ * Windows; 10 marker bytes on Linux): the CCD delivers ~130 lines/s and the flood is really a
  * polling loop. Reads continue until n full blocks are kept.
  * Completes in order; returns the clean in-order prefix written to f. */
 #define DEPTH 8
@@ -1139,15 +1139,14 @@ static long read_flood(long n, WORD blklen, FILE *f)
                 break;
             }
             if (r == IOQ_SHORT) {
-                /* a short transfer, the host is ahead of the CCD: keep
-                 * the bytes that did arrive and carry on */
+                /* a short transfer, the host is ahead of the CCD: no
+                 * line. Its bytes are never kept: on Windows there are
+                 * none, on Linux every empty read brings 10 (ff ff ff ff
+                 * ff ff 00 00 00 00), and any kept would shift every
+                 * later line of the file. Counted in the summary only
+                 * (one line per read would bury ftwebd's log). */
                 shorts++;
                 short_bytes += got;
-                if (f && got && fwrite(buf, 1, got, f) != got) err = 1;
-                if (!f && got && detail_put(buf, got)) err = 1;
-                if (got)
-                    printf("\nflood read %ld: partial, %lu bytes\n",
-                           done, (unsigned long)got);
             } else if (r != IOQ_FULL) {
                 err = 1;                /* ioq_reap said why */
             } else if (!err) {

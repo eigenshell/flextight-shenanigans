@@ -133,3 +133,27 @@ def test_empty_poll_is_not_idle(fake, tmp_path):
     assert "poll 0: short reply (underrun)" in r.stdout
     assert "idle" not in r.stdout
     assert cmds[1:] == [["0", "40", "2", POLL]]
+
+
+def test_flood_keeps_only_full_lines(fake, tmp_path):
+    """On Linux every empty ReadExt of the flood completes as a 10-byte
+    underrun (ff ff ff ff ff ff 00 00 00 00, the 2026-10-20 box preview:
+    62045 of them). Those bytes are no line: kept, they shifted every
+    later line of strip.raw and .cal, the calibration split failed and
+    frames wrote no strip.job/png. The files hold full lines only, and
+    the underruns print no line each (ftwebd keeps 4096 lines)."""
+    r, cmds = run(fake, tmp_path, "scan", "preview", "-n", "5", "-h", "0",
+                  "-o", "t.raw", devs="micro-scan")
+    assert r.returncode == 0, r.stdout + r.stderr
+    # 666 px x RGB x u16 = 3996-byte lines: 5 kept, 200 + 50 calibration
+    raw = (tmp_path / "t.raw").read_bytes()
+    cal = (tmp_path / "t.raw.cal").read_bytes()
+    assert len(raw) == 19980
+    assert len(cal) == 999000
+    assert b"\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00" not in raw + cal
+    # the fake's line k starts with k & 0x7f: the lines in order, none lost
+    assert [raw[k * 3996] for k in range(5)] == [122, 123, 124, 125, 126]
+    assert [cal[k * 3996] for k in range(3)] == [0, 1, 2]
+    assert "partial" not in r.stdout
+    assert "[flood: 10 reads in 0 ms; 5 full, 5 short (50 bytes)]" in r.stdout
+    assert "wrote 5 x 3996 B -> t.raw\n" in r.stdout
