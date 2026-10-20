@@ -21,6 +21,7 @@ import os
 import sys
 
 from .scanner import Scanner
+from .upload import DEFAULT_FIRMWARE, UploadError, upload
 from .transport import (
     FakeTransport,
     SGIOTransport,
@@ -51,7 +52,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="subcommand", required=True)
     sub.add_parser("ls", parents=[source], help="list /dev/sg* device nodes")
     sub.add_parser("info", parents=[source], help="enumerate the scanner (INQUIRY)")
-    sub.add_parser("upload-firmware", parents=[source], help="upload scanner firmware (stub)")
+    up = sub.add_parser("upload-firmware", parents=[source],
+                        help="upload MICROCOD.3XX to the scanner's SCSI Loader")
+    up.add_argument("--firmware", default=DEFAULT_FIRMWARE,
+                    help=f"microcode file (default: {DEFAULT_FIRMWARE} in the current directory)")
     sub.add_parser("preview", parents=[source], help="acquire a preview scan (stub)")
     sub.add_parser("scan", parents=[source], help="acquire a scan (stub)")
     return p
@@ -133,6 +137,29 @@ def _cmd_info(transport) -> int:
     return 0
 
 
+def _cmd_upload(transport, args) -> int:
+    try:
+        with open(args.firmware, "rb") as f:
+            firmware = f.read()
+    except OSError as e:
+        return _err(1, f"cannot read firmware {args.firmware}: {e}")
+    kind, path = _resolve_source(args)
+
+    def log(msg):
+        print(msg, flush=True)
+
+    try:
+        if kind == "device":
+            node, _ = upload(transport, firmware, device=path, log=log)
+        else:
+            # a replayed script has no other nodes to probe
+            node, _ = upload(transport, firmware, nodes=list, log=log)
+    except UploadError as e:
+        return _err(1, f"upload: {e}")
+    print("upload complete. Don't upload again until a power cycle", flush=True)
+    return 0
+
+
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
 
@@ -140,12 +167,14 @@ def main(argv=None) -> int:
     try:
         if args.subcommand == "ls":
             code = _cmd_ls()
-        elif args.subcommand in ("upload-firmware", "preview", "scan"):
+        elif args.subcommand in ("preview", "scan"):
             code = _err(2, _STUB_MSG)
         else:
             transport = _make_transport(args)
             if args.subcommand == "info":
                 code = _cmd_info(transport)
+            elif args.subcommand == "upload-firmware":
+                code = _cmd_upload(transport, args)
             else:
                 raise AssertionError(f"unhandled subcommand {args.subcommand}")
         # Flush while the handler below can still see it: block-buffered

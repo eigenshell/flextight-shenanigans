@@ -88,6 +88,44 @@ put `MICROCOD.3XX` beside `ftpoc.exe`, or start ftwebd with
 `--microcode PATH` (e.g. `--microcode ..\poc\MICROCOD.3XX`), which it
 passes to every ftpoc task.
 
+## Debian
+
+The Linux scanner box (Debian 13, Adaptec 2940AU; the scanner is
+`/dev/sg1`). ftpoc talks SG_IO there (`tools/poc/README.md`: Linux).
+
+```
+apt install build-essential pkg-config git libjpeg-dev liblcms2-dev libtiff-dev
+git clone <this repo> /root/flexcolor && cd /root/flexcolor
+make -C tools/poc ftpoc          # ./ftpoc (SG_IO)
+make -C tools/ftwebd             # ./ftwebd
+# ftweb.wasm needs the wasi-sdk, which the box lacks: on a PC
+#   make -C tools/ftweb www
+#   scp tools/ftwebd/www/ftweb.wasm root@<box>:/root/flexcolor/tools/ftwebd/www/
+mkdir -p /root/run && cd /root/run
+ln -s /root/flexcolor/tools/poc/ftpoc /root/flexcolor/tools/ftwebd/ftwebd .
+ln -s /root/flexcolor/tools/ftwebd/www www
+cp <MICROCOD.3XX> .              # vendor file, never in the repo
+./ftpoc inquiry                  # "FlexTight II M333" (the microcode) or
+                                 # "SCSI Loader" (after a power-up)
+setsid nohup ./ftwebd --microcode /root/run/MICROCOD.3XX \
+    > /root/run/ftwebd.log 2>&1 < /dev/null &
+```
+
+Then open `http://<box>:8080/` (ftwebd listens on every interface).
+Run as root: the scanner's sg node is root-only (`/dev/sg1` root:root
+0600). Strips go to `/root/run/strips/`; `focus.txt` is optional
+(written by `ftpoc calibrate-focus`; without it the built-in curve, and
+`/api/focus.txt` answers 404). Restart: `pkill -x ftwebd`, then the
+`setsid` line again (a running ftpoc task is its own process group and
+finishes on its own). The links mean a rebuild changes what the next
+task runs: don't rebuild during a scan.
+
+`ftwebd.service` runs the same from systemd (`systemd-analyze verify`
+accepts it; not yet enabled on the box):
+`cp tools/ftwebd/ftwebd.service /etc/systemd/system/ && systemctl
+daemon-reload && systemctl enable --now ftwebd` (stop the `setsid` one
+first: both want port 8080).
+
 Strips live in `strips\<name>\`: `strip.raw` (+ `.cal`, written first,
 and `.txt`) and `strip.png` from the preview, `strip.preview.job` (the
 box's own detection of the preview, ft_detect: kept beside the page's for
