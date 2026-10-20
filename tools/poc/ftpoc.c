@@ -597,6 +597,12 @@ static int poll_once(void)
     r = srb_exec(CDB_POLL, 6, SRB_DIR_IN, buf, sizeof buf, TIMEOUT_MS);
     if (r < 0)
         return r;
+#ifndef _WIN32
+    /* SG_IO completes an underrun as a short read (scsiscan: -3); a
+     * short status reply is no status, never "idle" (the zeroed buffer) */
+    if (r != (int)sizeof buf)
+        return IO_SHORT;
+#endif
     return (buf[0] << 8) | buf[1];
 }
 

@@ -196,6 +196,7 @@ const char *srb_errstr(int r)
     case -1: sprintf(buf, "SG_IO rejected (errno %d: %.60s)", g_errno,
                      strerror(g_errno)); break;
     case -2: sprintf(buf, "timed out after wait"); break;
+    case IO_SHORT: sprintf(buf, "short reply (underrun)"); break;
     case -3: sprintf(buf, "I/O completed with error status=%02x host=%02x%s%s "
                      "driver=%02x sense key=%x asc=%02x ascq=%02x",
                      g_status, g_host, *sgio_host_name(g_host) ? " " : "",

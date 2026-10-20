@@ -6,7 +6,8 @@
  *   FTIO_FAKE_DEVS  comma-separated personas of /dev/fake0, 1, ...:
  *                   none (absent), foreign (another vendor), dead (no
  *                   INQUIRY answer), loader ("SCSI Loader"), micro (the
- *                   microcode, "FlexTight II M333")
+ *                   microcode, "FlexTight II M333"), micro-empty (the
+ *                   microcode, its polls come back empty)
  *   FTIO_FAKE_LOG   every command, one line: "<dev> <dir> <len> <cdb hex>
  *                   [<data hex>]" (data for host -> device only)
  *
@@ -121,7 +122,7 @@ int srb_exec(const BYTE *cdb, int cdb_len, BYTE dir,
         if (strcmp(p, "dead") == 0)
             return -3;
         id = strcmp(p, "loader") == 0 ? "Imacon  SCSI Loader     L302" :
-             strcmp(p, "micro") == 0  ? "Imacon  FlexTight II    M333" :
+             strncmp(p, "micro", 5) == 0 ? "Imacon  FlexTight II    M333" :
                                         "ACME    Flatbed 9000    1.00";
         memset(data, 0, data_len);
         memcpy(data, head, 8);
@@ -131,7 +132,7 @@ int srb_exec(const BYTE *cdb, int cdb_len, BYTE dir,
     if (dir == SRB_DIR_IN) {
         if (cdb[0] == 0xdf) {
             memset(data, 0, data_len);
-            return (int)data_len;
+            return strcmp(p, "micro-empty") == 0 ? 0 : (int)data_len;
         }
         for (i = 0; i < data_len; i++)
             data[i] = (BYTE)i;
@@ -143,6 +144,8 @@ int srb_exec(const BYTE *cdb, int cdb_len, BYTE dir,
 const char *srb_errstr(int r)
 {
     static char buf[32];
+    if (r == IO_SHORT)
+        return "short reply (underrun)";
     sprintf(buf, "fake code %d", r);
     return buf;
 }

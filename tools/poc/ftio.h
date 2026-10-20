@@ -59,7 +59,10 @@ void io_close(io_dev d);
 
 /* One command to g_dev; dir SRB_DIR_IN / SRB_DIR_OUT, or 0 with
  * data_len 0 (no data phase). Returns the bytes transferred, or
- * -1 rejected, -2 timed out, -3 completed with an error (srb_errstr). */
+ * -1 rejected, -2 timed out, -3 completed with an error (srb_errstr).
+ * IO_SHORT is the callers' own: a reply shorter than it must be (POSIX
+ * only; srb_errstr names it). */
+#define IO_SHORT (-4)
 int srb_exec(const BYTE *cdb, int cdb_len, BYTE dir,
              BYTE *data, DWORD data_len, DWORD timeout_ms);
 const char *srb_errstr(int r);

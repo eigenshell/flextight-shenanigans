@@ -122,3 +122,14 @@ def test_stop_sends_end_descriptor_twice(fake, tmp_path):
     wins = [c for c in cmds if c[3].startswith("24")]
     assert len(END_WIN) == 168
     assert wins == [["0", "80", "84", "24000000000000540000", END_WIN]] * 2
+
+
+def test_empty_poll_is_not_idle(fake, tmp_path):
+    """SG_IO completes an underrun as a short read: an empty ScannerReady
+    reply must fail the poll, not read as 00 00 (idle) from the zeroed
+    buffer -- every settle and start-line wait keys off it"""
+    r, cmds = run(fake, tmp_path, "poll", "3", devs="micro-empty")
+    assert r.returncode == 1
+    assert "poll 0: short reply (underrun)" in r.stdout
+    assert "idle" not in r.stdout
+    assert cmds[1:] == [["0", "40", "2", POLL]]
