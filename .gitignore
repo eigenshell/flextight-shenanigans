@@ -62,6 +62,11 @@ notes/ssh-askpass.sh
 # Claude Code instructions (local)
 CLAUDE.md
 
+# ftpoc (Linux) build output
+tools/poc/ftpoc
+tools/poc/ftpoc_fake
+tools/poc/test/test_sgio
+
 # ftdev build output
 tools/ftdev/ftdev
 tools/ftwebd/ftwebd
