@@ -49,5 +49,25 @@ int main(void)
     CHECK(sgio_result(0, 0x02, 0, 0, 2, &got) == SGIO_ERROR);
     CHECK(sgio_result(0, 0, 0x04, 0, 2, &got) == SGIO_ERROR);
     CHECK(strcmp(sgio_host_name(0x42), "") == 0);
+
+    /* data-out lengths the microcode asks for (3000:247d: CDB bytes 6-8,
+     * BE 24-bit), on FlexColor's captured CDBs */
+    {
+        /* SetWindow, every session: 84-byte descriptor, 0x005400 asked */
+        static const unsigned char win[10] = { 0x24, 0, 0, 0, 0, 0, 0,
+                                               0x54, 0, 0 };
+        /* microcode chunk (tests/test_upload.py CHUNK_CDB): 10-byte
+         * header + 4096 code = 4106; the trailer: 10 */
+        static const unsigned char chunk[10] = { 0x3b, 0x01, 0, 0, 0,
+                                                 0, 0, 0x10, 0x0a, 0 };
+        static const unsigned char trailer[10] = { 0x3b, 0x01, 0, 0, 0,
+                                                   0, 0, 0x00, 0x0a, 0 };
+        /* ScannerReady, INQUIRY: data-in, never padded */
+        static const unsigned char poll[6] = { 0xdf, 0, 0, 0, 0x02, 0 };
+        CHECK(sgio_out_len(win, 10, 84) == 21504);
+        CHECK(sgio_out_len(chunk, 10, 4106) == 4106);
+        CHECK(sgio_out_len(trailer, 10, 10) == 10);
+        CHECK(sgio_out_len(poll, 6, 2) == 2);
+    }
     return TEST_DONE();
 }

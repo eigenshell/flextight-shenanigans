@@ -175,18 +175,42 @@ static int finish(const sg_io_hdr_t *h, const BYTE *sense)
     return (int)got;
 }
 
+/* Zero padding for data-out commands whose CDB asks for more than the
+ * host's payload (sgio_out_len: SetWindow's 84-byte descriptor in a
+ * 21504-byte transfer). Linux must move every byte the target asks for:
+ * aic7xxx fails a short data-out as an overrun (DID_ERROR) after the
+ * target has already acted on it. Windows pads the same way unseen. */
+#define OUT_PAD_MAX 0x10000
+static BYTE g_pad[OUT_PAD_MAX];
+
 int srb_exec(const BYTE *cdb, int cdb_len, BYTE dir,
              BYTE *data, DWORD data_len, DWORD timeout_ms)
 {
     sg_io_hdr_t h;
     BYTE sense[SENSE_LEN];
+    DWORD want = data_len;
+    int r;
     memset(sense, 0, sizeof sense);
-    fill_hdr(&h, cdb, cdb_len, dir, data, data_len, sense, timeout_ms);
+    if (dir == SRB_DIR_OUT && data_len)
+        want = sgio_out_len(cdb, cdb_len, data_len);
+    if (want > data_len) {
+        if (want > OUT_PAD_MAX) {
+            g_errno = EINVAL;
+            return -1;
+        }
+        memcpy(g_pad, data, data_len);
+        memset(g_pad + data_len, 0, want - data_len);
+        fill_hdr(&h, cdb, cdb_len, dir, g_pad, want, sense, timeout_ms);
+    } else {
+        fill_hdr(&h, cdb, cdb_len, dir, data, data_len, sense, timeout_ms);
+    }
     if (ioctl(g_dev, SG_IO, &h) < 0) {
         g_errno = errno;
         return -1;
     }
-    return finish(&h, sense);
+    r = finish(&h, sense);
+    /* the caller's bytes, as on Windows (SetWindow: 84) */
+    return r > (int)data_len ? (int)data_len : r;
 }
 
 const char *srb_errstr(int r)

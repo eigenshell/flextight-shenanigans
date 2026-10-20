@@ -46,6 +46,14 @@ int sgio_result(int status, int host, int driver, int resid, unsigned len,
     return 0;
 }
 
+unsigned sgio_out_len(const unsigned char *cdb, int cdb_len,
+                      unsigned data_len)
+{
+    if (cdb_len != 10 || (cdb[0] != 0x24 && cdb[0] != 0x3b))
+        return data_len;
+    return ((unsigned)cdb[6] << 16) | ((unsigned)cdb[7] << 8) | cdb[8];
+}
+
 const char *sgio_host_name(int host)
 {
     switch (host) {
