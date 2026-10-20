@@ -143,7 +143,7 @@ def test_ls(capsys):
         assert "no /dev/sg*" in err
 
 
-@pytest.mark.parametrize("sub", ["upload-firmware", "preview", "scan"])
+@pytest.mark.parametrize("sub", ["preview", "scan"])
 def test_stubs(sub, capsys):
     assert main([sub]) == 2
     assert STUB_MSG in capsys.readouterr().err

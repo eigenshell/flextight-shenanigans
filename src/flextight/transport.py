@@ -125,7 +125,8 @@ class SGIOTransport:
         hdr.flags = 0
         return hdr
 
-    def _exec(self, cdb: bytes, data: bytes | None, dxfer: str, expected_len: int):
+    def _exec(self, cdb: bytes, data: bytes | None, dxfer: str, expected_len: int,
+              allow_short: bool = False):
         self._check_open()
         hdr = self._build_header(cdb, len(data) if data is not None else expected_len, dxfer)
         if data is not None and dxfer == "to":
@@ -147,6 +148,11 @@ class SGIOTransport:
         if hdr.status != 0:
             raise TransportError(f"SCSI status {hdr.status} sense={sense.hex()}")
         if dxfer == "from":
+            if allow_short:
+                # Underrun is normal for some commands (protocol.md: an
+                # empty read is not an error); hand back what arrived.
+                n = max(0, min(expected_len, expected_len - hdr.resid))
+                return self._bufs[1].raw[:n]
             if hdr.resid != 0:
                 # A short read must never silently zero-fill scan data; relax
                 # per-command only if hardware captures show a legit short read.
@@ -156,8 +162,11 @@ class SGIOTransport:
             return self._bufs[1].raw[:expected_len]
         return None
 
-    def cmd_in(self, cdb: bytes | str, length: int) -> bytes:
-        return self._exec(_norm_cdb(cdb), None, "from", length)
+    def cmd_in(self, cdb: bytes | str, length: int, allow_short: bool = False) -> bytes:
+        """Data-in command.  Default: any resid underrun raises.  With
+        ``allow_short`` only the transferred bytes are returned (may be
+        fewer than ``length``, or empty)."""
+        return self._exec(_norm_cdb(cdb), None, "from", length, allow_short)
 
     def cmd_out(self, cdb: bytes | str, data: bytes):
         if not data:
@@ -268,9 +277,11 @@ class FakeTransport:
             )
         return step, idx
 
-    def cmd_in(self, cdb: bytes | str, length: int) -> bytes:
+    def cmd_in(self, cdb: bytes | str, length: int, allow_short: bool = False) -> bytes:
         step, _ = self._next(_norm_cdb(cdb), "in")
         resp = step.response
+        if allow_short:
+            return resp[:length]
         if len(resp) < length:
             resp = resp + b"\0" * (length - len(resp))
         return resp[:length]
