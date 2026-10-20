@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# ftwebd on the Debian scanner box (README.md: Debian). /root/run is the
+# run folder: ftpoc, ftwebd, MICROCOD.3XX, www/ and (optional) focus.txt;
+# change the paths below if yours differs. Root: the scanner's /dev/sgN
+# is root-only (seen: /dev/sg1 root:root 0600).
+#   cp ftwebd.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now ftwebd
+[Unit]
+Description=ftwebd, the FlexTight scanner's web server (port 8080)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=root
+WorkingDirectory=/root/run
+ExecStart=/root/run/ftwebd --microcode /root/run/MICROCOD.3XX
+# stop: SIGTERM reaches ftwebd and a running ftpoc (same cgroup); a scan
+# ends at its next line read and sends the end descriptor first
+TimeoutStopSec=60
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

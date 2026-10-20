@@ -428,6 +428,18 @@ several `\\.\ScannerN`; only one is live (on the session-4 box:
 uses the one whose INQUIRY says Imacon — the same thing FlexColor's
 FindDevices does, and the source of its "first INQUIRYs fail" pattern.
 
+## Linux
+
+`make` builds `./ftpoc` (SG_IO, `ftio_posix.c`; Windows: `build.bat`,
+`ftio_win.c`, the same `ftpoc.c`); `make test` runs the hardware-free
+tests (`tests/test_ftpoc_posix.py` drives them). The scanner is an sg
+node (Debian 13 box: `/dev/sg1`, SCSI 0:0:2:0) and stays on it after the
+microcode upload. `ftpoc` opens only the `/dev/sgN` whose sysfs vendor
+is Imacon (`--device PATH`: just that one), exclusively; it needs root
+(`/dev/sg1` is root:root 0600 there). Empty and partial reads are short
+completions, never errors. Verified on hardware: `inquiry` (FlexTight
+II M333), `poll`, `pages`; nothing that moves or scans yet.
+
 ## Safety model
 
 - Every descriptor is one FlexColor sent, byte for byte, except for
