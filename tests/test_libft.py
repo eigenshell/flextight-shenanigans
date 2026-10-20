@@ -98,6 +98,8 @@ def test_build_bat_links(tmp_path):
     lines = [l for l in BUILD_BAT.read_text().splitlines()
              if "ftpoc.c" in l and not l.lstrip().upper().startswith("REM")]
     assert len(lines) == 2   # cl and mingw
+    # the Windows transport (ftio.h); ftio_posix.c is the Makefile's
+    assert all(" ftio_win.c " in l for l in lines)
     srcs = _bat_sources(lines[0])
     assert srcs == _bat_sources(lines[1])
     objs = []
