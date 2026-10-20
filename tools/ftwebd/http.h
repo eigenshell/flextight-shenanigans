@@ -4,6 +4,7 @@
 #ifndef FTWEBD_HTTP_H
 #define FTWEBD_HTTP_H
 #include <stddef.h>
+#include <stdio.h>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -42,6 +43,10 @@ void http_error(sock_t s, int code, const char *msg);
  * there, at most HTTP_RANGE_MAX, or 416 when the file ends before it
  * (a file still being written: nothing new yet) */
 #define HTTP_RANGE_MAX (1L << 20)
+/* path opened "rb"; on Windows sharing read, write and delete, so a
+ * writer can rename a new file over path while this reads the old one
+ * (task_write_file). NULL if it cannot be opened */
+FILE *http_fopen_read(const char *path);
 void http_file(sock_t s, const char *path);
 void http_file_from(sock_t s, const char *path, long from);
 /* the page's own files (www): revalidated by ETag (size and mtime),

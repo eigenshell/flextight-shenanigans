@@ -17,7 +17,14 @@ Otherwise windows are 64 zero bytes. FAKE_FTPOC_PREVIEW: a preview's base
 (<p>.raw, .raw.cal, .raw.txt) frames writes as ftpoc does: strip.raw.cal
 (and .raw.faul) first, strip.raw while it "scans" (each progress line a
 share of the bytes, as ftpoc writes the lines as they come), then the
-rest and strip.raw.txt (else 64 zero bytes). scan says what focus does: window 1 a bracket, the rest carry
+rest and strip.raw.txt (else 64 zero bytes). FAKE_FTPOC_HOLD: a path; each scan window waits while that file exists
+(after its "progress unit" line), so a test holds a job running.
+FAKE_FTPOC_FAIL: a scan whose job path contains it fails (exit 1) at its
+first window, after the hold. FAKE_FTPOC_LINGER: a path; a scan that ended
+well closes its output, then waits while that file exists (a stop
+ignored) and exits 0, so a test stops a step whose output has ended. FAKE_FTPOC_ROWS: a scan
+window's rows (default 1890; a progress line per 50), so a test fills
+ftwebd's line ring. scan says what focus does: window 1 a bracket, the rest carry
 it."""
 import json
 import os
@@ -33,6 +40,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DELAY = float(os.environ.get("FAKE_FTPOC_DELAY", "0.01"))
 PREVIEW_DELAY = float(os.environ.get("FAKE_FTPOC_PREVIEW_DELAY", DELAY))
+HOLD = os.environ.get("FAKE_FTPOC_HOLD")
+FAIL = os.environ.get("FAKE_FTPOC_FAIL")
+LINGER = os.environ.get("FAKE_FTPOC_LINGER")
+ROWS = int(os.environ.get("FAKE_FTPOC_ROWS", "1890"))
 stopped = False
 
 
@@ -43,6 +54,15 @@ def on_int(signum, frame):
 
 def say(line):
     print(line, flush=True)
+
+
+def held():
+    """waits while FAKE_FTPOC_HOLD's file exists; False if stopped"""
+    while HOLD and os.path.exists(HOLD):
+        if stopped:
+            return False
+        time.sleep(0.02)
+    return not stopped
 
 
 def png(path, w, h, boxes):
@@ -146,6 +166,12 @@ def scan(args):
     say("progress begin window %d" % len(groups))
     for i, g in enumerate(groups, 1):
         say("progress unit window %d %d" % (i, g))
+        if not held():
+            say("progress end stopped")
+            return 1
+        if FAIL and FAIL in job:
+            say("progress end failed")
+            return 1
         first = min(n for n, inc, gg, _, _ in secs if inc and gg == g)
         if i == 1:
             for k, (o, s) in enumerate(((-500, 0.031), (0, 0.044),
@@ -156,7 +182,7 @@ def scan(args):
             say("progress focused +250 measured")
         else:
             say("progress focused +250 carried")
-        if not lines(1890):
+        if not lines(ROWS):
             say("progress end stopped")
             return 1
         raw = "%s_win%02d.raw" % (base, g)
@@ -177,6 +203,12 @@ def scan(args):
         Path(job).write_text(text)
         say("progress file " + raw)
     say("progress end ok")
+    if LINGER and os.path.exists(LINGER):
+        os.close(1)
+        os.close(2)
+        while os.path.exists(LINGER):
+            time.sleep(0.02)
+        os._exit(0)
     return 0
 
 

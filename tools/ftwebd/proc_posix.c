@@ -4,6 +4,7 @@
  * anything it spawned, and never ftwebd. */
 #define _XOPEN_SOURCE 700
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdio.h>
@@ -23,6 +24,9 @@ int proc_spawn(proc *p, const char *const *argv, const char *cwd,
         snprintf(err, errn, "pipe: %s", strerror(errno));
         return -1;
     }
+    /* the read end stays with ftwebd (spawns are serialised, so no
+     * other child can be forked before this is set) */
+    fcntl(fd[0], F_SETFD, FD_CLOEXEC);
     pid = fork();
     if (pid < 0) {
         snprintf(err, errn, "fork: %s", strerror(errno));

@@ -3,10 +3,10 @@
 // and the strip's frames as the preview arrives (the engine's streaming
 // detector seals each frame once the gap after it shows: it can be judged
 // at once and is locked from then on), one at a time (a positive of each, its name,
-// crop, turn and C/M/Y/D, confirm or skip), the job list (the scan starts
-// once no frame is pending; a crop on a frame already scanned asks for a
-// rescan), the prints as frames land, the downloads and the keymaps
-// (qwerty, dvorak). Shares index.html's globals ($, ft, api, get, cur,
+// crop, turn and C/M/Y/D, confirm or skip), the job list (confirmed frames
+// go to the box's batch a moment after the last decision; a crop on a
+// frame already scanned asks for a rescan), the prints as frames land,
+// the downloads and the keymaps (qwerty, dvorak). Shares index.html's globals ($, ft, api, get, cur,
 // ...). Numbers and pixels come from the engine (ftweb.js); this is glue.
 "use strict";
 const CSS=`#rv .bar{background:linear-gradient(#262019,#120f0d);border-block:1px solid var(--line);padding:8px 0;margin-top:6px}
@@ -18,7 +18,7 @@ const CSS=`#rv .bar{background:linear-gradient(#262019,#120f0d);border-block:1px
 .th{position:relative;flex:none;border:2px solid transparent;background:#000;cursor:pointer;padding:0;min-height:0}
 .th canvas{display:block;height:84px}.th.sel{border-color:var(--amber)}
 .th span{position:absolute;left:3px;font-size:10px;line-height:1.3;padding:0 4px;background:#000b}.th .n{top:3px}.th .b{bottom:3px}
-.b.confirmed,.b.queued{color:var(--amber)}.b.scanning{color:#ffd04a}.b.done{color:var(--ok)}.b.skipped,.b.under{color:var(--dim)}
+.b.confirmed,.b.queued{color:var(--amber)}.b.scanning{color:#ffd04a}.b.done{color:var(--ok)}.b.skipped,.b.under{color:var(--dim)}.b.retry{color:var(--red)}
 .view{display:grid;grid-template-columns:1fr 260px;gap:14px;align-items:start}
 @media (max-width:760px){.view{grid-template-columns:1fr}}
 #bw{background:#000;text-align:center;overflow:hidden}#bw.z{overflow:auto;max-height:80vh;text-align:left}
@@ -34,7 +34,7 @@ dialog{background:var(--panel);color:var(--ink);border:1px solid var(--amber);ma
 #km td{padding:3px 10px 3px 0;border:0}kbd{color:var(--amber);font:inherit}`;
 const HTML=`<div class="bar"><canvas id="live" width="1" height="1" aria-label="the strip"></canvas></div>
 <div class="prog"><div id="pb"></div></div>
-<div class="row"><span class="st" id="rst"></span><button id="again" hidden>Preview again</button><button id="stop" class="stop" disabled>Stop</button></div>
+<div class="row"><span class="st" id="rst"></span><span class="note" id="bat"></span><button id="clr" hidden>Clear queue</button><button id="again" hidden>Preview again</button><button id="stop" class="stop" disabled>Stop</button></div>
 <div class="note"><span id="fet"></span> <span id="fbad"></span> <span id="gridn"></span></div>
 <canvas id="fz" hidden></canvas>
 <div id="thumbs"></div>
@@ -53,8 +53,14 @@ const HTML=`<div class="bar"><canvas id="live" width="1" height="1" aria-label="
 <div id="km" hidden></div>`;
 
 // ---------------------------------------------------------------- state
-let frames=[],dec={},landed=[],sel=0,task=null,es=null,run={kind:"",n:1,i:1},scanPx=0,info={},meta="";
-let pvOk=0,pvImg=null,kk={},queued=new Set(),scanning=new Set(),rescan=new Set(),cropped=new Set(),groups={},dofs={},zoomed=0;
+let frames=[],dec={},landed=[],sel=0,task=null,run={kind:"",n:1,i:1},scanPx=0,info={},meta="";
+let pvOk=0,pvImg=null,kk={},scanning=new Set(),rescan=new Set(),cropped=new Set(),groups={},dofs={},zoomed=0;
+// this strip's jobs in the box's batch, by id: {id, op, state, frames,
+// groups, dofs, rescan, watched, exited, closed}; frames whose job ended
+// without them (to retry: never sent again by themselves)
+let bj=new Map(),failed=new Set(),bes=null;
+// windows cut here (a replayed job announces them again)
+const cutDone=new Set();
 // frames of a window scanned but not fetched (no rescan for them; a
 // reload fetches again), and why, per window
 let unfetched=new Set(),fe={};
@@ -68,21 +74,23 @@ const autoName=n=>cur+"_frame"+NN(n);
 // count, so their shorter long side would raise the ppi of their whole
 // run; they wait for per-frame resolution
 const UC="under construction",blocked=f=>f.type==="partial"||f.type==="half";
-function stateOf(f){return blocked(f)?UC:scanning.has(f.n)?"scanning":queued.has(f.n)?"queued":landed.includes(f.n)&&!rescan.has(f.n)?"done":dec[f.n]||"pending"}
+function stateOf(f){return blocked(f)?UC:scanning.has(f.n)?"scanning":landed.includes(f.n)&&!rescan.has(f.n)?"done":jobOf(f.n)?"queued":failed.has(f.n)?"retry":dec[f.n]||"pending"}
 const started=f=>/queued|scanning|done/.test(stateOf(f));
 
 // ---------------------------------------------------------------- screen
 async function review(s){
  if(!$("live")){const st_=document.createElement("style");st_.textContent=CSS;document.head.append(st_);$("rv").innerHTML=HTML;wire()}
- frames=[];dec={};landed=[];sel=0;kk={};queued.clear();scanning.clear();rescan.clear();cropped.clear();groups={};dofs={};pvOk=0;pvImg=null;unfetched.clear();fe={};fetchBad();fetching("");
+ frames=[];dec={};landed=[];sel=0;kk={};scanning.clear();bj.clear();failed.clear();cutDone.clear();for(const e of ess.values())e.close();ess.clear();task=null;rescan.clear();cropped.clear();groups={};dofs={};pvOk=0;pvImg=null;unfetched.clear();fe={};fetchBad();fetching("");
  sv={begun:0,pend:[],at:0,grid:0,dead:0};waiting=0;jobPut=0;jobDirty=0;gridNote();
  $("thumbs").innerHTML="";$("jobs").innerHTML="";$("notes").textContent="";$("ppin").textContent="";$("log").textContent="";$("pb").style.width="0";
  $("again").hidden=true;drawBig();
  const t=await api("/api/tasks/current").catch(()=>null);
  info=parseKV(await get(S("files/strip.scan"))||"");
  scanPx=0;if(info.ppi)try{scanPx=(await ft("resolutions",[+info.ppi]))[0].px}catch(e){st(e.message,1)}
- if(t&&t.state==="running"&&t.strip===s){watch(t);if(t.op==="preview"){liveReset();await streamStart();return}}
- await load()}
+ // the batch followed once the running preview's stream is reset (its
+ // replayed lines feed the new one)
+ if(t&&t.state==="running"&&t.strip===s){watch(t);if(t.op==="preview"){liveReset();await streamStart();batchWatch();return}}
+ batchWatch();await load()}
 function parseKV(t){const o={};for(const l of t.split("\n")){const m=l.match(/^(\w+) = (.*)$/);if(m)o[m[1]]=m[2]}return o}
 const emOf=()=>info.emulsion||(ems.find(e=>e.mode==="negative")||ems[0]).id;
 
@@ -102,7 +110,7 @@ async function load(){const s=cur;
  try{await ft("streamBegin",cal,meta,faul,slideOf());const a=await ft("streamFeed",raw.subarray(0,raw.length-raw.length%row)),b=await ft("streamEnd");sv.grid=a.grid||b.grid;pvOk=1}
  catch(e){return st("preview: "+e.message,1)}
  frames=(await ft("jobJson",meta)).frames;await ownJob();if(s!==cur)return;
- frames=(await ft("jobJson",meta)).frames;gridNote();
+ frames=(await ft("jobJson",meta)).frames;gridNote();noFile();
  pvImg=await img(F("strip.png")+"?t="+Date.now());
  // the frames from the preview at once; scanned windows (tens of MB each)
  // are cut after, each frame redrawn as its print lands
@@ -118,8 +126,9 @@ async function ownJob(){const[j,pj]=await Promise.all([get(S("strip.job")),get(F
  if(j&&j!==pj)try{await ft("streamWindows",j);await ft("planLoad",j);jobPut=1;return}catch(e){st("strip.job: "+e.message,1)}
  await putJob()}
 // the page's strip.job: its frames planned (ft_share_plan_sizes: skipped
-// and under construction 0); not while a task runs (ftpoc owns it then)
-async function putJob(){if(!frames.length)return;if(task&&task.state==="running"){jobDirty=1;return}
+// and under construction 0); not while a preview runs (ftpoc frames writes
+// it then; a scan job has its own strip_j<id>.job)
+async function putJob(){if(!frames.length)return;if(task&&task.state==="running"&&task.op==="preview"){jobDirty=1;return}
  const sz=frames.map(f=>blocked(f)||dec[f.n]==="skipped"?0:scanPx);if(!sz.some(x=>x>0))return;
  try{const r=await ft("plan",sz);await api(S("strip.job"),{method:"PUT",body:r.text});jobPut=1;jobDirty=0}catch(e){st("strip.job: "+e.message,1)}}
 const gridNote=()=>$("gridn").textContent=sv.grid?"frames from the holder grid (no gap seen between some frames): check their boxes":"";
@@ -149,19 +158,20 @@ async function previewDone(ok){const s=cur;
  pvImg=await img(F("strip.png")+"?t="+Date.now());drawStrip();jobs();
  if(!frames.length){$("again").hidden=false;st(ok?"no frame found":"stopped: no frame sealed")}}
 const img=src=>new Promise(y=>{const i=new Image();i.onload=()=>y(i);i.onerror=()=>y(null);i.src=src});
-// window scans, earlier runs first (strip_rK_winNN), the latest last
-function winFiles(names){const k=n=>{const m=n.match(/^strip_(?:r(\d+)_)?win(\d\d)\.raw$/);return m?[m[1]?+m[1]:1e9,+m[2]]:null};
- return names.filter(k).sort((a,b)=>{const x=k(a),y=k(b);return x[0]-y[0]||x[1]-y[1]})}
+// window scans: earlier runs first (old strips: strip_rK_winNN, then
+// strip_winNN), then per job in id order (strip_j<id>_winNN)
+function winFiles(names){const k=n=>{const m=n.match(/^strip_(?:r(\d+)_|j(\d+)_)?win(\d\d)\.raw$/);return m?[m[1]?0:m[2]?2:1,m[1]?+m[1]:m[2]?+m[2]:0,+m[3]]:null};
+ return names.filter(k).sort((a,b)=>{const x=k(a),y=k(b);return x[0]-y[0]||x[1]-y[1]||x[2]-y[2]})}
 // a scanned window: its raw streamed (fetchBig), then cut. Never throws:
 // a window not fetched is said (#fbad) and its frames wait for a reload
-async function cut(name,quiet){const s=cur;let fr=[],mb="";try{
+async function cut(name,quiet){const s=cur;let fr=[],mb="";if(cutDone.has(name))return;try{
  const[cal,mt,faul]=await Promise.all([get(F(name+".cal"),1),get(F(name+".txt"),1),get(F(name+".faul"),1)]);
  if(s!==cur)return;if(!cal||!mt)return quiet||st(name+": files missing",1);
  fr=(new TextDecoder().decode(mt).match(/^share_frame=\d+/gm)||[]).map(x=>+x.slice(12));
  const raw=await fetchBig(F(name),(k,n)=>{if(s!==cur)return 0;const m=MB(k)+"/"+MB(n);if(m!==mb){mb=m;fetching(name+": fetching "+m+" MB")}return 1});
  if(s!==cur)return;if(!raw)return quiet||st(name+": files missing",1);
  for(const x of fr)unfetched.delete(x);delete fe[name];fetchBad();
- try{const r=await ft("cut",raw,cal,mt,faul);for(const f of r.frames){if(!landed.includes(f.frame))landed.push(f.frame);rescan.delete(f.frame)}landed.sort((a,b)=>a-b)}
+ try{const r=await ft("cut",raw,cal,mt,faul);for(const f of r.frames){if(!landed.includes(f.frame))landed.push(f.frame);rescan.delete(f.frame);failed.delete(f.frame)}landed.sort((a,b)=>a-b);cutDone.add(name)}
  catch(e){if(!quiet)st(name+": "+e.message,1)}}
  catch(e){if(s!==cur)return;for(const x of fr)unfetched.add(x);fe[name]=name+": "+e.message;fetchBad()}
  finally{if(s===cur)fetching("")}}
@@ -207,9 +217,10 @@ function drawStrip(){const c=$("live"),i=pvImg;if(!i)return;c.width=i.naturalWid
 // thumbnails: each frame as it will print (scanned: the scan's print)
 function addThumb(f){const b=document.createElement("button");b.className="th";b.id="th"+f.n;
  b.innerHTML='<canvas></canvas><span class="n">'+f.n+'</span><span class="b"></span>';b.onclick=()=>pick(f.n);$("thumbs").append(b);badge(f)}
-async function thumbs(only){const t=$("thumbs");if(!only){t.innerHTML="";for(const f of frames)addThumb(f)}
+async function thumbs(only){const t=$("thumbs");if(!only){t.innerHTML="";for(const f of frames)addThumb(f)}   // every state at once, the prints after
  for(const f of frames)if(!only||only.includes(f.n)){badge(f);await paintTo($("th"+f.n).querySelector("canvas"),f.n,240).catch(()=>{})}}
-function badge(f){const b=$("th"+f.n);if(!b)return;const s=stateOf(f);b.classList.toggle("sel",f.n===sel);const e=b.querySelector(".b");e.className="b "+s;e.textContent=s}
+function badge(f){if(f.n===sel){const r=inRun(f);$("skip").disabled=r;$("skip").title=r?RUN(f):""}
+ const b=$("th"+f.n);if(!b)return;const s=stateOf(f);b.classList.toggle("sel",f.n===sel);const e=b.querySelector(".b");e.className="b "+s;e.textContent=s}
 async function paintTo(c,n,edge){const d=landed.includes(n)?await ft("display",n,edge):pvOk?await ft("previewPrint",n,edge):null;if(!d)return null;
  c.width=d.w;c.height=d.h;c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(d.rgba.buffer),d.w,d.h),0,0);return c}
 
@@ -284,56 +295,175 @@ function saveReview(){clearTimeout(revT);revT=setTimeout(async()=>{try{await api
 async function setName(){const n=sel,v=$("name").value.trim();try{await ft("setName",n,v===autoName(n)?"":v);savePrint();st("")}catch(e){st(e.message,1)}}
 function decide(d){const f=frame(sel);if(!f)return;
  if(blocked(f))return st("frame "+f.n+" ("+f.type+"): "+UC+": "+f.type+" frames wait for per-frame resolution",1);
+ const j=jobOf(f.n);want[f.n]=d;
+ if(j&&d!=="confirmed"&&stateOf(f)!=="done"){if(j.state!=="queued")return st(RUN(f),1);return unconfirm(f,j,d)}
  if(started(f)&&d==="pending")return st("frame "+f.n+" is "+stateOf(f)+": its decision stays",1);
+ if(d==="confirmed")failed.delete(f.n);   // a retry: sent again
  dec[f.n]=d;saveReview();badge(f);jobs();drawStrip();
  if(d!=="pending"){const i=frames.indexOf(f),nx=frames.slice(i+1).concat(frames.slice(0,i)).find(g=>stateOf(g)==="pending");if(nx)pick(nx.n);else{pick(f.n);waiting=1}}
  maybeStart()}
+// a frame out of its queued job: the job re-planned without it (PUT), or
+// dropped when it was its last frame (DELETE: a job that started
+// meanwhile is stopped, the frame out of it). PUT 409 (started), DELETE
+// 409 (ended): it stays in, said. A decision made after it (want: the
+// last one per frame) wins: then nothing changes here
+const want={};
+const unconfirm=(f,j,d)=>bq=bq.then(async()=>{if(want[f.n]!==d)return maybeStart();
+ const stays=w=>{for(const g of frames)badge(g);jobs();st("frame "+f.n+": its job has just "+w+"; it stays in",1)};
+ if(j.frames.includes(f.n)){const ns=j.frames.filter(n=>n!==f.n);
+  if(ns.length){if(!await put(j,ns))return stays("started")}
+  else{const r=await fetch("/api/tasks/"+j.id,{method:"DELETE"}),o=await r.json().catch(()=>({}));
+   if(r.status===409)return stays("ended");
+   if(!r.ok&&r.status!==404)throw new Error(o.error||r.status+" "+r.statusText);
+   if(o.was==="running")j.frames=[];else bj.delete(j.id)}}
+ dec[f.n]=d;saveReview();badge(f);jobs();drawStrip()}).catch(e=>st(e.message,1));
+// a frame of the job that runs (not yet landed): no decision change, its
+// job's Stop instead
+const inRun=f=>{const j=jobOf(f.n);return!!j&&j.state!=="queued"&&stateOf(f)!=="done"},
+ RUN=f=>"frame "+f.n+" is in the job scanning now: Stop ends that job (its frames to retry)";
 function step(d){const i=frames.findIndex(f=>f.n===sel)+d;if(i>=0&&i<frames.length)pick(frames[i].n)}
 
-// the job list; the scan starts when no frame is pending (phase 1)
+// the job list; confirmed frames go to the box's batch (a FIFO of jobs
+// run one after the other) a moment after the last decision
 function jobs(){const t=$("jobs");t.innerHTML="<tr><th>Frame</th><th>Name</th><th>State</th></tr>";
  for(const f of frames){const r=t.insertRow();r.insertCell().textContent=f.n;r.insertCell().textContent=autoName(f.n);r.insertCell().textContent=stateOf(f);
-  ft("name",f.n).then(v=>{if(v)r.cells[1].textContent=v}).catch(()=>{})}}
-let startT=0;
-function maybeStart(){if(task&&task.state==="running")return;if(!frames.length||frames.some(f=>stateOf(f)==="pending"))return;
- const todo=frames.filter(f=>!blocked(f)&&dec[f.n]==="confirmed"&&(!landed.includes(f.n)&&!unfetched.has(f.n)||rescan.has(f.n))).map(f=>f.n);if(!todo.length||startT)return;
- if(!scanPx)return st("no resolution for this strip (strip.scan)",1);
- $("tt").textContent="starting the scan of "+todo.length+" frame"+(todo.length>1?"s":"")+" …";$("toast").hidden=false;
- startT=setTimeout(()=>{startT=0;$("toast").hidden=true;scanFrames(todo)},3000)}
+  ft("name",f.n).then(v=>{if(v)r.cells[1].textContent=v}).catch(()=>{})}batInd()}
+// the batch, said: this strip's frames still to come; Clear (shown with
+// a queued job) drops the queued jobs, box-wide, their frames to retry
+function batInd(){const left=new Set();let q=0;
+ for(const j of bj.values())if(!j.closed&&j.op==="scan"){if(j.state==="queued")q=1;for(const n of j.frames)if(!landed.includes(n)||rescan.has(n))left.add(n)}
+ $("bat").textContent=left.size?"Scanning · "+left.size+" frame"+(left.size>1?"s":"")+" left":"";$("clr").hidden=!q}
+// through bq: no enqueue or unconfirm between the DELETE and the frames
+// marked
+const clearQ=()=>bq=bq.then(async()=>{await api("/api/tasks?state=queued",{method:"DELETE"});
+ for(const[id,j]of bj)if(j.state==="queued"){for(const n of j.frames)failed.add(n);bj.delete(id)}
+ jobs();for(const f of frames)badge(f);st("queue cleared: its frames to retry (Confirm)")}).catch(e=>st(e.message,1));
+// a job of this strip the page did not plan (a reload, another tab):
+// its frames from its job file on the box; an ended one's frames not
+// done are to retry. Kept once its file is read: a fetch that fails
+// leaves it to the next snapshot. An ended one without a file never
+// started (the box removed it): this strip's confirmed frames not landed
+// and in no open job are to retry, not sent again by themselves
+async function adopt(x){if(bj.has(x.id))return;const j={id:x.id,op:x.op,state:x.state,frames:[],groups:{},dofs:{}};
+ const left=[];if(x.op==="scan"){let t;try{t=await get(F("strip_j"+x.id+".job"))}catch(e){return}
+  if(t==null&&ended(x.state))j.nofile=1;
+  for(const c of(t||"").split(/^(?=\[frame \d+\])/m)){const m=c.match(/^\[frame (\d+)\]/);if(!m||!/^include = yes/m.test(c))continue;
+   const n=+m[1],g=c.match(/^group = (\d+)/m);j.frames.push(n);if(g)j.groups[n]=+g[1];if(/^done = no/m.test(c))left.push(n)}}
+ bj.set(x.id,j);noFile();if(ended(x.state)){j.closed=1;if(x.state!=="done")for(const n of left)failed.add(n)}
+ // the job followed here already (its replayed lines may come before its
+ // file): its windows' frames now known
+ if(task&&task.id===x.id){groups=j.groups;dofs=j.dofs;if(run.kind==="window")scanning=new Set(Object.keys(groups).filter(n=>groups[n]===run.g).map(Number).filter(n=>!landed.includes(n)||rescan.has(n)))}}
+// adopted ended jobs without a file, once the frames are known (a
+// reload's first snapshot may come before them)
+function noFile(){if(!frames.length)return;for(const j of bj.values())if(j.nofile===1){j.nofile=2;
+ for(const f of frames)if(!blocked(f)&&dec[f.n]==="confirmed"&&!landed.includes(f.n)&&!jobOf(f.n))failed.add(f.n)}}
+const ended=s=>/^(done|failed|stopped)$/.test(s);
+// the open job a frame is in: queued, running, or ended with its end not
+// handled here yet (its windows landing)
+const jobOf=n=>[...bj.values()].find(j=>!j.closed&&j.frames.includes(n));
+// full: a POST got 507; live: the box's queued|running job ids, as the
+// last snapshot had them
+let startT=0,startMs=3000,bq=Promise.resolve(),full=0,live=new Set();
+const todoFrames=()=>frames.filter(f=>!blocked(f)&&dec[f.n]==="confirmed"&&!jobOf(f.n)&&!failed.has(f.n)&&
+ (!landed.includes(f.n)&&!unfetched.has(f.n)||rescan.has(f.n))).map(f=>f.n);
+// each decision starts the countdown again; at its end the confirmed
+// frames not in a job go to the batch. Not while this strip's preview is
+// open (its frames still coming): its end starts the countdown
+function maybeStart(){if(!frames.length)return;if([...bj.values()].some(j=>j.op==="preview"&&!j.closed))return;const todo=todoFrames();if(!todo.length)return;
+ if(!scanPx)return st("no resolution for this strip (strip.scan)",1);clearTimeout(startT);
+ $("tt").textContent=([...bj.values()].some(j=>!j.closed&&j.op==="scan")?"adding ":"starting the scan of ")+todo.length+" frame"+(todo.length>1?"s":"")+" …";$("toast").hidden=false;
+ startT=setTimeout(()=>{startT=0;$("toast").hidden=true;enqueue(todoFrames())},startMs)}
 function cancelStart(){if(!startT)return;clearTimeout(startT);startT=0;$("toast").hidden=true;st("scan not started: confirm or skip a frame to start it")}
-async function scanFrames(todo){try{const r=await ft("plan",frames.map(f=>todo.includes(f.n)?scanPx:0));await api(S("strip.job"),{method:"PUT",body:r.text});
- const j=await ft("jobJson",meta);groups={};dofs={};for(const f of j.frames)if(f.group)groups[f.n]=f.group,dofs[f.group]=f.dof;
- // one pixel count per window: a cropped or partial frame needs more ppi
- // for it, and its window scans at that; said, not hidden
- const top=Math.max(...j.frames.map(f=>f.ppi)),why=frames.filter(f=>todo.includes(f.n)&&cropped.has(f.n)).map(f=>f.n);
- queued=new Set(todo);await start({op:"scan",share:1});jobs();for(const f of frames)badge(f);
+// frames -> the batch: merged into this strip's tail job while it is
+// still queued (PUT its job), else a job of their own (POST); a rescan
+// is a job of its own. One change to the batch at a time (bq); a frame
+// no longer confirmed when its turn comes stays out
+const enqueue=todo=>bq=bq.then(async()=>{todo=todo.filter(n=>!jobOf(n)&&dec[n]==="confirmed");if(!todo.length)return;
+ const re=todo.filter(n=>rescan.has(n)),add=todo.filter(n=>!rescan.has(n));
+ if(re.length)await post(re,1);
+ if(add.length){const t=tail();if(!t||!await put(t,t.frames.concat(add).sort((a,b)=>a-b)))await post(add)}
+ jobs();for(const f of frames)badge(f)}).catch(e=>st(e.message,1));
+// this strip's last scan job, if it is still queued (and not a rescan)
+function tail(){let t=null;for(const j of bj.values())if(j.op==="scan"&&(!t||j.id>t.id))t=j;return t&&t.state==="queued"&&!t.rescan?t:null}
+// frames ns planned (the rest skipped): the job's text, its windows'
+// groups and depth of field. One pixel count per window: a cropped or
+// partial frame needs more ppi for it, and its window scans at that;
+// said, not hidden
+async function planFor(ns){const r=await ft("plan",frames.map(f=>ns.includes(f.n)?scanPx:0)),j=await ft("jobJson",meta),gs={},ds={};
+ for(const f of j.frames)if(f.group)gs[f.n]=f.group,ds[f.group]=f.dof;
+ const top=Math.max(...j.frames.map(f=>f.ppi)),why=ns.filter(n=>cropped.has(n));
  $("ppin").textContent=top>+info.ppi+1?"note: this scan runs at "+top+" ppi, not "+info.ppi+": every frame gets "+scanPx+
-  " px on its long side"+(why.length?", and frame"+(why.length>1?"s ":" ")+why.join(", ")+" (cropped) need"+(why.length>1?"":"s")+" more ppi for that":""):""}
- catch(e){queued.clear();st(e.message,1)}}
+  " px on its long side"+(why.length?", and frame"+(why.length>1?"s ":" ")+why.join(", ")+" (cropped) need"+(why.length>1?"":"s")+" more ppi for that":""):"";
+ return{text:r.text,groups:gs,dofs:ds}}
+// a new job at the batch's tail; a full batch (507) keeps the frames
+// back until a job ends
+async function post(ns,re){const p=await planFor(ns),r=await fetch("/api/tasks",form({op:"scan",strip:cur,share:1,job:p.text}));
+ const o=await r.json().catch(()=>({}));
+ if(r.status===507){full=1;st("the batch is full: frame"+(ns.length>1?"s ":" ")+ns.join(", ")+" wait for a job to end",1);return null}
+ if(!r.ok)throw new Error(o.error||r.status+" "+r.statusText);
+ const j={id:o.id,op:"scan",state:"queued",frames:ns.slice(),groups:p.groups,dofs:p.dofs,rescan:re?1:0};bj.set(j.id,j);return j}
+// a queued job's frames replaced (its job file); false if it has
+// started meanwhile (409)
+async function put(j,ns){const p=await planFor(ns),r=await fetch("/api/tasks/"+j.id+"/job",{method:"PUT",body:p.text});
+ if(r.status===409){j.state="running";return false}
+ if(!r.ok){const o=await r.json().catch(()=>({}));throw new Error(o.error||r.status+" "+r.statusText)}
+ Object.assign(j,{frames:ns.slice(),groups:p.groups,dofs:p.dofs});return true}
 
-// tasks: start, follow (SSE), stop
-async function start(o){o.strip=cur;const r=await api("/api/tasks",form(o));$("pb").style.width="0";watch({id:r.id,state:"running",strip:cur,op:o.op})}
+// the batch (SSE, a snapshot per change): its jobs' states; a job of
+// this strip that runs is followed; one that ended unseen is replayed
+// from its first line (the box keeps its lines) for its windows. After
+// a 507 the frames wait until a job leaves the queued|running set (ended
+// or dropped: a slot free), not for any snapshot
+function batchWatch(){if(bes)bes.close();bes=new EventSource("/api/batch/events");bes.onmessage=e=>onBatch(JSON.parse(e.data))}
+const onBatch=b=>bq=bq.then(async()=>{const s=cur,top=Math.max(0,...b.jobs.map(x=>x.id)),
+  now=new Set(b.jobs.filter(x=>!ended(x.state)).map(x=>x.id)),freed=[...live].some(id=>!now.has(id));live=now;
+ for(const x of b.jobs)if(x.strip===s)await adopt(x);if(s!==cur)return;
+ for(const x of b.jobs){if(x.strip!==cur)continue;const j=bj.get(x.id);if(!j)continue;j.state=x.state;
+  if(x.state==="running"&&(!task||task.id!==x.id))watch({id:x.id,state:"running",strip:x.strip,op:x.op});
+  else if(ended(x.state)&&!j.closed&&!j.watched)watch({id:x.id,state:x.state,strip:x.strip,op:x.op})}
+ // queued jobs gone from the box (dropped); a snapshot older than a job
+ // just posted does not list it yet
+ for(const[id,j]of bj)if(j.state==="queued"&&id<top&&!b.jobs.some(x=>x.id===id))bj.delete(id);
+ jobs();for(const f of frames)badge(f);if(full&&freed){full=0;maybeStart()}}).catch(e=>st(e.message,1));
+
+// tasks: start (a preview), follow (SSE: a stream per job, from its
+// first line to its end), stop
+async function start(o){o.strip=cur;const r=await api("/api/tasks",form(o));$("pb").style.width="0";
+ bj.set(r.id,{id:r.id,op:o.op,state:"queued",frames:[],groups:{},dofs:{}});watch({id:r.id,state:"running",strip:cur,op:o.op})}
 function busy(b){$("stop").disabled=!b;$("again").hidden=true}
-function watch(t){task=t;busy(t.state==="running");if(es)es.close();$("log").textContent="";
- es=new EventSource("/api/tasks/"+t.id+"/events?since=0");es.onmessage=e=>onLine(e.data);
- const end=()=>{es.close();es=null};es.addEventListener("end",end);es.addEventListener("gone",end)}
-function onLine(t){const lg=$("log");lg.textContent+=t+"\n";if(lg.textContent.length>2e4)lg.textContent=lg.textContent.slice(-15e3);
- const w=t.split(" ");if(w[0]!=="progress"){if(t.startsWith("ftwebd exit"))done(+w[2]);return}
- if(w[1]==="begin"){run={kind:w[2],n:+w[3]||1,i:1};fzReset();st(w[2]==="upload"?"the scanner was powered up: uploading its microcode first …":w[2]+" …")}
- else if(w[1]==="unit"){run.i=+w[3];run.g=+w[4];fzReset();if(run.kind==="window"){const g=+w[4];scanning=new Set(Object.keys(groups).filter(n=>groups[n]===g).map(Number));for(const f of frames)badge(f);jobs()}st(run.kind+" "+run.i+"/"+run.n)}
+const ess=new Map();
+function watch(t){const j=bj.get(t.id);if(t.state==="running"){if(!task||task.id!==t.id)$("log").textContent="";task=t;busy(true)}
+ if(ess.has(t.id)||j&&j.watched)return;if(j)j.watched=1;
+ const es=new EventSource("/api/tasks/"+t.id+"/events?since=0");ess.set(t.id,es);es.onmessage=e=>onLine(e.data,t.id,t.op);
+ const end=()=>{es.close();ess.delete(t.id);const k=bj.get(t.id);if(k&&!k.exited)done(-1,t.id,t.op)};
+ es.addEventListener("end",end);es.addEventListener("gone",end)}
+function onLine(t,id,op){const mine=!!task&&task.id===id;
+ if(mine){const lg=$("log");lg.textContent+=t+"\n";if(lg.textContent.length>2e4)lg.textContent=lg.textContent.slice(-15e3)}
+ const w=t.split(" ");if(w[0]!=="progress"){if(t.startsWith("ftwebd exit")){const j=bj.get(id);if(j)j.exited=1;done(+w[2],id,op)}return}
+ if(w[1]==="file"){const m=t.match(/[\\/]([^\\/]+)[\\/](strip_(?:j\d+_)?win\d\d\.raw)$/);if(m&&m[1]===cur&&op==="scan")land(m[2]);return}
+ if(!mine)return;                       // a job replayed after its end: its files only
+ if(w[1]==="begin"){const j=bj.get(id);if(j){groups=j.groups;dofs=j.dofs}run={kind:w[2],n:+w[3]||1,i:1};fzReset();st(w[2]==="upload"?"the scanner was powered up: uploading its microcode first …":w[2]+" …")}
+ else if(w[1]==="unit"){run.i=+w[3];run.g=+w[4];fzReset();if(run.kind==="window"){const g=+w[4];scanning=new Set(Object.keys(groups).filter(n=>groups[n]===g).map(Number).filter(n=>!landed.includes(n)||rescan.has(n)));for(const f of frames)badge(f);jobs()}st(run.kind+" "+run.i+"/"+run.n)}
  else if(w[1]==="lines"){const[k,n]=w[2].split("/").map(Number);$("pb").style.width=((run.i-1+k/n)/run.n*100).toFixed(1)+"%";st(run.kind+" "+run.i+"/"+run.n+" · line "+k+"/"+n);
-  if(task&&task.op==="preview")liveGrow(n)}
+  if(op==="preview")liveGrow(n)}
  else if(/^(focus|focused|sharp)$/.test(w[1]))onFocus(w);
- else if(w[1]==="file"){const m=t.match(/[\\/]([^\\/]+)[\\/](strip_win\d\d\.raw)$/);if(m&&m[1]===cur&&task.op==="scan")land(m[2])}
  else if(w[1]==="end"){if(w[2]==="ok")$("pb").style.width="100%";st(run.kind+" "+w[2],w[2]!=="ok")}}
 let landQ=Promise.resolve();
-const land=n=>landQ=landQ.then(async()=>{const before=landed.slice();await cut(n);const nw=landed.filter(x=>!before.includes(x)||queued.has(x));
- for(const x of nw){queued.delete(x);scanning.delete(x)}await reprint();thumbs(nw);jobs();if(nw.includes(sel))pick(sel)}).catch(e=>st(e.message,1));
-async function done(code){busy(false);const op=task&&task.op;if(task)task.state="done";scanning.clear();queued.clear();
- if(code!==0&&/ftpoc: (no microcode file|the microcode upload failed|the microcode did not answer)/.test($("log").textContent))st("the scanner is in its loader (after a power-up) and its microcode upload failed: see the log (MICROCOD.3XX beside ftpoc.exe, or ftwebd --microcode)",1);
- else if(code!==0&&!/stopped|ok/.test($("rst").textContent))st("failed (exit "+code+"); see the log",1);
- await landQ;if(!task||task.strip!==cur)return;
- if(op==="preview"){await previewDone(code===0);maybeStart()}else{if(jobDirty)await putJob();for(const f of frames)badge(f);jobs();maybeStart()}}
+const land=n=>landQ=landQ.then(async()=>{const before=landed.slice(),was=new Set(rescan);await cut(n);
+ const nw=landed.filter(x=>!before.includes(x)||was.has(x)&&!rescan.has(x));for(const x of nw)scanning.delete(x);
+ await reprint();thumbs(nw);jobs();if(nw.includes(sel))pick(sel)}).catch(e=>st(e.message,1));
+// a job's end, once its windows landed: its frames that did not land
+// (and were not only left unfetched) are to retry. A preview followed
+// here: its streamed frames sealed (else, a replay, the strip reloaded);
+// strip.job, if held back while a preview ran, written now
+async function done(code,id,op){const s=cur,mine=!!task&&task.id===id;if(mine){busy(false);task.state="done"}
+ if(mine&&code!==0&&/ftpoc: (no microcode file|the microcode upload failed|the microcode did not answer)/.test($("log").textContent))st("the scanner is in its loader (after a power-up) and its microcode upload failed: see the log (MICROCOD.3XX beside ftpoc.exe, or ftwebd --microcode)",1);
+ else if(mine&&code!==0&&!/stopped|ok/.test($("rst").textContent))st("failed (exit "+code+"); see the log",1);
+ await landQ;if(s!==cur)return;const j=bj.get(id);
+ if(j&&!j.closed){j.closed=1;if(!ended(j.state))j.state=code===0?"done":"failed";
+  for(const n of j.frames){scanning.delete(n);if((!landed.includes(n)||rescan.has(n))&&!unfetched.has(n))failed.add(n)}}
+ if(op==="preview"){if(mine)await previewDone(code===0);else await load();noFile();maybeStart()}
+ else{if(jobDirty)await putJob();for(const f of frames)badge(f);jobs();maybeStart()}}
 
 // focus: ftpoc's crops as the status, the frame and a sharpness plot; a
 // share window's peak shaded +-DOF95/2 (its frames' dof, ftw_dof95): how
@@ -389,7 +519,7 @@ function wire(){
  const b=$("big");b.onpointerdown=onDown;b.onpointermove=onMove;b.onpointerup=onUp;b.onpointercancel=()=>{drag=null;drawBig()};
  $("name").onchange=setName;$("tl").onclick=()=>turn(-90);$("tr").onclick=()=>turn(90);$("zm").onclick=toggleZoom;
  $("prev").onclick=()=>step(-1);$("next").onclick=()=>step(1);$("ok").onclick=()=>decide("confirmed");$("skip").onclick=()=>decide("skipped");
- $("dl").onclick=download;$("all").onclick=zipAll;$("tc").onclick=cancelStart;$("kh").onclick=e=>{e.preventDefault();keymap()};
+ $("dl").onclick=download;$("all").onclick=zipAll;$("tc").onclick=cancelStart;$("clr").onclick=clearQ;$("kh").onclick=e=>{e.preventDefault();keymap()};
  $("stop").onclick=async()=>{try{await api("/api/tasks/"+task.id+"/stop",{method:"POST"});cancelStart();st("stopping at the next line …")}catch(e){st(e.message,1)}};
  $("again").onclick=async()=>{try{await start({op:"preview",film:filmOf(emOf())});liveReset();await streamStart()}catch(e){st(e.message,1)}};
  addEventListener("keydown",onKey);addEventListener("resize",()=>{if(sel&&!zoomed){bigPrint=null;drawBig()}})}
