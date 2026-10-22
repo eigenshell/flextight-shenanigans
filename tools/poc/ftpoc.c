@@ -27,8 +27,10 @@
  * overrides, each within the values FlexColor sent. Park is FlexColor's
  * shutdown descriptor.
  */
+#include <inttypes.h>
 #include <limits.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,6 +39,7 @@
 #include "ft_detail.h"
 #include "ft_detect.h"
 #include "ft_dplan.h"
+#include "ft_endian.h"
 #include "ft_focus.h"
 #include "ft_geom.h"
 #include "ft_holder.h"
@@ -308,27 +311,6 @@ typedef char END_3F_is_84[sizeof END_3F == 84 ? 1 : -1];
         is always 12 / bin. Output pixel j covers CCD   \
         pixels (x + j) * bin + 144 ... + bin - 1 */
 
-static long be32(const BYTE* d, int off) {
-  return ((long)d[off] << 24) |
-         ((long)d[off + 1] << 16) |
-         ((long)d[off + 2] << 8) |
-         (long)d[off + 3];
-}
-
-static void put_be32(BYTE* d, int off, long v) {
-  d[off] = (BYTE)(v >> 24);
-  d[off + 1] = (BYTE)(v >> 16);
-  d[off + 2] = (BYTE)(v >> 8);
-  d[off + 3] = (BYTE)v;
-}
-
-static unsigned long get_le32(const BYTE* d) {
-  return (unsigned long)d[0] |
-         ((unsigned long)d[1] << 8) |
-         ((unsigned long)d[2] << 16) |
-         ((unsigned long)d[3] << 24);
-}
-
 /* Captured scan setups. Each pairs a scan descriptor with the end
  * descriptor FlexColor sent after it. */
 static const struct preset {
@@ -527,9 +509,9 @@ static int parse_hold(const char* v, DWORD* ms) {
   return 0;
 }
 
-static long desc_pos(const BYTE* d) { return be32(d, POS_OFF); }
+static long desc_pos(const BYTE* d) { return read_big_endian32(d, POS_OFF); }
 
-static void set_pos(BYTE* d, long pos) { put_be32(d, POS_OFF, pos); }
+static void set_pos(BYTE* d, long pos) { write_big_endian32(d, POS_OFF, pos); }
 
 static int cmd_inquiry(void) {
   BYTE buf[96];
@@ -550,11 +532,10 @@ static int cmd_inquiry(void) {
   printf("\n");
   /* microcode live fields (firmware walkthrough §4, handler 3000:2199) */
   if(r > 0x36 && !ft_upload_is_loader(buf, (size_t)r))
-    printf(
-      "  live   : sensors(0x310) %02x  ring write 8614 %lu  "
-      "read 8610 %lu  state 8ecd %u  phase 8f36 %u\n",
-      buf[0x24], (unsigned long)get_le32(buf + 0x25),
-      (unsigned long)get_le32(buf + 0x29), buf[0x35], buf[0x36]);
+    printf("  live   : sensors(0x310) %02x  ring write 8614 %" PRIu32
+           " read 8610 %" PRIu32 " state 8ecd %u  phase 8f36 %u\n",
+           buf[0x24], read_little_endian32(buf + 0x25),
+           read_little_endian32(buf + 0x29), buf[0x35], buf[0x36]);
   /* Loader identity means the microcode upload dance is required first. */
   if(ft_upload_is_loader(buf, (size_t)r))
     printf(
@@ -1128,8 +1109,8 @@ static int cmd_getwin(void) {
   printf("getwin: %d bytes", r);
   for(i = 0; i < r && i < 0x54; i++)
     printf("%s %02x", i % 16 == 0 ? "\n  " : "", buf[i]);
-  printf("\n  @56 ccd %ld  @60 lens %ld\n", be32(buf, F_CCD),
-         be32(buf, F_OPTIC));
+  printf("\n  @56 ccd %" PRIu32 " @60 lens %" PRIu32 "\n",
+         read_big_endian32(buf, F_CCD), read_big_endian32(buf, F_OPTIC));
   return 0;
 }
 
@@ -1191,8 +1172,8 @@ static void run_probe(long line, const char* kinds, DWORD t) {
       }
       printf("peek 4000:8ed0:");
       for(i = 0; i < r; i++) printf(" %02x", buf[i]);
-      printf("  drum pos %ld  tgt %ld\n", (long)get_le32(buf),
-             (long)get_le32(buf + 4));
+      printf("  drum pos %" PRIu32 " tgt %" PRIu32 "\n",
+             read_little_endian32(buf), read_little_endian32(buf + 4));
     }
   }
   fflush(stdout);
@@ -1368,7 +1349,8 @@ static int cmd_scan(const struct preset* p, long y, long keep, DWORD hold_ms,
   static int scanned; /* a scan descriptor went out before */
   BYTE desc[84];
   FILE *f, *fc;
-  long got, px, lines, res, maxl;
+  long got, maxl;
+  uint32_t lines, res, px;
   WORD blklen;
   int v, last = -1;
   DWORD start;
@@ -1386,8 +1368,8 @@ static int cmd_scan(const struct preset* p, long y, long keep, DWORD hold_ms,
     /* the end descriptor carries these too (bytes 53+) */
     memcpy(xscan, p->scan, 84);
     if(g_ccd >= 0) {
-      put_be32(xscan, F_CCD, g_ccd);
-      put_be32(xscan, F_OPTIC, g_optic);
+      write_big_endian32(xscan, F_CCD, g_ccd);
+      write_big_endian32(xscan, F_OPTIC, g_optic);
     }
     if(g_lamp >= 0) xscan[F_LAMP] = (BYTE)g_lamp;
     memcpy(xend, xscan, 84);
@@ -1399,29 +1381,35 @@ static int cmd_scan(const struct preset* p, long y, long keep, DWORD hold_ms,
     p = &xp;
   }
   memcpy(desc, p->scan, 84);
-  res = be32(desc, POS_OFF);
-  px = be32(desc, F_PX);
-  lines = be32(desc, F_LINES);
+  res = read_big_endian32(desc, POS_OFF);
+  px = read_big_endian32(desc, F_PX);
+  lines = read_big_endian32(desc, F_LINES);
   maxl = (long)((double)HOLDER_LINES_525 * res / 5250000.0);
   if(y >= 0) {
     if(y + lines > maxl) {
       fprintf(stderr,
-              "start line %ld + %ld lines is past the holder end "
-              "(%ld lines at %ld ppi)\n",
+              "start line %ld"
+              " + %" PRIu32
+              " lines is past the holder end "
+              "(%ld"
+              "lines at %" PRIu32 " ppi)\n",
               y, lines, maxl, res / 10000);
       return 1;
     }
-    put_be32(desc, F_Y, y);
+    write_big_endian32(desc, F_Y, y);
   }
   if(keep <= 0 || keep > lines) keep = lines;
   if(!scanned && hold_ms < g_first_hold)
     hold_ms = g_first_hold; /* first scan of the process */
   blklen = (WORD)(px * 6);
   printf(
-    "%s: %s\n  %ld ppi, %ld px from %ld x %ld lines from %ld, "
-    "%u-byte lines; keeping %ld; CCD/lens %ld/%ld, lamp %u\n",
-    p->name, p->what, res / 10000, px, be32(desc, F_X), lines, be32(desc, F_Y),
-    blklen, keep, be32(desc, F_CCD), be32(desc, F_OPTIC), desc[F_LAMP]);
+    "%s: %s\n  %" PRIu32 " ppi, %" PRIu32 " px from %" PRIu32 " x %" PRIu32
+    " lines from %" PRIu32
+    ", "
+    "%u-byte lines; keeping %ld; CCD/lens %" PRIu32 "/%" PRIu32 ", lamp %u\n",
+    p->name, p->what, res / 10000, px, read_big_endian32(desc, F_X), lines,
+    read_big_endian32(desc, F_Y), blklen, keep, read_big_endian32(desc, F_CCD),
+    read_big_endian32(desc, F_OPTIC), desc[F_LAMP]);
 
   printf("page burst\n");
   read_pages(0);
@@ -1551,11 +1539,29 @@ static int cmd_scan(const struct preset* p, long y, long keep, DWORD hold_ms,
   f = fopen(meta, "w");
   if(f) {
     fprintf(f,
-            "preset=%s\nppi=%ld\npx=%ld\nx=%ld\nlines=%ld\ny=%ld\n"
-            "bin=%u\nblklen=%u\nkept=%ld\ncal_lines=250\n"
-            "ccd=%ld\noptic=%ld\nlamp=%u\n",
-            p->name, res / 10000, px, be32(desc, F_X), lines, be32(desc, F_Y),
-            desc[F_BIN], blklen, got, be32(desc, F_CCD), be32(desc, F_OPTIC),
+            "preset=%s\n"
+            "ppi=%" PRIu32
+            "\n"
+            "px=%" PRIu32
+            "\n"
+            "x=%" PRIu32
+            "\n"
+            "lines=%" PRIu32
+            "\n"
+            "y=%" PRIu32
+            "\n"
+            "bin=%u\n"
+            "blklen=%u\n"
+            "kept=%ld\n"
+            "cal_lines=250\n"
+            "ccd=%" PRIu32
+            "\n"
+            "optic=%" PRIu32
+            "\n"
+            "lamp=%u\n",
+            p->name, res / 10000, px, read_big_endian32(desc, F_X), lines,
+            read_big_endian32(desc, F_Y), desc[F_BIN], blklen, got,
+            read_big_endian32(desc, F_CCD), read_big_endian32(desc, F_OPTIC),
             desc[F_LAMP]);
     fclose(f);
   }
@@ -2166,13 +2172,13 @@ static int synth_scan(const char* name, const char* what, double ppi, long bin,
   int i, rc;
 
   memcpy(CROP_SCAN, SCAN_2000, 84);
-  put_be32(CROP_SCAN, POS_OFF, (long)(ppi * 10000 + 0.5));
-  put_be32(CROP_SCAN, F_X, x_out);
-  put_be32(CROP_SCAN, F_Y, y_line);
-  put_be32(CROP_SCAN, F_PX, px);
-  put_be32(CROP_SCAN, F_LINES, lines);
-  put_be32(CROP_SCAN, F_CCD, ccd);
-  put_be32(CROP_SCAN, F_OPTIC, optic);
+  write_big_endian32(CROP_SCAN, POS_OFF, (long)(ppi * 10000 + 0.5));
+  write_big_endian32(CROP_SCAN, F_X, x_out);
+  write_big_endian32(CROP_SCAN, F_Y, y_line);
+  write_big_endian32(CROP_SCAN, F_PX, px);
+  write_big_endian32(CROP_SCAN, F_LINES, lines);
+  write_big_endian32(CROP_SCAN, F_CCD, ccd);
+  write_big_endian32(CROP_SCAN, F_OPTIC, optic);
   CROP_SCAN[F_BIN] = (BYTE)bin;
   CROP_SCAN[55] = (BYTE)(12 / bin);
   memcpy(CROP_END, CROP_SCAN, 84);
@@ -3129,7 +3135,8 @@ static int cmd_frames(int argc, char** argv) {
   print_job(&j);
   if(!(share > 0)) print_options(&j);
   printf(
-    "\nwrote %s.job and %s.png; edit the job, then: ftpoc scan --job %s.job\n",
+    "\nwrote %s.job and %s.png; edit the job, then: ftpoc scan --job "
+    "%s.job\n",
     base, base, base);
   if(detail != FT_DETAIL_NONE)
     printf("detailed scan: %s, %g ppi; scan --job writes %s_frameNN%s\n",
@@ -4433,26 +4440,32 @@ int main(int argc, char** argv) {
       "  getwin             GET WINDOW: live CCD/lens positions (@56/@60)\n"
       "  park               rest position (FlexColor's shutdown descriptor)\n"
       "  goto <ppi*10000>   idle template with @10 set, 0..63000000\n"
-      "  move <+/-d> [n]    n relative @10 steps of d (max 5000000, 50 steps)\n"
+      "  move <+/-d> [n]    n relative @10 steps of d (max 5000000, 50 "
+      "steps)\n"
       "  stop               end-of-scan descriptor x2 (FlexColor end/Stop)\n"
       "  pages              read the standard ReadBuffer pages\n"
       "  grab <n> [len]     n ReadExt blocks (default len 3996) -> grab.raw\n"
-      "  scan [preset] [-n lines] [-y line] [-f frame] [-h hold_s] [-o file]\n"
+      "  scan [preset] [-n lines] [-y line] [-f frame] [-h hold_s] [-o "
+      "file]\n"
       "                     presets: preview (525 ppi), 2000, 1000, 3f (630 "
       "ppi);\n"
       "                     preview1000, preview1500: whole-holder previews "
       "at\n"
       "                     the 6000 crop optics (-n, -h, -l, -o only)\n"
-      "                     -n stop after n lines (default: the whole window)\n"
+      "                     -n stop after n lines (default: the whole "
+      "window)\n"
       "                     -y start line along the strip (holder-clamped)\n"
-      "                     -f 3f frame 1-6, or 0 = whole strip (frameN.raw)\n"
-      "                     -h hold before calibration, 0..120 s (default 10; "
-      "35 cold)\n"
+      "                     -f 3f frame 1-6, or 0 = whole strip "
+      "(frameN.raw)\n"
+      "                     -h hold before calibration, 0..120 s (default "
+      "10; 35 cold)\n"
       "                     -p <ccd>,<lens> positions @56/@60 (clamped to\n"
       "                        FlexColor's values, lens - CCD >= 150000)\n"
       "                     -l <0..255> lamp level @76 (scans send 0)\n"
-      "                     -> scan.raw (+ .cal 250 calibration lines, .txt)\n"
-      "  crop <ppi> <x> <y> <w> <h> [-b bin] [-n lines] [-h s] [-p ccd,lens]\n"
+      "                     -> scan.raw (+ .cal 250 calibration lines, "
+      ".txt)\n"
+      "  crop <ppi> <x> <y> <w> <h> [-b bin] [-n lines] [-h s] [-p "
+      "ccd,lens]\n"
       "       [-l lamp] [-o file]\n"
       "                     SYNTHESIZED window in mm at any ppi (525..6300)\n"
       "                     -b CCD px per output px (default the fastest);\n"
@@ -4460,7 +4473,8 @@ int main(int argc, char** argv) {
       "                     -> crop.raw (+ .cal .faul .txt)\n"
       "  frames [--film neg|slide] [--ppi n] [--sprockets yes|no]\n"
       "         [--preview standard|1000|1500] [-h s] [-o strip]\n"
-      "                     preview (lamp 255), detect frames, 3-point focus\n"
+      "                     preview (lamp 255), detect frames, 3-point "
+      "focus\n"
       "                     check -> strip.job (edit it) + strip.png;\n"
       "                     fb.raw* are scratch focus crops\n"
       "                     -h first-scan hold, 0..120 s (default 10; 35 "
@@ -4473,9 +4487,11 @@ int main(int argc, char** argv) {
       "         [--fmt dng|tiff] [--bw off|mono|rgb] [--keep-raw yes|no]\n"
       "         [--ring-mb N] [--film neg|slide] [-h s] [-o strip]\n"
       "                     detailed scan: preview at the scan's optics,\n"
-      "                     focus per selected frame (bin 1), passes grouped\n"
+      "                     focus per selected frame (bin 1), passes "
+      "grouped\n"
       "                     by depth of focus -> strip.job; scan --job then\n"
-      "                     writes strip_frameNN.dng (neg: digital negative)\n"
+      "                     writes strip_frameNN.dng (neg: digital "
+      "negative)\n"
       "                     or .tif (pos: archive positive, density) while\n"
       "                     the scan runs (ring of --ring-mb, default 64)\n"
       "         [--share px [--select 1,3-6] [--hf-half-res on|off]]\n"
@@ -4509,7 +4525,8 @@ int main(int argc, char** argv) {
       "                     file|end ... (libft/ft_progress.h)\n"
       "  --probe L[:igp],.. (scan, crop) at image line L: INQUIRY (i), GET\n"
       "                     WINDOW (g), peek drum 4000:8ed0 (p); default i\n"
-      "  --stall L:ms       (scan, crop) stop reading for ms at image line L\n"
+      "  --stall L:ms       (scan, crop) stop reading for ms at image line "
+      "L\n"
       "  --microcode PATH   the MICROCOD.3XX to upload (default: beside\n"
       "                     ftpoc.exe, then the current directory)\n"
       "  --device PATH      probe only this device (Linux: e.g. /dev/sg1;\n"
@@ -4517,16 +4534,20 @@ int main(int argc, char** argv) {
       " whose vendor is\n"
       "                     Imacon)\n"
       "\n"
-      "After a power-up the scanner answers as its loader (\"SCSI Loader\"):\n"
+      "After a power-up the scanner answers as its loader (\"SCSI "
+      "Loader\"):\n"
       "every command but inquiry and upload then uploads the microcode\n"
       "first, finds it again (it can move to another \\\\.\\ScannerN) and\n"
       "carries on.\n"
-      "CLOSE FlexColor first. Motion is slow and clamped. The first scan of a\n"
+      "CLOSE FlexColor first. Motion is slow and clamped. The first scan of "
+      "a\n"
       "run holds at least 10 s (35 s after an automatic microcode upload),\n"
       "except that frames, scan --job and calibrate-focus -h set that first\n"
       "hold (0..120 s). Ctrl+C: scans (scan,\n"
-      "crop, frames, scan --job, calibrate-focus) stop at the next line read\n"
-      "and send END; park and goto finish their current move (Ctrl+C is held\n"
+      "crop, frames, scan --job, calibrate-focus) stop at the next line "
+      "read\n"
+      "and send END; park and goto finish their current move (Ctrl+C is "
+      "held\n"
       "until then); move stops before its next step. Nothing new starts.\n");
     return 2;
   }
