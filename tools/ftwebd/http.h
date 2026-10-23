@@ -13,18 +13,18 @@ typedef SOCKET sock_t;
 typedef int sock_t;
 #endif
 
-#define HTTP_BODY_MAX (256 * 1024)  /* job and .print files are a few KB */
+#define HTTP_BODY_MAX (256 * 1024) /* job and .print files are a few KB */
 
 typedef struct {
-    sock_t s;
-    char method[8];
-    char path[512];             /* decoded, without the query */
-    char query[512];            /* raw */
-    char last_event_id[24];
-    char if_none_match[48];
-    long range_from;            /* Range: bytes=N- ; -1 = none */
-    char *body;                 /* NUL-terminated, malloc'd (or NULL) */
-    size_t nbody;
+  sock_t s;
+  char method[8];
+  char path[512];  /* decoded, without the query */
+  char query[512]; /* raw */
+  char last_event_id[24];
+  char if_none_match[48];
+  long range_from; /* Range: bytes=N- ; -1 = none */
+  char *body;      /* NUL-terminated, malloc'd (or NULL) */
+  size_t nbody;
 } http_req;
 
 /* reads the request head and body; 0, or an HTTP status to answer with */
@@ -32,8 +32,7 @@ int http_read(http_req *r);
 void http_free(http_req *r);
 
 int http_send_all(sock_t s, const char *b, size_t n);
-void http_send(sock_t s, int code, const char *type, const char *body,
-               size_t n);
+void http_send(sock_t s, int code, const char *type, const char *body, size_t n);
 /* body = printf(fmt, ...) as application/json */
 void http_json(sock_t s, int code, const char *fmt, ...);
 /* {"error": msg} */

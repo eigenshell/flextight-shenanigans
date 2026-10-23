@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef FT_MAINT_H
 #define FT_MAINT_H
-#include <stddef.h>
 #include "ft.h"
+#include <stddef.h>
 
 /* Microcode maintenance packets.
  *
@@ -38,14 +38,18 @@
 
 /* Both fill cdb[10] and buf (cap bytes) and return the data length
  * (FT_MAINT_HDR + payload), or -1 with e filled. */
-int ft_maint_io(unsigned port, unsigned char value, unsigned char cdb[10],
-                unsigned char *buf, size_t cap, ft_err *e);
-int ft_maint_mem(unsigned seg, unsigned off, const unsigned char *data,
-                 size_t n, unsigned char cdb[10], unsigned char *buf,
-                 size_t cap, ft_err *e);
+int ft_maint_io(
+    unsigned port, unsigned char value, unsigned char cdb[10],
+    unsigned char *buf, size_t cap, ft_err *e
+);
+int ft_maint_mem(
+    unsigned seg, unsigned off, const unsigned char *data, size_t n,
+    unsigned char cdb[10], unsigned char *buf, size_t cap, ft_err *e
+);
 
 /* Fills cdb[10] for reading n bytes at seg:off; 0, or -1 with e filled. */
-int ft_maint_peek(unsigned seg, unsigned off, size_t n, unsigned char cdb[10],
-                  ft_err *e);
+int ft_maint_peek(
+    unsigned seg, unsigned off, size_t n, unsigned char cdb[10], ft_err *e
+);
 
 #endif

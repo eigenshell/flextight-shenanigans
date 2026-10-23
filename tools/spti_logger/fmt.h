@@ -37,14 +37,12 @@ extern "C" {
 
 /* Writes one JSONL record (no trailing newline) into buf.
  * Returns bytes written (excl. NUL) or -1 if cap is insufficient. */
-int ft_fmt_ioctl_record(char *buf, size_t cap,
-                        unsigned long h_device,
-                        unsigned long seq,
-                        unsigned long tick,
-                        unsigned long io_code,
-                        size_t in_len, const unsigned char *in_head, size_t in_head_len,
-                        int success, size_t out_len,
-                        const unsigned char *out_head, size_t out_head_len);
+int ft_fmt_ioctl_record(
+    char *buf, size_t cap, unsigned long h_device, unsigned long seq,
+    unsigned long tick, unsigned long io_code, size_t in_len,
+    const unsigned char *in_head, size_t in_head_len, int success,
+    size_t out_len, const unsigned char *out_head, size_t out_head_len
+);
 
 #ifdef __cplusplus
 }

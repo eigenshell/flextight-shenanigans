@@ -9,9 +9,9 @@
  * ft_dng_io.c; the rest is pure (browser tier). */
 #ifndef FT_DNG_H
 #define FT_DNG_H
-#include <stddef.h>
 #include "ft.h"
 #include "ft_image.h"
+#include <stddef.h>
 
 int ft_dng_write(const char *path, const ft_image *im, ft_err *e);
 /* a sample as the file stores it (0..65535) */

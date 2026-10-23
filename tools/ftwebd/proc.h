@@ -9,17 +9,18 @@
 
 typedef struct {
 #ifdef _WIN32
-    void *process, *out;        /* HANDLEs */
-    unsigned long pid;
+  void *process, *out; /* HANDLEs */
+  unsigned long pid;
 #else
-    int pid, out;
+  int pid, out;
 #endif
 } proc;
 
 /* argv[0] is the program (an absolute path); cwd the child's directory.
  * 0, or -1 with a message in err. */
-int proc_spawn(proc *p, const char *const *argv, const char *cwd,
-               char *err, size_t errn);
+int proc_spawn(
+    proc *p, const char *const *argv, const char *cwd, char *err, size_t errn
+);
 /* bytes read (> 0), 0 at end of output, -1 on error */
 long proc_read(proc *p, char *buf, size_t n);
 /* waits for the child and closes the pipe; its exit code (-1: killed or

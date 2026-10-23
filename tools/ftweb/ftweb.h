@@ -72,8 +72,9 @@ int ftw_job_json(ftw *w, const char *preview_txt, size_t n);
  * base job's window, checked as the box checks jobs (inside the holder).
  * -> out: the base job's text (strip.preview.job). The plan is not
  * rerun: call ftw_plan. */
-int ftw_frame_box(ftw *w, int frame, const double *box,
-                  const char *preview_txt, size_t n);
+int ftw_frame_box(
+    ftw *w, int frame, const double *box, const char *preview_txt, size_t n
+);
 
 /* strip.print: load (or start one: ftw_print_new), change the emulsion
  * (frames whose clicks it does not take go back to auto; their count),
@@ -100,10 +101,11 @@ int ftw_print_text(ftw *w);
  * frames, cut, replacing frames of the same number. Returns the number
  * of frames cut; out: JSON {"detect_ok","noise_note","frames":[{"frame",
  * "estimated","shift_mm","w","h"}]}. */
-int ftw_cut(ftw *w, const unsigned short *raw, size_t raw_n,
-            const unsigned short *cal, size_t cal_n, const char *faul,
-            size_t faul_n, const char *meta, size_t meta_n,
-            const char *defects, size_t defects_n);
+int ftw_cut(
+    ftw *w, const unsigned short *raw, size_t raw_n, const unsigned short *cal,
+    size_t cal_n, const char *faul, size_t faul_n, const char *meta,
+    size_t meta_n, const char *defects, size_t defects_n
+);
 /* the landed frames' numbers, ascending, into frames (cap); the count */
 int ftw_frames(const ftw *w, int *frames, int cap);
 
@@ -125,10 +127,11 @@ int ftw_display(ftw *w, int frame, int long_edge, int *pw, int *ph);
  * printed with strip.print's emulsion, its own balance (per-frame, as
  * the share prints it), the job's film base, no clicks and no turn, at most
  * long_edge px -> out: RGBA rows; *pw x *ph. */
-int ftw_preview_load(ftw *w, const unsigned short *raw, size_t raw_n,
-                     const unsigned short *cal, size_t cal_n,
-                     const char *faul, size_t faul_n, const char *meta,
-                     size_t meta_n);
+int ftw_preview_load(
+    ftw *w, const unsigned short *raw, size_t raw_n, const unsigned short *cal,
+    size_t cal_n, const char *faul, size_t faul_n, const char *meta,
+    size_t meta_n
+);
 int ftw_preview_display(ftw *w, int frame, int long_edge, int *pw, int *ph);
 /* the same with strip.print's clicks and turn: the review's view of a
  * frame before it is scanned */
@@ -140,8 +143,9 @@ int ftw_preview_px(void);
  * line count. first: these lines start a preview, their brightest sample
  * per channel is its white until the next first. neg: inverted. No
  * calibration: the colour is only roughly right. */
-int ftw_live_rows(ftw *w, const unsigned short *raw, size_t n, int px,
-                  int neg, int first);
+int ftw_live_rows(
+    ftw *w, const unsigned short *raw, size_t n, int px, int neg, int first
+);
 /* the streamed preview: frames found as the preview arrives.
  * ftw_stream_begin: strip.raw.cal (written before the raw), .faul
  * (NULL/0: none), strip.raw.txt (a standard preview) and the film (slide
@@ -158,9 +162,10 @@ int ftw_live_rows(ftw *w, const unsigned short *raw, size_t n, int px,
  * grid (no gap seen). The same frames whatever the chunking.
  * ftw_stream_windows: the windows of a job the page wrote (its crops)
  * onto the stream's frames of the same number; the frames moved. */
-int ftw_stream_begin(ftw *w, const unsigned short *cal, size_t cal_n,
-                     const char *faul, size_t faul_n, const char *meta,
-                     size_t meta_n, int slide);
+int ftw_stream_begin(
+    ftw *w, const unsigned short *cal, size_t cal_n, const char *faul,
+    size_t faul_n, const char *meta, size_t meta_n, int slide
+);
 int ftw_stream_feed(ftw *w, const unsigned short *raw, size_t n);
 int ftw_stream_end(ftw *w);
 int ftw_stream_windows(ftw *w, const char *text, size_t n);

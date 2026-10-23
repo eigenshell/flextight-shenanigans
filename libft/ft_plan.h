@@ -14,11 +14,11 @@
 #define FT_PLAN_H
 #include "ft_focus.h"
 
-#define FT_OUT_PX_RATE    84000.0  /* output px/s over the full line */
-#define FT_SCAN_FIXED     10.0     /* s per scan: hold, settling, moves */
-#define FT_CAL_LINES      250      /* calibration lines, same line rate */
-#define FT_DMAX_6300      3.0      /* per-read Dmax (R) at 6300 optics */
-#define FT_DMAX_CEIL      3.73     /* log10((16383 - 310) / 3 DN) */
+#define FT_OUT_PX_RATE 84000.0 /* output px/s over the full line */
+#define FT_SCAN_FIXED 10.0     /* s per scan: hold, settling, moves */
+#define FT_CAL_LINES 250       /* calibration lines, same line rate */
+#define FT_DMAX_6300 3.0       /* per-read Dmax (R) at 6300 optics */
+#define FT_DMAX_CEIL 3.73      /* log10((16383 - 310) / 3 DN) */
 
 /* bins usable at ppi, largest (fastest) first; returns how many (0..6) */
 int ft_bins_for_ppi(double ppi, int bins[6]);

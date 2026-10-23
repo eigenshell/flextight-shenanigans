@@ -8,8 +8,8 @@
  */
 #ifndef FT_FOCUS_H
 #define FT_FOCUS_H
-#include <stdio.h>
 #include "ft.h"
+#include <stdio.h>
 
 /* Below ~3000 the thin-lens curve drifts from the true focus on this
  * unit (focus survey 2026-10-15/16, notes/hw/focusmap/RESULTS.md; the
@@ -18,10 +18,10 @@
  * points and held past the ends. Ascending scales; ncorr 0: none. */
 #define FT_LENS_CORR_MAX 16
 typedef struct {
-    double film, w, fl, p;
-    int ncorr;
-    double corr_scale[FT_LENS_CORR_MAX];
-    double corr_off[FT_LENS_CORR_MAX];
+  double film, w, fl, p;
+  int ncorr;
+  double corr_scale[FT_LENS_CORR_MAX];
+  double corr_off[FT_LENS_CORR_MAX];
 } ft_lens;
 extern const ft_lens ft_lens_default;
 /* l's correction at scale (0 without a table) */
@@ -30,8 +30,8 @@ double ft_lens_correction(const ft_lens *l, double scale);
 /* The fit spans 3807..6230; the scanner's own focus table (FP<serial>.txt)
  * sits within ~2400 tandem steps of the curve down to scale ~1475
  * (m 0.51), so the curve is trusted to 1500 (2026-10-13). */
-#define FT_SCALE_MIN     1500.0
-#define FT_SCALE_MAX     6300.0
+#define FT_SCALE_MIN 1500.0
+#define FT_SCALE_MAX 6300.0
 /* The lowest optics the scanner reaches at all: its focus table's A4
  * reflective pair (FP entries 4/18, m 0.342, scale ~984). Only explicit
  * positions (crop -p) go below FT_SCALE_MIN; the curve is not trusted
@@ -42,10 +42,10 @@ double ft_lens_correction(const ft_lens *l, double scale);
  * plane moves. Moving the CCD alone also changes the magnification (~1 %
  * for -9000 steps at 6300) and is ~m^2 (~5x) less sensitive. Hardware
  * 2026-10-12, 6300 ppi: the tandem curve is 4-5x narrower than CCD-only. */
-#define FT_FOCUS_MARGIN  300L       /* tandem steps: ~5 % sharpness loss */
-#define FT_BRACKET_MAX   4000L      /* tandem: never further from the curve */
+#define FT_FOCUS_MARGIN 300L /* tandem steps: ~5 % sharpness loss */
+#define FT_BRACKET_MAX 4000L /* tandem: never further from the curve */
 /* calibrate-focus brackets the CCD alone (lens on the curve) */
-#define FT_CAL_MARGIN    1200L      /* CCD steps: ~5 % sharpness loss */
+#define FT_CAL_MARGIN 1200L /* CCD steps: ~5 % sharpness loss */
 #define FT_CAL_BRACKET_MAX 12000L
 /* Scan positions stay inside the scanner's own focus table
  * (FP<serial>.txt), scanning entries only (user, 2026-10-15): CCD 56674
@@ -54,10 +54,10 @@ double ft_lens_correction(const ft_lens *l, double scale);
  * own 1004246 for 6300, under the ~1020000 park). Both counters grow
  * towards the film below; a lower CCD value moves the CCD up, away from
  * the lens. Before: CCD 240000..1020000, lens 530000..1021000. */
-#define FT_CCD_MIN    56674L
-#define FT_CCD_MAX    466453L
-#define FT_OPTIC_MIN  217000L
-#define FT_OPTIC_MAX  1010000L
+#define FT_CCD_MIN 56674L
+#define FT_CCD_MAX 466453L
+#define FT_OPTIC_MIN 217000L
+#define FT_OPTIC_MAX 1010000L
 /* Carrier gap (lens - CCD, steps). Collisions depend on the gap alone:
  * both counters share one scale. FlexColor's maintenance "bottom" parks
  * them at 1020000 / 1021000 (gap 1000, the smallest proven safe; parking,
@@ -66,7 +66,7 @@ double ft_lens_correction(const ft_lens *l, double scale);
  * focus table (FP<serial>.txt) never goes below a 160231 gap, so scans
  * keep FT_GAP_MIN (user, 2026-10-13). */
 #define FT_GAP_BOTTOM 1000L
-#define FT_GAP_MIN    150000L
+#define FT_GAP_MIN 150000L
 
 /* The 95 % depth of field (tandem steps across which sharpness stays
  * >= 95 % of its peak) at an optical scale (ppi x bin) and bin: ~K
@@ -76,16 +76,17 @@ double ft_lens_correction(const ft_lens *l, double scale);
 #define FT_DOF95_K 980.0
 double ft_lens_dof95(const ft_lens *l, double scale, int bin);
 
-int ft_bin_for_ppi(double ppi);          /* -1 if ppi > 6300 */
-int ft_ppi_supported(double ppi);        /* 1 = crop can scan it in focus */
+int ft_bin_for_ppi(double ppi);   /* -1 if ppi > 6300 */
+int ft_ppi_supported(double ppi); /* 1 = crop can scan it in focus */
 /* 0 ok; -1 (outputs not written) for scale outside range / NaN or an
  * implausible lens or positions that overflow */
 int ft_optics_for(const ft_lens *l, double scale, long *ccd, long *optic);
 int ft_positions_ok(long ccd, long optic);
 /* the curve's pair for scale with focus offset off on both (tandem);
  * same returns as ft_optics_for */
-int ft_optics_focus(const ft_lens *l, double scale, long off, long *ccd,
-                    long *optic);
+int ft_optics_focus(
+    const ft_lens *l, double scale, long off, long *ccd, long *optic
+);
 
 /* sharpness of a w x h single-channel linear image: rms Sobel gradient
  * of the 3x3-box-denoised image over its mean (~relative step per pixel;
@@ -107,7 +108,9 @@ int ft_lens_write(const ft_lens *l, FILE *f);
 /* least-squares fit of l (start value in, result out) to n >= 4 in-focus
  * points (scale M[i], CCD C[i], lens L[i]); rms residuals out. The fit
  * has no correction table: it is fitted to the points as they are. */
-int ft_lens_fit(const double *M, const long *C, const long *L, int n,
-                ft_lens *l, double *rms_ccd, double *rms_lens);
+int ft_lens_fit(
+    const double *M, const long *C, const long *L, int n, ft_lens *l,
+    double *rms_ccd, double *rms_lens
+);
 
 #endif

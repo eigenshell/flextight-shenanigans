@@ -10,14 +10,15 @@
 #include <stdint.h>
 
 uint32_t read_big_endian32(
-  const uint8_t *buffer,
-  int offset
+    const uint8_t *buffer,
+    int offset
 ); // read a 4 byte big endian int from buffer, starting at offset
 
 void write_big_endian32(
-  uint8_t *buffer, int offset,
-  uint32_t value
-); // write a 4 byte big endian int tobuffer, starting at offset
+    uint8_t *buffer, int offset,
+    uint32_t value
+); // write a 4 byte big endian int
+   // tobuffer, starting at offset
 
 uint32_t read_little_endian32(
     const uint8_t *buffer

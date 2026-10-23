@@ -4,28 +4,28 @@
  * comment, even after a value. */
 #ifndef FT_JOB_H
 #define FT_JOB_H
-#include <stdio.h>
 #include "ft.h"
 #include "ft_focus.h"
+#include <stdio.h>
 
 typedef struct {
-    int index, line;              /* line: where [frame N] was read */
-    ft_frame_type type;
-    int include;
-    double ppi;
-    int bin;                      /* CCD px per output px; 0 = the fastest
-                                     (ft_bin_for_ppi). Smaller = lower
-                                     magnification, more light, slower */
-    double y0, x0, len, width;    /* window, holder mm */
-    double tilt_deg;
-    int sprockets, straighten, confidence_low, done;
-    long focus_offset;            /* per-frame mode: measured offset */
-    int pass;                     /* detailed scan: its pass (1..), 0 none */
-    int group;                    /* share job: the window it scans in
-                                     (1..); 0 = not in a share job */
-    double share_px;              /* share job: this frame's target, px
-                                     on its long side; 0 = the strip's
-                                     share. One target per group */
+  int index, line; /* line: where [frame N] was read */
+  ft_frame_type type;
+  int include;
+  double ppi;
+  int bin;                   /* CCD px per output px; 0 = the fastest
+                                (ft_bin_for_ppi). Smaller = lower
+                                magnification, more light, slower */
+  double y0, x0, len, width; /* window, holder mm */
+  double tilt_deg;
+  int sprockets, straighten, confidence_low, done;
+  long focus_offset; /* per-frame mode: measured offset */
+  int pass;          /* detailed scan: its pass (1..), 0 none */
+  int group;         /* share job: the window it scans in
+                        (1..); 0 = not in a share job */
+  double share_px;   /* share job: this frame's target, px
+                        on its long side; 0 = the strip's
+                        share. One target per group */
 } ft_job_frame;
 
 /* Detailed scans (sub-project 2b): what the passes write */
@@ -34,31 +34,32 @@ typedef enum { FT_DFMT_DNG, FT_DFMT_TIFF } ft_detail_fmt;
 typedef enum { FT_BW_OFF, FT_BW_MONO, FT_BW_RGB } ft_detail_bw;
 #define FT_RING_MB_DEFAULT 64
 #define FT_RING_MB_MIN 8
-#define FT_RING_MB_MAX 1024     /* a 32-bit process (ftpoc on XP) has
-                                   2 GB of address space in all */
+#define FT_RING_MB_MAX                                                         \
+  1024 /* a 32-bit process (ftpoc on XP) has                                   \
+          2 GB of address space in all */
 
 typedef struct {
-    char holder[16];
-    ft_film film;
-    ft_focus_mode focus;
-    long focus_offset;            /* shifted mode: CCD steps on the curve */
-    int has_film_base;
-    double film_base[3];          /* D of unexposed film per channel, from
-                                     the preview (ft_layout.base): the
-                                     negative's base or the slide's black */
-    /* detailed scan; written only when detail != FT_DETAIL_NONE */
-    ft_detail_out detail;         /* neg: digital negative, pos: archive
-                                     positive (density, ft_density.h) */
-    ft_detail_fmt detail_fmt;     /* neg only: DNG or TIFF */
-    ft_detail_bw detail_bw;       /* pos only: off (colour), mono, rgb */
-    int keep_raw;                 /* also write the undeveloped lines */
-    int ring_mb;                  /* RAM between the scanner and the disk */
-    double share;                 /* scan to share: target px on each
-                                     frame's long side (ft_share.h); 0 =
-                                     an ordinary job, one scan per frame */
-    int hf_half_res;              /* share: half frames at the FF's ppi */
-    int nframes;
-    ft_job_frame f[FT_MAX_FRAMES];
+  char holder[16];
+  ft_film film;
+  ft_focus_mode focus;
+  long focus_offset; /* shifted mode: CCD steps on the curve */
+  int has_film_base;
+  double film_base[3]; /* D of unexposed film per channel, from
+                          the preview (ft_layout.base): the
+                          negative's base or the slide's black */
+  /* detailed scan; written only when detail != FT_DETAIL_NONE */
+  ft_detail_out detail;     /* neg: digital negative, pos: archive
+                               positive (density, ft_density.h) */
+  ft_detail_fmt detail_fmt; /* neg only: DNG or TIFF */
+  ft_detail_bw detail_bw;   /* pos only: off (colour), mono, rgb */
+  int keep_raw;             /* also write the undeveloped lines */
+  int ring_mb;              /* RAM between the scanner and the disk */
+  double share;             /* scan to share: target px on each
+                               frame's long side (ft_share.h); 0 =
+                               an ordinary job, one scan per frame */
+  int hf_half_res;          /* share: half frames at the FF's ppi */
+  int nframes;
+  ft_job_frame f[FT_MAX_FRAMES];
 } ft_job;
 
 /* j -> text in buf (NUL-terminated if cap > 0); returns the length the

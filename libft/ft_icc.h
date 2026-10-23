@@ -9,10 +9,10 @@
  * into the caller's buffer. */
 #ifndef FT_ICC_H
 #define FT_ICC_H
-#include <stddef.h>
 #include "ft_output.h"
+#include <stddef.h>
 
-#define FT_ICC_MAX 4096         /* every profile here fits */
+#define FT_ICC_MAX 4096 /* every profile here fits */
 
 /* the profile for s in buf; returns its size, 0 if cap is too small or
  * s unknown */
@@ -23,8 +23,9 @@ size_t ft_icc_build(ft_space s, unsigned char *buf, size_t cap);
  * entries). The 16-bit linear negative TIFFs carry it, so viewers do not
  * take their linear values for sRGB. desc is truncated to 63 characters.
  * Returns the size; 0 if cap is too small or the matrix is singular. */
-size_t ft_icc_build_linear(const double xyz_to_rgb[9], const char *desc,
-                           unsigned char *buf, size_t cap);
+size_t ft_icc_build_linear(
+    const double xyz_to_rgb[9], const char *desc, unsigned char *buf, size_t cap
+);
 /* Bradford adaptation D65 (from its xy) -> ICC D50, 3x3 row-major */
 void ft_icc_bradford(double m[9]);
 

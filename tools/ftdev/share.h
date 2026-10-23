@@ -13,20 +13,24 @@ void *ftdev_load(const char *path, long *size);
  * does it: sensor NR with the profile of im (the whole frame's DNG), else
  * the sidecar's (sc NULL: none), else estimated; then grain NR. 0 ok, 1
  * out of memory (printed). */
-int ftdev_denoise(const ft_image *im, const ft_share_sidecar *sc,
-                  ft_image *cut, const ft_look_detail *d);
+int ftdev_denoise(
+    const ft_image *im, const ft_share_sidecar *sc, ft_image *cut,
+    const ft_look_detail *d
+);
 /* jpg (n bytes, ow x oh) at outp, text in <outp>.txt, the summary line
  * on stdout. 0 ok, 1 error, 2 bad path (messages printed). */
-int ftdev_write_jpeg(const char *outp, const unsigned char *jpg, size_t n,
-                     int ow, int oh, ft_space space, ft_gamut gamut,
-                     int quality, const char *text);
-/* the share tail (ft_share_finish) into outp: resize cut (rendered: linear Rec.2020) by scale (never
- * up), output sharpening, output colour, an 8-bit JPEG at outp with its
- * ICC profile and text as its comment, and text in <outp>.txt. 0 ok, 1
- * error, 2 bad path (messages printed). */
-int ftdev_finish(const ft_image *cut, double scale, double sharpen,
-                 ft_space space, ft_gamut gamut, int quality,
-                 const char *text, const char *outp);
+int ftdev_write_jpeg(
+    const char *outp, const unsigned char *jpg, size_t n, int ow, int oh,
+    ft_space space, ft_gamut gamut, int quality, const char *text
+);
+/* the share tail (ft_share_finish) into outp: resize cut (rendered: linear
+ * Rec.2020) by scale (never up), output sharpening, output colour, an 8-bit
+ * JPEG at outp with its ICC profile and text as its comment, and text in
+ * <outp>.txt. 0 ok, 1 error, 2 bad path (messages printed). */
+int ftdev_finish(
+    const ft_image *cut, double scale, double sharpen, ft_space space,
+    ft_gamut gamut, int quality, const char *text, const char *outp
+);
 /* ftdev cut <window.raw> [-o base] [-d defects.txt] */
 int ftdev_cut(int argc, char **argv);
 /* ftdev export <frame.dng> [render flags] [--space ..] [--gamut ..]

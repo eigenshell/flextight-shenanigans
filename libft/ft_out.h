@@ -7,10 +7,10 @@
 #include "ft_image.h"
 
 typedef struct {
-    const char *name;         /* as selected on the command line */
-    const char *ext;          /* file extension, with the dot */
-    const char *what;
-    int (*write)(const char *path, const ft_image *im, ft_err *e);
+  const char *name; /* as selected on the command line */
+  const char *ext;  /* file extension, with the dot */
+  const char *what;
+  int (*write)(const char *path, const ft_image *im, ft_err *e);
 } ft_writer;
 
 /* NULL if no writer has that name */

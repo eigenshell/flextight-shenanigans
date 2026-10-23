@@ -23,8 +23,9 @@
  * 0.5th percentile of density (the thinnest film), slide the 99.5th (the
  * densest; only blocks at the T floor are skipped). Clamped to 0..4.5 D.
  * -1 if the frames have no pixels. */
-int ft_render_base_from_frames(const ft_image *const *im, int n,
-                               ft_render_mode m, float d[3], ft_err *e);
+int ft_render_base_from_frames(
+    const ft_image *const *im, int n, ft_render_mode m, float d[3], ft_err *e
+);
 /* neg/b&w: the brightest 0.5 % of the blocks (densest film), picked on
  * the mean density of the three channels (which favours blocks dense in
  * the high-gamma, blue layer); range = the median density, measured on a
@@ -33,8 +34,7 @@ int ft_render_base_from_frames(const ft_image *const *im, int n,
  * to its own unfiltered 99.5th percentile. Exposure puts that highlight at
  * paper white + 0.03 D (clamped to +-6; 0 for a grade <= 0); slide:
  * exposure 0. Tint is set to 0. r->mode and r->base must be set. */
-int ft_render_auto(const ft_image *const *im, int n, ft_recipe *r,
-                   ft_err *e);
+int ft_render_auto(const ft_image *const *im, int n, ft_recipe *r, ft_err *e);
 
 /* neg/b&w: the exposure that puts the highlight (the frame's range above
  * base) at paper white + 0.03 D, from r's range[1], grade and paper;

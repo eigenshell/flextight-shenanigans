@@ -17,15 +17,15 @@
 #include "ft_detect.h"
 #include "ft_focus.h"
 
-#define FT_PREVIEW_LINES_525 4795L  /* holder length at 525 ppi (~232 mm) */
-#define FT_PREVIEW_X_OUT     2      /* standard preview: first output px */
-#define FT_PREVIEW_PX        666    /* standard preview: px per line */
+#define FT_PREVIEW_LINES_525 4795L /* holder length at 525 ppi (~232 mm) */
+#define FT_PREVIEW_X_OUT 2         /* standard preview: first output px */
+#define FT_PREVIEW_PX 666          /* standard preview: px per line */
 
 typedef struct {
-    const char *name;
-    double ppi;        /* output pitch along and across */
-    int bin;           /* CCD pixels per output pixel across (one is kept) */
-    int down;          /* box factor to the detection grid */
+  const char *name;
+  double ppi; /* output pitch along and across */
+  int bin;    /* CCD pixels per output pixel across (one is kept) */
+  int down;   /* box factor to the detection grid */
 } ft_preview;
 
 /* "standard" (or "525"), "o3150", "1000", "1500"; NULL: unknown */
@@ -46,11 +46,13 @@ void ft_preview_axes(const ft_preview *m, long x_out, ft_axes *ax);
  * the synthesized previews): FlexColor's own pair sits ~10000 CCD steps
  * short of the focus peak. *ccd / *optic: the pair. 0 ok; -1 no focus at
  * 6300 (out untouched). The caller checks the pair (ft_positions_ok). */
-#define FT_DESC_LEN   84
-#define FT_DESC_CCD   56
+#define FT_DESC_LEN 84
+#define FT_DESC_CCD 56
 #define FT_DESC_OPTIC 60
-int ft_preview_std_desc(const unsigned char *tmpl, const ft_lens *l,
-                        unsigned char *out, long *ccd, long *optic);
+int ft_preview_std_desc(
+    const unsigned char *tmpl, const ft_lens *l, unsigned char *out, long *ccd,
+    long *optic
+);
 /* box average f x f: in lines x px x 3 -> out (lines/f) x (px/f) x 3;
  * leftover lines and columns are dropped */
 void ft_box_down(const float *in, int lines, int px, int f, float *out);

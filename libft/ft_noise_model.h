@@ -21,15 +21,16 @@
 #define FT_NOISE_MODEL_H
 #include "ft.h"
 
-#define FT_NOISE_MIN_DARK  50
+#define FT_NOISE_MIN_DARK 50
 #define FT_NOISE_MIN_WHITE 20
-#define FT_NOISE_MAX_LINES 1024  /* a .cal has 250 */
+#define FT_NOISE_MAX_LINES 1024 /* a .cal has 250 */
 
 /* cal: lines x px x 3. prof = S_r O_r S_g O_g S_b O_b.
  * 0: ok. 1: ok, but a value was clamped (S < 0 or non-finite -> 0, O below
  * 0.25 DN^2 -> that floor); e says which. -1: too few dark or white lines
  * (or a degenerate span), no profile; e says why. */
-int ft_noise_model(const unsigned short *cal, int lines, int px,
-                   double prof[6], ft_err *e);
+int ft_noise_model(
+    const unsigned short *cal, int lines, int px, double prof[6], ft_err *e
+);
 
 #endif

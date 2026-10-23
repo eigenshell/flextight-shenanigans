@@ -45,14 +45,17 @@ double ft_nr_sigma(const float *plane, int w, int h, void *scratch);
 
 /* a constant-noise profile measured on the image (S = 0, O = sigma^2 per
  * channel), for frames without a NoiseProfile */
-void ft_nr_estimate(const float *rgb, int w, int h, double prof[6],
-                    void *scratch);
+void ft_nr_estimate(
+    const float *rgb, int w, int h, double prof[6], void *scratch
+);
 /* the grain sigma of the Y opponent plane of the density */
 double ft_nr_grain_sigma(const float *rgb, int w, int h, void *scratch);
 
 /* in place, rgb interleaved; prof = S,O per channel; kc = k * nr_chroma */
-void ft_nr_sensor(float *rgb, int w, int h, const double prof[6], double k,
-                  double kc, void *scratch);
+void ft_nr_sensor(
+    float *rgb, int w, int h, const double prof[6], double k, double kc,
+    void *scratch
+);
 /* in place */
 void ft_nr_grain(float *rgb, int w, int h, double k, void *scratch);
 

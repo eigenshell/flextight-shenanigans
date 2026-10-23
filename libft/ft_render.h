@@ -20,30 +20,30 @@
  * the tests hold the LUT path to it. */
 #ifndef FT_RENDER_H
 #define FT_RENDER_H
-#include <stddef.h>
 #include "ft.h"
 #include "ft_curve.h"
 #include "ft_image.h"
+#include <stddef.h>
 
 typedef enum { FT_RENDER_NEG, FT_RENDER_SLIDE, FT_RENDER_BW } ft_render_mode;
 
-#define FT_RENDER_T_MAX 1.26f   /* LUT top: noise/flare above open beam */
+#define FT_RENDER_T_MAX 1.26f /* LUT top: noise/flare above open beam */
 
 typedef struct {
-    ft_render_mode mode;
-    float base[3];          /* D: film base (neg; b&w uses base[1]) or the
-                               black of unexposed film (slide) */
-    float range[3];         /* neg: D above base of the brightest highlight,
-                               per channel (b&w uses range[1]) */
-    float exposure;         /* stops, + = brighter */
-    float tint[3];          /* CC (10 CC = 0.10 D): + = redder, greener,
-                               bluer; b&w: must be 0 */
-    float grade;            /* paper contrast, 1.5 = normal */
-    float paper_black;      /* D of the paper's deepest black */
-    float paper_white;      /* D of the paper base (white = 1.0 out) */
-    float bw_weights[3];    /* b&w luminance from R, G, B; sum 1 */
-    float matrix[9];        /* scanner RGB -> linear Rec.2020, row-major */
-    ft_curve master, ch[3];
+  ft_render_mode mode;
+  float base[3];       /* D: film base (neg; b&w uses base[1]) or the
+                          black of unexposed film (slide) */
+  float range[3];      /* neg: D above base of the brightest highlight,
+                          per channel (b&w uses range[1]) */
+  float exposure;      /* stops, + = brighter */
+  float tint[3];       /* CC (10 CC = 0.10 D): + = redder, greener,
+                          bluer; b&w: must be 0 */
+  float grade;         /* paper contrast, 1.5 = normal */
+  float paper_black;   /* D of the paper's deepest black */
+  float paper_white;   /* D of the paper base (white = 1.0 out) */
+  float bw_weights[3]; /* b&w luminance from R, G, B; sum 1 */
+  float matrix[9];     /* scanner RGB -> linear Rec.2020, row-major */
+  ft_curve master, ch[3];
 } ft_recipe;
 
 /* neutral recipe for mode: base 0 (neg) / 3.0 (slide), range 1, exposure
@@ -69,11 +69,11 @@ void ft_recipe_set_base(ft_recipe *r, const float d[3]);
 
 /* ~380 KB: keep it static or on the heap, not on a (WASM) stack */
 typedef struct {
-    ft_render_mode mode;
-    float w[3];
-    float in[3][FT_RENDER_IN_N];
-    float m[9];
-    float out[3][FT_RENDER_CURVE_N];
+  ft_render_mode mode;
+  float w[3];
+  float in[3][FT_RENDER_IN_N];
+  float m[9];
+  float out[3][FT_RENDER_CURVE_N];
 } ft_render;
 
 /* an input LUT (in[] above) at transmittance t: linear between the two
@@ -84,8 +84,9 @@ int ft_render_compile(const ft_recipe *r, ft_render *c, ft_err *e);
 /* npx interleaved RGB pixels; in == out is allowed. NaN, -inf and values
  * below the floor -> the floor; +inf and values above FT_RENDER_T_MAX ->
  * T_MAX. Never fails, never writes NaN */
-void ft_render_apply(const ft_render *c, const float *in, float *out,
-                     size_t npx);
+void ft_render_apply(
+    const ft_render *c, const float *in, float *out, size_t npx
+);
 /* the same pipeline in double, one pixel; r must be valid */
 void ft_render_direct(const ft_recipe *r, const float in[3], float out[3]);
 /* apply to every pixel of im in place; im becomes linear Rec.2020

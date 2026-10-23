@@ -29,16 +29,16 @@ typedef HANDLE io_dev;
 #include <stdint.h>
 typedef uint8_t BYTE;
 typedef uint16_t WORD;
-typedef uint32_t DWORD;     /* 32 bits, so io_ms() differences wrap as
-                               GetTickCount()'s do */
+typedef uint32_t DWORD; /* 32 bits, so io_ms() differences wrap as
+                           GetTickCount()'s do */
 typedef int io_dev;
 #define IO_NONE (-1)
 #define IO_PATH_MAX 4096
 #define IO_DEV_NAME "/dev/sgN"
 #endif
 
-#define SRB_DIR_OUT 0x80        /* host -> device */
-#define SRB_DIR_IN  0x40        /* device -> host */
+#define SRB_DIR_OUT 0x80 /* host -> device */
+#define SRB_DIR_IN 0x40  /* device -> host */
 
 /* The open scanner (IO_NONE: none). */
 extern io_dev g_dev;
@@ -63,8 +63,10 @@ void io_close(io_dev d);
  * IO_SHORT is the callers' own: a reply shorter than it must be (POSIX
  * only; srb_errstr names it). */
 #define IO_SHORT (-4)
-int srb_exec(const BYTE *cdb, int cdb_len, BYTE dir,
-             BYTE *data, DWORD data_len, DWORD timeout_ms);
+int srb_exec(
+    const BYTE *cdb, int cdb_len, BYTE dir, BYTE *data, DWORD data_len,
+    DWORD timeout_ms
+);
 const char *srb_errstr(int r);
 
 /* The flood's queue: depth ReadExt-style data-in commands (cdb, blklen
@@ -72,15 +74,14 @@ const char *srb_errstr(int r);
  * (seq % depth). Each slot owns its buffer. */
 typedef struct io_queue io_queue;
 enum { IOQ_FULL = 0, IOQ_SHORT = 1, IOQ_TIMEOUT = -2, IOQ_ERROR = -3 };
-io_queue *ioq_open(int depth, const BYTE cdb[10], WORD blklen,
-                   DWORD timeout_ms);
+io_queue *ioq_open(int depth, const BYTE cdb[10], WORD blklen, DWORD timeout_ms);
 BYTE *ioq_buf(io_queue *q, int slot);
 /* 0 queued, -1 refused (printed as "flood issue <seq>: ...") */
 int ioq_issue(io_queue *q, int slot, long seq);
 /* Wait up to timeout_ms for the slot's command. IOQ_FULL: complete,
  * IOQ_SHORT: an underrun (normal: the host is ahead of the CCD; *got
- * bytes, maybe 0, never line data: Linux's empty read has 10), IOQ_TIMEOUT, IOQ_ERROR (printed as "flood read
- * <seq>: ..."). */
+ * bytes, maybe 0, never line data: Linux's empty read has 10), IOQ_TIMEOUT,
+ * IOQ_ERROR (printed as "flood read <seq>: ..."). */
 int ioq_reap(io_queue *q, int slot, long seq, DWORD timeout_ms, DWORD *got);
 /* Free the queue; cancel: first cancel or drain what is still in flight */
 void ioq_close(io_queue *q, int cancel);

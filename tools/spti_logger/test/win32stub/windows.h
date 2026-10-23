@@ -28,9 +28,9 @@ typedef unsigned long SIZE_T;
 typedef unsigned char BYTE;
 typedef void *LPSECURITY_ATTRIBUTES;
 typedef struct _OVERLAPPED {
-    ULONG_PTR Internal, InternalHigh;
-    DWORD Offset, OffsetHigh;
-    HANDLE hEvent;
+  ULONG_PTR Internal, InternalHigh;
+  DWORD Offset, OffsetHigh;
+  HANDLE hEvent;
 } OVERLAPPED;
 typedef struct _OVERLAPPED *LPOVERLAPPED;
 typedef unsigned long *PULONG;
@@ -58,36 +58,36 @@ typedef long LONG;
 #define ERROR_IO_PENDING 997L
 
 typedef struct _STARTUPINFOA {
-    DWORD cb;
-    void *reserved0;
-    char *lpDesktop;
-    char *lpTitle;
-    DWORD dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars;
-    DWORD dwFillAttribute;
-    DWORD dwFlags;
-    WORD wShowWindow;
-    WORD cbReserved2;
-    void *lpReserved2;
-    HANDLE hStdInput, hStdOutput, hStdError;
+  DWORD cb;
+  void *reserved0;
+  char *lpDesktop;
+  char *lpTitle;
+  DWORD dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars;
+  DWORD dwFillAttribute;
+  DWORD dwFlags;
+  WORD wShowWindow;
+  WORD cbReserved2;
+  void *lpReserved2;
+  HANDLE hStdInput, hStdOutput, hStdError;
 } STARTUPINFOA;
 
 typedef struct _PROCESS_INFORMATION {
-    HANDLE hProcess;
-    HANDLE hThread;
-    DWORD dwProcessId;
-    DWORD dwThreadId;
+  HANDLE hProcess;
+  HANDLE hThread;
+  DWORD dwProcessId;
+  DWORD dwThreadId;
 } PROCESS_INFORMATION;
 
 typedef DWORD (*LPTHREAD_START_ROUTINE)(LPVOID lpParameter);
 
 /* CRITICAL_SECTION (stub shape only — real one lives in winnt.h) */
 typedef struct _CRITICAL_SECTION {
-    void *DebugInfo;
-    long LockCount;
-    long RecursionCount;
-    HANDLE OwningThread;
-    HANDLE LockSemaphore;
-    ULONG_PTR SpinCount;
+  void *DebugInfo;
+  long LockCount;
+  long RecursionCount;
+  HANDLE OwningThread;
+  HANDLE LockSemaphore;
+  ULONG_PTR SpinCount;
 } CRITICAL_SECTION;
 typedef CRITICAL_SECTION *LPCRITICAL_SECTION;
 
@@ -98,25 +98,30 @@ void DeleteCriticalSection(LPCRITICAL_SECTION lpCriticalSection);
 
 HMODULE GetModuleHandleA(LPCSTR lpModuleName);
 FARPROC GetProcAddress(HMODULE hModule, LPCSTR lpProcName);
-LPVOID VirtualAlloc(LPVOID lpAddress, SIZE_T dwSize, DWORD flAllocationType,
-                    DWORD flProtect);
-BOOL VirtualProtect(LPVOID lpAddress, SIZE_T dwSize, DWORD flNewProtect,
-                    LPDWORD lpflOldProtect);
-BOOL FlushInstructionCache(HANDLE hProcess, LPCVOID lpBaseAddress, SIZE_T dwSize);
+LPVOID VirtualAlloc(
+    LPVOID lpAddress, SIZE_T dwSize, DWORD flAllocationType, DWORD flProtect
+);
+BOOL VirtualProtect(
+    LPVOID lpAddress, SIZE_T dwSize, DWORD flNewProtect, LPDWORD lpflOldProtect
+);
+BOOL FlushInstructionCache(
+    HANDLE hProcess, LPCVOID lpBaseAddress, SIZE_T dwSize
+);
 
 /* MEMORY_BASIC_INFORMATION + VirtualQuery (used by the payload sidecar to
  * guard dereferences of SRB data pointers) */
 typedef struct _MEMORY_BASIC_INFORMATION {
-    LPVOID BaseAddress;
-    LPVOID AllocationBase;
-    DWORD AllocationProtect;
-    SIZE_T RegionSize;
-    DWORD State;
-    DWORD Protect;
-    DWORD Type;
+  LPVOID BaseAddress;
+  LPVOID AllocationBase;
+  DWORD AllocationProtect;
+  SIZE_T RegionSize;
+  DWORD State;
+  DWORD Protect;
+  DWORD Type;
 } MEMORY_BASIC_INFORMATION;
-SIZE_T VirtualQuery(LPCVOID lpAddress, MEMORY_BASIC_INFORMATION *lpBuffer,
-                    SIZE_T dwLength);
+SIZE_T VirtualQuery(
+    LPCVOID lpAddress, MEMORY_BASIC_INFORMATION *lpBuffer, SIZE_T dwLength
+);
 
 #define MEM_COMMIT 0x1000
 #define PAGE_READONLY 0x02
@@ -130,23 +135,28 @@ HANDLE GetCurrentProcess(void);
 DWORD GetCurrentProcessId(void);
 DWORD GetTickCount(void);
 BOOL DisableThreadLibraryCalls(HMODULE hModule);
-BOOL CreateProcessA(LPCSTR lpApplicationName, LPSTR lpCommandLine,
-                    LPSECURITY_ATTRIBUTES lpProcessAttributes,
-                    LPSECURITY_ATTRIBUTES lpThreadAttributes,
-                    BOOL bInheritHandles, DWORD dwCreationFlags,
-                    LPVOID lpEnvironment, LPCSTR lpCurrentDirectory,
-                    STARTUPINFOA *lpStartupInfo,
-                    PROCESS_INFORMATION *lpProcessInformation);
+BOOL CreateProcessA(
+    LPCSTR lpApplicationName, LPSTR lpCommandLine,
+    LPSECURITY_ATTRIBUTES lpProcessAttributes,
+    LPSECURITY_ATTRIBUTES lpThreadAttributes, BOOL bInheritHandles,
+    DWORD dwCreationFlags, LPVOID lpEnvironment, LPCSTR lpCurrentDirectory,
+    STARTUPINFOA *lpStartupInfo, PROCESS_INFORMATION *lpProcessInformation
+);
 DWORD GetModuleFileNameA(HMODULE hModule, LPSTR lpFilename, DWORD nSize);
 DWORD GetEnvironmentVariableA(LPCSTR lpName, LPSTR lpBuffer, DWORD nSize);
-LPVOID VirtualAllocEx(HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize,
-                      DWORD flAllocationType, DWORD flProtect);
-BOOL WriteProcessMemory(HANDLE hProcess, LPVOID lpBaseAddress, LPCVOID lpBuffer,
-                        SIZE_T nSize, SIZE_T *lpNumberOfBytesWritten);
-HANDLE CreateRemoteThread(HANDLE hProcess, LPSECURITY_ATTRIBUTES lpThreadAttributes,
-                          SIZE_T dwStackSize,
-                          LPTHREAD_START_ROUTINE lpStartAddress, LPVOID lpParameter,
-                          DWORD dwCreationFlags, LPDWORD lpThreadId);
+LPVOID VirtualAllocEx(
+    HANDLE hProcess, LPVOID lpAddress, SIZE_T dwSize, DWORD flAllocationType,
+    DWORD flProtect
+);
+BOOL WriteProcessMemory(
+    HANDLE hProcess, LPVOID lpBaseAddress, LPCVOID lpBuffer, SIZE_T nSize,
+    SIZE_T *lpNumberOfBytesWritten
+);
+HANDLE CreateRemoteThread(
+    HANDLE hProcess, LPSECURITY_ATTRIBUTES lpThreadAttributes,
+    SIZE_T dwStackSize, LPTHREAD_START_ROUTINE lpStartAddress,
+    LPVOID lpParameter, DWORD dwCreationFlags, LPDWORD lpThreadId
+);
 DWORD WaitForSingleObject(HANDLE hHandle, DWORD dwMilliseconds);
 BOOL GetExitCodeThread(HANDLE hThread, LPDWORD lpExitCode);
 BOOL GetExitCodeProcess(HANDLE hProcess, LPDWORD lpExitCode);
@@ -156,36 +166,45 @@ BOOL CloseHandle(HANDLE hObject);
 DWORD GetLastError(void);
 
 /* --- names used by tools/poc/ftpoc.c --- */
-#define GENERIC_READ         0x80000000UL
-#define GENERIC_WRITE        0x40000000UL
-#define FILE_SHARE_READ      0x1
-#define FILE_SHARE_WRITE     0x2
-#define OPEN_EXISTING        3
+#define GENERIC_READ 0x80000000UL
+#define GENERIC_WRITE 0x40000000UL
+#define FILE_SHARE_READ 0x1
+#define FILE_SHARE_WRITE 0x2
+#define OPEN_EXISTING 3
 #define FILE_FLAG_OVERLAPPED 0x40000000UL
-#define CTRL_C_EVENT         0
-#define CTRL_BREAK_EVENT     1
-#define ERROR_MORE_DATA      234L
-HANDLE WINAPI CreateFileA(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD,
-                          DWORD, HANDLE);
-BOOL WINAPI DeviceIoControl(HANDLE, DWORD, LPVOID, DWORD, LPVOID, DWORD,
-                            LPDWORD, LPOVERLAPPED);
+#define CTRL_C_EVENT 0
+#define CTRL_BREAK_EVENT 1
+#define ERROR_MORE_DATA 234L
+HANDLE WINAPI CreateFileA(
+    LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE
+);
+BOOL WINAPI DeviceIoControl(
+    HANDLE, DWORD, LPVOID, DWORD, LPVOID, DWORD, LPDWORD, LPOVERLAPPED
+);
 BOOL WINAPI GetOverlappedResult(HANDLE, LPOVERLAPPED, LPDWORD, BOOL);
 BOOL WINAPI ResetEvent(HANDLE);
 BOOL WINAPI CancelIo(HANDLE);
 void WINAPI Sleep(DWORD);
 HANDLE WINAPI CreateEventA(LPSECURITY_ATTRIBUTES, BOOL, BOOL, LPCSTR);
-typedef BOOL (WINAPI *PHANDLER_ROUTINE)(DWORD);
+typedef BOOL(WINAPI *PHANDLER_ROUTINE)(DWORD);
 BOOL WINAPI SetConsoleCtrlHandler(PHANDLER_ROUTINE, BOOL);
 #define MOVEFILE_REPLACE_EXISTING 0x1
 BOOL WINAPI MoveFileExA(LPCSTR, LPCSTR, DWORD);
 
 /* --- names used by tools/detail/ring.c and ftpoc's detailed scans --- */
 BOOL WINAPI SetEvent(HANDLE);
-HANDLE WINAPI CreateThread(LPSECURITY_ATTRIBUTES, SIZE_T,
-                           LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
-typedef union { struct { DWORD LowPart, HighPart; } u;
-                unsigned long long QuadPart; } ULARGE_INTEGER;
-BOOL WINAPI GetDiskFreeSpaceExA(LPCSTR, ULARGE_INTEGER *, ULARGE_INTEGER *,
-                                ULARGE_INTEGER *);
+HANDLE WINAPI CreateThread(
+    LPSECURITY_ATTRIBUTES, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD,
+    LPDWORD
+);
+typedef union {
+  struct {
+    DWORD LowPart, HighPart;
+  } u;
+  unsigned long long QuadPart;
+} ULARGE_INTEGER;
+BOOL WINAPI GetDiskFreeSpaceExA(
+    LPCSTR, ULARGE_INTEGER *, ULARGE_INTEGER *, ULARGE_INTEGER *
+);
 
 #endif /* FT_WIN32STUB_WINDOWS_H */

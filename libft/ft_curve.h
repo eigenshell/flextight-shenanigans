@@ -10,8 +10,8 @@
 #define FT_CURVE_MAX 16
 
 typedef struct {
-    int n;
-    float x[FT_CURVE_MAX], y[FT_CURVE_MAX];
+  int n;
+  float x[FT_CURVE_MAX], y[FT_CURVE_MAX];
 } ft_curve;
 
 /* the straight line (0,0)-(1,1) */

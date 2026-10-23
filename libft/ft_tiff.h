@@ -18,18 +18,18 @@
 #define FT_TILE 256
 
 typedef enum {
-    FT_TIFF_DNG,      /* LinearRaw RGB, DNG 1.4 tags (ft_dng.h), crop tags */
-    FT_TIFF_RGB,      /* RGB, 3 x 16 bit */
-    FT_TIFF_GRAY      /* BlackIsZero, 1 x 16 bit */
+  FT_TIFF_DNG, /* LinearRaw RGB, DNG 1.4 tags (ft_dng.h), crop tags */
+  FT_TIFF_RGB, /* RGB, 3 x 16 bit */
+  FT_TIFF_GRAY /* BlackIsZero, 1 x 16 bit */
 } ft_tiff_kind;
 
 typedef struct {
-    ft_tiff_kind kind;
-    int w, h;                    /* columns (scan lines), rows (CCD px) */
-    const ft_image *meta;        /* make, model, desc, ppi, xyz_to_rgb;
-                                    its pixels are not used */
-    const unsigned char *icc;    /* RGB / GRAY: ICC profile or NULL */
-    unsigned long icc_n;
+  ft_tiff_kind kind;
+  int w, h;                 /* columns (scan lines), rows (CCD px) */
+  const ft_image *meta;     /* make, model, desc, ppi, xyz_to_rgb;
+                               its pixels are not used */
+  const unsigned char *icc; /* RGB / GRAY: ICC profile or NULL */
+  unsigned long icc_n;
 } ft_tiff_opts;
 
 typedef struct ft_tiffw ft_tiffw;
