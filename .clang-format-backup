@@ -1,0 +1,24 @@
+---
+Language: C
+Standard: c11
+
+BreakAfterReturnType: None              # keep `void` on same line as `foo(...)`
+AlignAfterOpenBracket: BlockIndent
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: None
+BinPackArguments: true
+BinPackParameters: true
+BreakBeforeBraces: Attach
+ColumnLimit: 80
+ContinuationIndentWidth: 4
+IndentWidth: 2
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+PenaltyExcessCharacter: 100
+PenaltyReturnTypeOnItsOwnLine: 10000     # 👈 high penalty = "don't break here"
+PointerAlignment: Right
+SortIncludes: false
+SpaceBeforeParens: Never

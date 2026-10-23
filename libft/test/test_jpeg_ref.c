@@ -7,15 +7,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "ft_icc.h"
+#include "ft_jpeg.h"
+#include "test/ftest.h"
 /* jpeglib.h uses FILE and size_t without including <stdio.h> itself,
  * so it has to come after the standard headers. Keep clang-format from
  * sorting it to the top. */
 /* clang-format off */
 #include <jpeglib.h>
 /* clang-format on */
-#include "ft_icc.h"
-#include "ft_jpeg.h"
-#include "test/ftest.h"
 
 /* libjpeg-turbo with the settings the old ft_jpeg_write used */
 static unsigned char* ref_encode(const unsigned char* rgb, int w, int h,

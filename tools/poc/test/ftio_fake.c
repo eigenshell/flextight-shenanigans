@@ -204,7 +204,8 @@ int io_busreset(void) {
 
 void io_catch_interrupt(volatile int* flag) { (void)flag; }
 
-DWORD io_ms(void) { return g_now; }
+DWORD
+io_ms(void) { return g_now; }
 
 void io_sleep(DWORD ms) { g_now += ms; }
 

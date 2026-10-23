@@ -469,7 +469,8 @@ void io_catch_interrupt(volatile int* flag) {
   pthread_detach(t);
 }
 
-DWORD io_ms(void) {
+DWORD
+io_ms(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (DWORD)((unsigned long long)ts.tv_sec * 1000u +

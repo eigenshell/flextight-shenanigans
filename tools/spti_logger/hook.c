@@ -207,12 +207,13 @@ static void ft_log_lasterr(unsigned long h, unsigned long code,
  * app has waited for the I/O and the buffer is final (session 2 proved that
  * without this, async responses only appear as reused-buffer leftovers).
  * Silent on any doubt: a bad guess must never crash the host app.      */
-#define FT_BUF_SIDE_CAP 8192 /* per-dump cap: 3b microcode chunks are 4106 B \
-                              */
-#define FT_CAND_SRBPTR 0x36  /* dword at SRB offset 36 (descriptor/payload) */
-#define FT_CAND_IND0 0x51    /* *(u32*)(srbptr_target+0) */
-#define FT_CAND_IND1 0x52    /* *(u32*)(srbptr_target+4) */
-#define FT_CAND_OUTBUF 0x60  /* lpOutBuffer itself */
+#define FT_BUF_SIDE_CAP                                                     \
+  8192                      /* per-dump cap: 3b microcode chunks are 4106 B \
+                             */
+#define FT_CAND_SRBPTR 0x36 /* dword at SRB offset 36 (descriptor/payload) */
+#define FT_CAND_IND0 0x51   /* *(u32*)(srbptr_target+0) */
+#define FT_CAND_IND1 0x52   /* *(u32*)(srbptr_target+4) */
+#define FT_CAND_OUTBUF 0x60 /* lpOutBuffer itself */
 
 /* Is [ptr, ptr+len) committed and readable? len is clamped by the caller. */
 static int ft_buf_readable(const void* ptr, size_t len) {
