@@ -2480,8 +2480,8 @@ static void put_px(unsigned char* img, int w, int h, long x, long y,
   img[o + 2] = b;
 }
 
-static void draw_number(unsigned char* img, int w, int h, long x, long y,
-                        int v) {
+static voiddraw_number(unsigned char* img, int w, int h, long x, long y,
+                       int v) {
   char s[16];
   int i, r, c, k, scale = 4;
   snprintf(s, sizeof s, "%d", v);
