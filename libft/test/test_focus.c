@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include "ft_focus.h"
-#include "test/ftest.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "ft_focus.h"
+#include "test/ftest.h"
 
 int main(void) {
   long c, o, shift;
@@ -130,7 +131,7 @@ int main(void) {
   {
     float crisp[128], soft[128], flat[128], ramp[128], dim[128];
     int i;
-    for(i = 0; i < 128; i++) {
+    for (i = 0; i < 128; i++) {
       crisp[i] = (i / 4) % 2 ? 0.8f : 0.2f;
       soft[i] = 0.5f + 0.15f * (float)sin(i * 3.14159 / 4);
       flat[i] = 0.5f;
@@ -155,12 +156,11 @@ int main(void) {
     static float crisp[W * H], soft[W * H], clean[W];
     unsigned st = 12345;
     int x, y, k;
-    for(x = 0; x < W; x++)
-      clean[x] = (x / 12) % 2 ? 0.014f : 0.006f;
-    for(y = 0; y < H; y++)
-      for(x = 0; x < W; x++) {
+    for (x = 0; x < W; x++) clean[x] = (x / 12) % 2 ? 0.014f : 0.006f;
+    for (y = 0; y < H; y++)
+      for (x = 0; x < W; x++) {
         double u, v, n, sm = 0;
-        for(k = -5; k <= 5; k++) /* defocus: 11-px box */
+        for (k = -5; k <= 5; k++) /* defocus: 11-px box */
           sm += clean[(x + k + W) % W];
         st = st * 1103515245u + 12345u;
         u = (((st >> 8) & 0xffffff) + 0.5) / 16777216.0;
@@ -177,7 +177,7 @@ int main(void) {
   {
     ft_lens a = ft_lens_default, b;
     ft_err e;
-    FILE *f = tmpfile();
+    FILE* f = tmpfile();
     CHECK(f != NULL);
     CHECK(ft_lens_write(&a, f) == 0);
     rewind(f);
@@ -235,7 +235,7 @@ int main(void) {
     long L[8] = {911050, 922360, 938639, 959966,
                  981011, 989872, 997296, 1004246};
     int i;
-    for(i = 0; i < 8; i++) {
+    for (i = 0; i < 8; i++) {
       CHECK(ft_optics_for(&ft_lens_default, M[i], &c, &o) == 0);
       CHECK(labs(c - C[i]) < 700 && labs(o - L[i]) < 350);
     }
@@ -253,16 +253,16 @@ int main(void) {
     ft_lens keep = {1, 2, 3, 4, 0, {0}, {0}}, l = keep;
     ft_err e;
     char big[400];
-    static const char *bad[] = {
-        "film = 1\nw = 2\nfl = 3\np = nan\n",
-        "film = 1\nw = 2\nfl = 3\np = 1 junk\n",
-        "film = 1\nw = 2\nfl = 3\np = 1\nbogus = 5\n",
-        "film = 1\nw = 2\nfl = 3\np = 0\n",
-        "film = 1\nw = 2\nfl = -3\np = 1\n",
+    static const char* bad[] = {
+      "film = 1\nw = 2\nfl = 3\np = nan\n",
+      "film = 1\nw = 2\nfl = 3\np = 1 junk\n",
+      "film = 1\nw = 2\nfl = 3\np = 1\nbogus = 5\n",
+      "film = 1\nw = 2\nfl = 3\np = 0\n",
+      "film = 1\nw = 2\nfl = -3\np = 1\n",
     };
     int i;
-    FILE *f;
-    for(i = 0; i < 5; i++) {
+    FILE* f;
+    for (i = 0; i < 5; i++) {
       f = tmpfile();
       fputs(bad[i], f);
       rewind(f);
@@ -286,31 +286,32 @@ int main(void) {
     ft_lens keep = {1, 2, 3, 4, 0, {0}, {0}}, l = keep, s;
     ft_err e;
     char line[200], text[400];
-    static const char good[] = "# fit\n  # x\nfilm = 1\nw = 2\nfl = 3\n"
-                               "p = 4"; /* no last '\n' */
-    static const char *bad[] = {
-        "film = 1\nw = 2\nfl = 3\np = nan\n",
-        "film = 1\nw = 2\nfl = 3\np = 1 junk\n",
-        "film = 1\nw = 2\nfl = 3\np = 1\nbogus = 5\n",
-        "film = 1\nw = 2\nfl = 3\np = 0\n",
-        "film = 1\nw = 2\n",
+    static const char good[] =
+      "# fit\n  # x\nfilm = 1\nw = 2\nfl = 3\n"
+      "p = 4"; /* no last '\n' */
+    static const char* bad[] = {
+      "film = 1\nw = 2\nfl = 3\np = nan\n",
+      "film = 1\nw = 2\nfl = 3\np = 1 junk\n",
+      "film = 1\nw = 2\nfl = 3\np = 1\nbogus = 5\n",
+      "film = 1\nw = 2\nfl = 3\np = 0\n",
+      "film = 1\nw = 2\n",
     };
-    static const char *msg[] = {
-        "focus file line 4: value not finite",
-        "focus file line 4: expected key = number",
-        "focus file line 5: unknown key bogus",
-        "focus file: fl and p must be positive",
-        "focus file: needs film, w, fl and p",
+    static const char* msg[] = {
+      "focus file line 4: value not finite",
+      "focus file line 4: expected key = number",
+      "focus file line 5: unknown key bogus",
+      "focus file: fl and p must be positive",
+      "focus file: needs film, w, fl and p",
     };
     int i;
-    FILE *f;
+    FILE* f;
     CHECK(ft_lens_parse(&l, good, sizeof good - 1, &e) == 0);
     CHECK(l.film == 1 && l.w == 2 && l.fl == 3 && l.p == 4);
     /* n bytes only: "p = 4" cut to "p = " */
     l = keep;
     CHECK(ft_lens_parse(&l, good, sizeof good - 2, &e) == -1);
     CHECK(strcmp(e.msg, "focus file line 6: expected key = number") == 0);
-    for(i = 0; i < 5; i++) {
+    for (i = 0; i < 5; i++) {
       l = keep;
       CHECK(ft_lens_parse(&l, bad[i], strlen(bad[i]), &e) == -1);
       CHECK(strcmp(e.msg, msg[i]) == 0);
@@ -329,13 +330,11 @@ int main(void) {
     line[190] = 0;
     snprintf(text, sizeof text, "# %s\nfilm = 1\nw = 2\nfl = 3\np = 4\n", line);
     CHECK(ft_lens_parse(&l, text, strlen(text), &e) == 0);
-    for(i = 158; i <= 159; i++) {
-      int k = snprintf(
-          text, sizeof text,
-          "film = 1%*s\nw = 2\nfl = 3\n"
-          "p = 4\n",
-          i - 8, ""
-      );
+    for (i = 158; i <= 159; i++) {
+      int k = snprintf(text, sizeof text,
+                       "film = 1%*s\nw = 2\nfl = 3\n"
+                       "p = 4\n",
+                       i - 8, "");
       int rp = ft_lens_parse(&l, text, (size_t)k, &e), rs;
       f = tmpfile();
       fputs(text, f);
@@ -356,14 +355,10 @@ int main(void) {
   CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 2000, 1), 3651, 365.1);
   CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 1500, 1), 5653, 565.3);
   CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 6300, 1), 650.9, 0.5);
-  CHECK_NEAR(
-      ft_lens_dof95(&ft_lens_default, 3150, 2),
-      2 * ft_lens_dof95(&ft_lens_default, 3150, 1), 1e-9
-  );
-  CHECK(
-      ft_lens_dof95(&ft_lens_default, 3150, 0) ==
-      ft_lens_dof95(&ft_lens_default, 3150, 1)
-  );
+  CHECK_NEAR(ft_lens_dof95(&ft_lens_default, 3150, 2),
+             2 * ft_lens_dof95(&ft_lens_default, 3150, 1), 1e-9);
+  CHECK(ft_lens_dof95(&ft_lens_default, 3150, 0) ==
+        ft_lens_dof95(&ft_lens_default, 3150, 1));
   {
     ft_lens l = ft_lens_default;
     double m = 2 * l.p * 3000;

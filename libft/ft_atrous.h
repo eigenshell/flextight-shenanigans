@@ -32,21 +32,16 @@ size_t ft_atrous_scratch_bytes(int w, int band_h);
 
 /* one smoothing step at scale j (holes 2^j): out = c_{j+1} from in = c_j,
  * w x h, mirrored edges. out must not alias in; row: w floats. */
-void ft_atrous_smooth(
-    const float *in, int w, int h, int j, float *out, float *row
-);
+void ft_atrous_smooth(const float* in, int w, int h, int j, float* out,
+                      float* row);
 
 /* the shrinkage run on rows [y0, y1) of a w x h plane: out receives those
  * rows (at their own offsets in a w x h plane), in is read with the halo.
  * NaN/inf in the input count as 0. out must not alias in. */
-void ft_atrous_band(
-    const float *in, int w, int h, int y0, int y1, float *out, double k,
-    double sigma, const double *wts, void *scratch
-);
+void ft_atrous_band(const float* in, int w, int h, int y0, int y1, float* out,
+                    double k, double sigma, const double* wts, void* scratch);
 /* the whole plane; out may equal in */
-void ft_atrous(
-    const float *in, int w, int h, float *out, double k, double sigma,
-    const double *wts, void *scratch
-);
+void ft_atrous(const float* in, int w, int h, float* out, double k,
+               double sigma, const double* wts, void* scratch);
 
 #endif

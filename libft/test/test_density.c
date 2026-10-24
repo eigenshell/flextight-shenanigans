@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Pinned codes were computed by hand (Python, double precision) from the
  * formula in ft_density.h, not from this code. */
-#include "ft_density.h"
-#include "test/ftest.h"
 #include <math.h>
 #include <string.h>
+
+#include "ft_density.h"
+#include "test/ftest.h"
 
 static ft_dens g_d; /* 384 KB: not on the stack */
 
@@ -39,9 +40,8 @@ int main(void) {
   {
     long u;
     int c, mono = 1;
-    for(c = 0; c < 3; c++)
-      for(u = 2; u < 65536; u++)
-        mono &= g_d.lut[c][u] <= g_d.lut[c][u - 1];
+    for (c = 0; c < 3; c++)
+      for (u = 2; u < 65536; u++) mono &= g_d.lut[c][u] <= g_d.lut[c][u - 1];
     CHECK(mono);
   }
 

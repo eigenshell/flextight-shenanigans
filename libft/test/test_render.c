@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+#include <stdint.h>
+#include <string.h>
+
 #include "ft_out.h"
 #include "ft_render.h"
 #include "test/ftest.h"
-#include <stdint.h>
-#include <string.h>
 
 static ft_render cr; /* ~380 KB: static, not on the stack */
 
@@ -20,35 +21,31 @@ static uint32_t fbits(float f) {
 }
 
 /* worst |encode(lut) - encode(direct)| over n log-uniform pixels */
-static double lut_error(const ft_recipe *r, int n) {
+static double lut_error(const ft_recipe* r, int n) {
   double worst = 0;
   ft_err e;
   int i, c;
   CHECK(ft_render_compile(r, &cr, &e) == 0);
-  for(i = 0; i < n; i++) {
+  for (i = 0; i < n; i++) {
     float t[3], a[3], b[3];
-    for(c = 0; c < 3; c++)
-      t[c] = (float)pow(10, -4.5 + urand() * 4.6);
+    for (c = 0; c < 3; c++) t[c] = (float)pow(10, -4.5 + urand() * 4.6);
     ft_render_apply(&cr, t, a, 1);
     ft_render_direct(r, t, b);
-    for(c = 0; c < 3; c++) {
+    for (c = 0; c < 3; c++) {
       double d = fabs(ft_srgb_encode(a[c]) - ft_srgb_encode(b[c]));
-      if(d > worst)
-        worst = d;
+      if (d > worst) worst = d;
     }
   }
   {
     static const float odd[] = {0, -1, 1e-6f, 1.26f, 1.3f, 2, (float)INFINITY};
-    for(i = 0; i < (int)(sizeof odd / sizeof *odd); i++) {
+    for (i = 0; i < (int)(sizeof odd / sizeof *odd); i++) {
       float t[3], a[3], b[3];
-      for(c = 0; c < 3; c++)
-        t[c] = odd[i];
+      for (c = 0; c < 3; c++) t[c] = odd[i];
       ft_render_apply(&cr, t, a, 1);
       ft_render_direct(r, t, b);
-      for(c = 0; c < 3; c++) {
+      for (c = 0; c < 3; c++) {
         double d = fabs(ft_srgb_encode(a[c]) - ft_srgb_encode(b[c]));
-        if(d > worst)
-          worst = d;
+        if (d > worst) worst = d;
       }
     }
   }
@@ -56,7 +53,7 @@ static double lut_error(const ft_recipe *r, int n) {
 }
 
 /* the direct output for one grey-ish pixel, channel c */
-static float px(const ft_recipe *r, float t0, float t1, float t2, int c) {
+static float px(const ft_recipe* r, float t0, float t1, float t2, int c) {
   float t[3], o[3];
   t[0] = t0;
   t[1] = t1;
@@ -73,13 +70,11 @@ int main(void) {
 
   /* LUT layout constants match the float bit patterns */
   CHECK(fbits((float)FT_T_FLOOR) >> FT_RENDER_IN_SHIFT == FT_RENDER_IN_K0);
-  CHECK(
-      (fbits(FT_RENDER_T_MAX) >> FT_RENDER_IN_SHIFT) - FT_RENDER_IN_K0 + 2 ==
-      FT_RENDER_IN_N
-  );
+  CHECK((fbits(FT_RENDER_T_MAX) >> FT_RENDER_IN_SHIFT) - FT_RENDER_IN_K0 + 2 ==
+        FT_RENDER_IN_N);
 
   /* defaults validate; each bad field is named */
-  for(c = FT_RENDER_NEG; c <= FT_RENDER_BW; c++) {
+  for (c = FT_RENDER_NEG; c <= FT_RENDER_BW; c++) {
     ft_recipe_default(&r, (ft_render_mode)c);
     CHECK(ft_recipe_validate(&r, &e) == 0);
   }
@@ -160,7 +155,7 @@ int main(void) {
     s[5].range[1] = 1.2f;
     s[5].grade = 2.5f;
     CHECK(ft_curve_preset("medium", &s[5].master) == 0);
-    for(i = 0; i < 6; i++)
+    for (i = 0; i < 6; i++)
       CHECK_NEAR(lut_error(&s[i], 100000), 0, 2.0 / 65535);
   }
 
@@ -178,11 +173,9 @@ int main(void) {
     /* pinned by hand: mid grey is u = 0, s = 0.5, P = 1.0 -> 0.1 */
     CHECK_NEAR(px(&r, g0, g1, g2, 1), 0.1, 1e-6);
     /* film base: n = 0, u = 0.5, s = 1/(1+exp(-3)), P = 2 s */
-    CHECK_NEAR(
-        px(&r, (float)pow(10, -0.25), (float)pow(10, -0.6),
-           (float)pow(10, -0.9), 1),
-        pow(10, -2 / (1 + exp(-3))), 1e-6
-    );
+    CHECK_NEAR(px(&r, (float)pow(10, -0.25), (float)pow(10, -0.6),
+                  (float)pow(10, -0.9), 1),
+               pow(10, -2 / (1 + exp(-3))), 1e-6);
     /* + red tint = redder */
     q = r;
     q.tint[0] = 20;
@@ -205,14 +198,12 @@ int main(void) {
     /* the paper: from black (film base) to white (dense), monotone */
     {
       float prev = 2;
-      for(i = 0; i <= 300; i++) {
+      for (i = 0; i <= 300; i++) {
         double k = i / 100.0; /* D above base */
-        float v =
-            px(&r, (float)pow(10, -(0.25 + k)), (float)pow(10, -(0.6 + k)),
-               (float)pow(10, -(0.9 + k)), 1);
+        float v = px(&r, (float)pow(10, -(0.25 + k)),
+                     (float)pow(10, -(0.6 + k)), (float)pow(10, -(0.9 + k)), 1);
         CHECK(v >= prev - 1e-7 || i == 0);
-        if(i == 0)
-          CHECK(v < 0.02); /* base: near black */
+        if (i == 0) CHECK(v < 0.02); /* base: near black */
         prev = v;
       }
       CHECK(prev > 0.95); /* dense: near white */
@@ -249,10 +240,9 @@ int main(void) {
       CHECK_NEAR(r.base[2], 0.3, 1e-5);
     }
     CHECK(ft_render_compile(&r, &cr, &e) == 0);
-    for(i = 0; i < 1000; i++) {
+    for (i = 0; i < 1000; i++) {
       float t[3], o[3];
-      for(c = 0; c < 3; c++)
-        t[c] = (float)pow(10, -urand() * 3);
+      for (c = 0; c < 3; c++) t[c] = (float)pow(10, -urand() * 3);
       ft_render_apply(&cr, t, o, 1);
       CHECK(o[0] == o[1] && o[1] == o[2]);
     }
@@ -262,26 +252,18 @@ int main(void) {
   ft_recipe_default(&r, FT_RENDER_NEG);
   CHECK(ft_render_compile(&r, &cr, &e) == 0);
   {
-    float bad[9] = {(float)NAN,
-                    (float)NAN,
-                    (float)NAN,
-                    (float)INFINITY,
-                    -(float)INFINITY,
-                    -1,
-                    0,
-                    2,
-                    0.01f};
+    float bad[9] = {
+      (float)NAN, (float)NAN, (float)NAN, (float)INFINITY, -(float)INFINITY, -1,
+      0,          2,          0.01f};
     float o[9],
-        floor_px[3] = {(float)FT_T_FLOOR, (float)FT_T_FLOOR, (float)FT_T_FLOOR},
-        fo[3];
+      floor_px[3] = {(float)FT_T_FLOOR, (float)FT_T_FLOOR, (float)FT_T_FLOOR},
+      fo[3];
     ft_render_apply(&cr, bad, o, 3);
-    for(i = 0; i < 9; i++)
-      CHECK(isfinite(o[i]) && o[i] >= 0 && o[i] <= 1);
+    for (i = 0; i < 9; i++) CHECK(isfinite(o[i]) && o[i] >= 0 && o[i] <= 1);
     ft_render_apply(&cr, floor_px, fo, 1);
     CHECK(o[0] == fo[0]); /* NaN -> floor */
     ft_render_apply(&cr, bad, bad, 3);
-    for(i = 0; i < 9; i++)
-      CHECK(bad[i] == o[i]);
+    for (i = 0; i < 9; i++) CHECK(bad[i] == o[i]);
   }
 
   /* whole image: in place, now linear Rec.2020 */
@@ -289,21 +271,19 @@ int main(void) {
     ft_image im;
     ft_image_init(&im);
     CHECK(ft_image_alloc(&im, 4, 2, &e) == 0);
-    for(i = 0; i < 24; i++)
-      im.rgb[i] = 0.1f;
+    for (i = 0; i < 24; i++) im.rgb[i] = 0.1f;
     ft_render_image(&cr, &im);
     CHECK_NEAR(im.xyz_to_rgb[0], 1.7166511880, 1e-9);
     CHECK(im.rgb[0] > 0 && im.rgb[0] < 1);
 
     /* the positive writer: grey 0.18 (Rec.2020) -> sRGB 0.4614 */
     {
-      const ft_writer *w = ft_writer_find("positive");
+      const ft_writer* w = ft_writer_find("positive");
       unsigned char b[64];
-      const char *path = "test/positive_out.png";
-      FILE *f;
+      const char* path = "test/positive_out.png";
+      FILE* f;
       CHECK(w != NULL && strcmp(w->ext, "_positive.png") == 0);
-      for(i = 0; i < 24; i++)
-        im.rgb[i] = 0.18f;
+      for (i = 0; i < 24; i++) im.rgb[i] = 0.18f;
       CHECK(w->write(path, &im, &e) == 0);
       f = fopen(path, "rb");
       CHECK(f != NULL && fread(b, 1, sizeof b, f) == sizeof b);

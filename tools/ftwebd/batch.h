@@ -24,16 +24,16 @@ typedef struct {
 /* a slot at the tail: a free one, else the oldest ended job's; NULL when
  * every slot is queued or running. The next id, JOB_QUEUED, exit -1, the
  * rest zero */
-batch_job *batch_add(void);
-batch_job *batch_find(int id); /* NULL: none (or recycled) */
-batch_job *batch_next(void);   /* the oldest queued; NULL none */
+batch_job* batch_add(void);
+batch_job* batch_find(int id); /* NULL: none (or recycled) */
+batch_job* batch_next(void);   /* the oldest queued; NULL none */
 /* the running job, else the latest; NULL when there has been none */
-batch_job *batch_current(void);
-void batch_drop(batch_job *j); /* its slot freed */
-int batch_ended(const batch_job *j);
-const char *batch_state(const batch_job *j); /* "queued", ... */
+batch_job* batch_current(void);
+void batch_drop(batch_job* j); /* its slot freed */
+int batch_ended(const batch_job* j);
+const char* batch_state(const batch_job* j); /* "queued", ... */
 /* [{"id","op","strip","state","exit"},...] in id order -> out; its
  * length, -1 if it does not fit */
-long batch_json(char *out, size_t n);
+long batch_json(char* out, size_t n);
 
 #endif

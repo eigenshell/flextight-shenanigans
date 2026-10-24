@@ -20,24 +20,22 @@
 #error "inject must be built 32-bit (FlexColor is a 32-bit app)"
 #endif
 
-static void ft_strcpy(char *dst, const char *src) {
-  while((*dst++ = *src++) != '\0')
-    ;
+static void ft_strcpy(char* dst, const char* src) {
+  while ((*dst++ = *src++) != '\0');
 }
 
-static size_t ft_strlen_(const char *s) {
-  const char *p = s;
-  while(*p)
-    p++;
+static size_t ft_strlen_(const char* s) {
+  const char* p = s;
+  while (*p) p++;
   return (size_t)(p - s);
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   STARTUPINFOA si;
   PROCESS_INFORMATION pi;
   char self[MAX_PATH];
   char dllpath[MAX_PATH + 16];
-  char *slash;
+  char* slash;
   size_t dirlen, dlllen;
   LPVOID remote;
   SIZE_T written;
@@ -45,7 +43,7 @@ int main(int argc, char **argv) {
   DWORD wres, hmod, exitcode;
   FARPROC loadlib;
 
-  if(argc < 2) {
+  if (argc < 2) {
     fprintf(stderr, "usage: inject.exe <path\\to\\FlexColor.exe>\n");
     return 2;
   }
@@ -54,30 +52,24 @@ int main(int argc, char **argv) {
   si.cb = sizeof si;
   memset(&pi, 0, sizeof pi);
 
-  if(!CreateProcessA(
-         argv[1], NULL, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL, &si,
-         &pi
-     )) {
-    fprintf(
-        stderr, "inject: CreateProcessA failed (%lu)\n",
-        (unsigned long)GetLastError()
-    );
+  if (!CreateProcessA(argv[1], NULL, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL,
+                      NULL, &si, &pi)) {
+    fprintf(stderr, "inject: CreateProcessA failed (%lu)\n",
+            (unsigned long)GetLastError());
     return 1;
   }
 
   /* ft_hook.dll lives next to inject.exe */
-  if(!GetModuleFileNameA(NULL, self, MAX_PATH)) {
-    fprintf(
-        stderr, "inject: GetModuleFileNameA failed (%lu)\n",
-        (unsigned long)GetLastError()
-    );
+  if (!GetModuleFileNameA(NULL, self, MAX_PATH)) {
+    fprintf(stderr, "inject: GetModuleFileNameA failed (%lu)\n",
+            (unsigned long)GetLastError());
     TerminateProcess(pi.hProcess, 1);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     return 1;
   }
   slash = strrchr(self, '\\');
-  if(!slash) {
+  if (!slash) {
     fprintf(stderr, "inject: no backslash in own path\n");
     TerminateProcess(pi.hProcess, 1);
     CloseHandle(pi.hThread);
@@ -90,25 +82,20 @@ int main(int argc, char **argv) {
   ft_strcpy(dllpath + dirlen, "ft_hook.dll");
   dlllen = ft_strlen_(dllpath) + 1; /* include NUL */
 
-  remote = VirtualAllocEx(
-      pi.hProcess, NULL, dlllen, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE
-  );
-  if(!remote) {
-    fprintf(
-        stderr, "inject: VirtualAllocEx failed (%lu)\n",
-        (unsigned long)GetLastError()
-    );
+  remote = VirtualAllocEx(pi.hProcess, NULL, dlllen, MEM_COMMIT | MEM_RESERVE,
+                          PAGE_READWRITE);
+  if (!remote) {
+    fprintf(stderr, "inject: VirtualAllocEx failed (%lu)\n",
+            (unsigned long)GetLastError());
     TerminateProcess(pi.hProcess, 1);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     return 1;
   }
-  if(!WriteProcessMemory(pi.hProcess, remote, dllpath, dlllen, &written) ||
-     written != dlllen) {
-    fprintf(
-        stderr, "inject: WriteProcessMemory failed (%lu)\n",
-        (unsigned long)GetLastError()
-    );
+  if (!WriteProcessMemory(pi.hProcess, remote, dllpath, dlllen, &written) ||
+      written != dlllen) {
+    fprintf(stderr, "inject: WriteProcessMemory failed (%lu)\n",
+            (unsigned long)GetLastError());
     TerminateProcess(pi.hProcess, 1);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
@@ -116,26 +103,21 @@ int main(int argc, char **argv) {
   }
 
   loadlib = GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryA");
-  if(!loadlib) {
-    fprintf(
-        stderr, "inject: GetProcAddress(LoadLibraryA) failed (%lu)\n",
-        (unsigned long)GetLastError()
-    );
+  if (!loadlib) {
+    fprintf(stderr, "inject: GetProcAddress(LoadLibraryA) failed (%lu)\n",
+            (unsigned long)GetLastError());
     TerminateProcess(pi.hProcess, 1);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     return 1;
   }
 
-  hthread = CreateRemoteThread(
-      pi.hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)(void *)loadlib, remote, 0,
-      NULL
-  );
-  if(!hthread) {
-    fprintf(
-        stderr, "inject: CreateRemoteThread failed (%lu)\n",
-        (unsigned long)GetLastError()
-    );
+  hthread =
+    CreateRemoteThread(pi.hProcess, NULL, 0,
+                       (LPTHREAD_START_ROUTINE)(void*)loadlib, remote, 0, NULL);
+  if (!hthread) {
+    fprintf(stderr, "inject: CreateRemoteThread failed (%lu)\n",
+            (unsigned long)GetLastError());
     TerminateProcess(pi.hProcess, 1);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
@@ -148,15 +130,13 @@ int main(int argc, char **argv) {
    * needlessly kill FlexColor. */
   wres = WaitForSingleObject(hthread, INFINITE);
   hmod = 0;
-  if(wres == WAIT_OBJECT_0)
+  if (wres == WAIT_OBJECT_0)
     GetExitCodeThread(hthread, &hmod); /* = HINSTANCE of loaded DLL */
   CloseHandle(hthread);
 
-  if(wres != WAIT_OBJECT_0 || hmod == 0) {
-    fprintf(
-        stderr, "inject: remote LoadLibrary failed (wait=%lu hmod=%lu)\n",
-        (unsigned long)wres, (unsigned long)hmod
-    );
+  if (wres != WAIT_OBJECT_0 || hmod == 0) {
+    fprintf(stderr, "inject: remote LoadLibrary failed (wait=%lu hmod=%lu)\n",
+            (unsigned long)wres, (unsigned long)hmod);
     TerminateProcess(pi.hProcess, 1);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);

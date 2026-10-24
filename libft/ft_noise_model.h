@@ -29,8 +29,7 @@
  * 0: ok. 1: ok, but a value was clamped (S < 0 or non-finite -> 0, O below
  * 0.25 DN^2 -> that floor); e says which. -1: too few dark or white lines
  * (or a degenerate span), no profile; e says why. */
-int ft_noise_model(
-    const unsigned short *cal, int lines, int px, double prof[6], ft_err *e
-);
+int ft_noise_model(const unsigned short* cal, int lines, int px, double prof[6],
+                   ft_err* e);
 
 #endif

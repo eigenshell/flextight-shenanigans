@@ -26,9 +26,9 @@ typedef enum {
 typedef struct {
   ft_tiff_kind kind;
   int w, h;                 /* columns (scan lines), rows (CCD px) */
-  const ft_image *meta;     /* make, model, desc, ppi, xyz_to_rgb;
+  const ft_image* meta;     /* make, model, desc, ppi, xyz_to_rgb;
                                its pixels are not used */
-  const unsigned char *icc; /* RGB / GRAY: ICC profile or NULL */
+  const unsigned char* icc; /* RGB / GRAY: ICC profile or NULL */
   unsigned long icc_n;
 } ft_tiff_opts;
 
@@ -37,18 +37,18 @@ typedef struct ft_tiffw ft_tiffw;
 /* bytes the file will take (header excluded: < 4 KB more) */
 double ft_tiff_bytes(ft_tiff_kind kind, int w, int h);
 /* creates path and writes the header; NULL with e filled on failure */
-ft_tiffw *ft_tiffw_open(const char *path, const ft_tiff_opts *o, ft_err *e);
+ft_tiffw* ft_tiffw_open(const char* path, const ft_tiff_opts* o, ft_err* e);
 /* one column: h pixels top to bottom, 1 or 3 samples each (the kind's).
  * Buffers one tile column (FT_TILE x h pixels), allocated at the first
  * column and freed after the last, when every tile is on disk. */
-int ft_tiffw_column(ft_tiffw *w, const unsigned short *col, ft_err *e);
+int ft_tiffw_column(ft_tiffw* w, const unsigned short* col, ft_err* e);
 /* DNG only: DefaultCropOrigin / DefaultCropSize, written at close;
  * clamped into the image. Default: the whole image. */
-void ft_tiffw_crop(ft_tiffw *w, int x, int y, int cw, int ch);
+void ft_tiffw_crop(ft_tiffw* w, int x, int y, int cw, int ch);
 /* every column must have arrived: patches the crop, closes, frees w.
  * -1 with e filled (file left as written). */
-int ft_tiffw_close(ft_tiffw *w, ft_err *e);
+int ft_tiffw_close(ft_tiffw* w, ft_err* e);
 /* abandon: close and free without completing (file stays partial) */
-void ft_tiffw_free(ft_tiffw *w);
+void ft_tiffw_free(ft_tiffw* w);
 
 #endif

@@ -27,10 +27,11 @@
  * Pure C99 (libm, mem*; no allocation, no I/O): runs in the browser too. */
 #ifndef FT_PRINT_H
 #define FT_PRINT_H
+#include <stddef.h>
+
 #include "ft.h"
 #include "ft_image.h"
 #include "ft_render.h"
-#include <stddef.h>
 
 #define FT_PRINT_CLICK 0.025 /* D of print exposure per click */
 #define FT_PRINT_CLICKS_MAX 99
@@ -67,80 +68,69 @@ typedef struct {
 
 /* one module per slot; par is the module's own parameter block */
 typedef struct {
-  const char *name;
+  const char* name;
   /* roll: roll->range from the frames' own ranges; NULL = none */
-  int (*roll)(
-      const void *par, const ft_print_frame *fr, int n, ft_print_roll *roll,
-      ft_err *e
-  );
+  int (*roll)(const void* par, const ft_print_frame* fr, int n,
+              ft_print_roll* roll, ft_err* e);
   /* the frame's recipe range (base and mode are set) */
-  void (*range)(
-      const void *par, const ft_print_roll *roll, const ft_print_frame *fr,
-      ft_recipe *r
-  );
+  void (*range)(const void* par, const ft_print_roll* roll,
+                const ft_print_frame* fr, ft_recipe* r);
 } ft_pm_film;
 
 typedef struct {
-  const char *name;
+  const char* name;
   /* fr->mean from the frame through r (base, range set); NULL = none */
-  int (*measure)(
-      const void *par, const ft_recipe *r, const ft_image *im,
-      ft_print_frame *fr, ft_err *e
-  );
+  int (*measure)(const void* par, const ft_recipe* r, const ft_image* im,
+                 ft_print_frame* fr, ft_err* e);
   /* roll references from the frames' means; NULL = none */
-  int (*roll)(
-      const void *par, const ft_print_frame *fr, int n, ft_print_roll *roll,
-      ft_err *e
-  );
+  int (*roll)(const void* par, const ft_print_frame* fr, int n,
+              ft_print_roll* roll, ft_err* e);
   /* the auto filtration for one frame (r: base, range, paper set) */
-  void (*frame)(
-      const void *par, const ft_print_roll *roll, const ft_print_frame *fr,
-      const ft_recipe *r, ft_print_auto *a
-  );
+  void (*frame)(const void* par, const ft_print_roll* roll,
+                const ft_print_frame* fr, const ft_recipe* r, ft_print_auto* a);
 } ft_pm_balance;
 
 typedef struct ft_print_render ft_print_render;
 
 typedef struct {
-  const char *name;
-  void (*recipe)(const void *par, ft_recipe *r); /* paper fields */
+  const char* name;
+  void (*recipe)(const void* par, ft_recipe* r); /* paper fields */
   /* NULL = ft_render_compile; else the module's own compiled form */
-  int (*compile)(
-      const void *par, const ft_recipe *r, ft_print_render *c, ft_err *e
-  );
+  int (*compile)(const void* par, const ft_recipe* r, ft_print_render* c,
+                 ft_err* e);
 } ft_pm_print;
 
 typedef struct {
-  const char *name;
-  void (*recipe)(const void *par, ft_recipe *r); /* matrix */
+  const char* name;
+  void (*recipe)(const void* par, ft_recipe* r); /* matrix */
 } ft_pm_output;
 
 typedef struct {
-  const char *id;   /* the .print file's name: "generic-neg" */
-  const char *name; /* shown to users: "Generic colour negative" */
+  const char* id;   /* the .print file's name: "generic-neg" */
+  const char* name; /* shown to users: "Generic colour negative" */
   ft_render_mode mode;
-  const ft_pm_film *film;
-  const void *film_par;
-  const ft_pm_balance *balance;
-  const void *balance_par;
-  const ft_pm_print *print;
-  const void *print_par;
-  const ft_pm_output *output;
-  const void *output_par;
+  const ft_pm_film* film;
+  const void* film_par;
+  const ft_pm_balance* balance;
+  const void* balance_par;
+  const ft_pm_print* print;
+  const void* print_par;
+  const ft_pm_output* output;
+  const void* output_par;
 } ft_emulsion;
 
 /* a 3D table: n^3 RGB nodes, red index fastest (the .cube order), values
  * sRGB-encoded 0..1 */
 typedef struct {
   int n;
-  const float *rgb;
+  const float* rgb;
 } ft_cube;
 
 #define FT_PRINT_DEC_N 4096 /* sRGB decode table (lut3d) */
 
 typedef struct {
   float in[3][FT_RENDER_IN_N]; /* T -> cube coordinate 0..n-1 */
-  const ft_cube *cube;
+  const ft_cube* cube;
   float dec[FT_PRINT_DEC_N + 1];
   float m[9];
 } ft_print_lut;
@@ -158,33 +148,29 @@ struct ft_print_render {
  * step, each frame's balance means (pass 2), the balance's roll step.
  * im: n stats proxies; base: the film base (neg, b&w) or black (slide);
  * fr: n results, kept for ft_print_recipe. -1 with e filled. */
-int ft_print_roll_measure(
-    const ft_emulsion *em, const float base[3], const ft_image *const *im,
-    int n, ft_print_frame *fr, ft_print_roll *roll, ft_err *e
-);
+int ft_print_roll_measure(const ft_emulsion* em, const float base[3],
+                          const ft_image* const* im, int n, ft_print_frame* fr,
+                          ft_print_roll* roll, ft_err* e);
 
 /* clicks in -FT_PRINT_CLICKS_MAX..+FT_PRINT_CLICKS_MAX; b&w: C/M/Y 0 */
-int ft_print_clicks_ok(const ft_emulsion *em, ft_cmyd k, ft_err *e);
+int ft_print_clicks_ok(const ft_emulsion* em, ft_cmyd k, ft_err* e);
 
 /* One frame's recipe: base and range (film), paper (print), matrix
  * (output), the auto (a, NULL ok) and then the clicks. Exposure and tint
  * beyond the recipe's limits (+-6 stops, +-50 CC) are clamped and
  * *clamped (NULL ok) set. -1 with e filled on bad clicks. */
-int ft_print_recipe(
-    const ft_emulsion *em, const ft_print_roll *roll, const ft_print_frame *fr,
-    ft_cmyd k, ft_recipe *r, ft_print_auto *a, int *clamped, ft_err *e
-);
+int ft_print_recipe(const ft_emulsion* em, const ft_print_roll* roll,
+                    const ft_print_frame* fr, ft_cmyd k, ft_recipe* r,
+                    ft_print_auto* a, int* clamped, ft_err* e);
 
-int ft_print_compile(
-    const ft_emulsion *em, const ft_recipe *r, ft_print_render *c, ft_err *e
-);
+int ft_print_compile(const ft_emulsion* em, const ft_recipe* r,
+                     ft_print_render* c, ft_err* e);
 /* npx interleaved RGB pixels of transmittance -> linear Rec.2020 0..1;
  * in == out is allowed */
-void ft_print_apply(
-    const ft_print_render *c, const float *in, float *out, size_t npx
-);
+void ft_print_apply(const ft_print_render* c, const float* in, float* out,
+                    size_t npx);
 
 /* the stats proxy's size for a w x h frame box (never upscaled) */
-void ft_print_proxy_dims(int w, int h, int *pw, int *ph);
+void ft_print_proxy_dims(int w, int h, int* pw, int* ph);
 
 #endif

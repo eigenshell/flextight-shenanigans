@@ -78,9 +78,9 @@ typedef struct {
 /* p -> one line with its '\n' in buf (NUL-terminated if cap > 0); the
  * length the whole line needs: >= cap means truncated. FT_PG_BAD (buf
  * empty) for fields the format cannot carry. */
-size_t ft_progress_fmt(const ft_progress *p, char *buf, size_t cap);
+size_t ft_progress_fmt(const ft_progress* p, char* buf, size_t cap);
 /* line[0..n) (a '\n' or "\r\n" at the end is fine) -> p; 0, or -1 when
  * it is not a well-formed progress line (other output) */
-int ft_progress_parse(const char *line, size_t n, ft_progress *p);
+int ft_progress_parse(const char* line, size_t n, ft_progress* p);
 
 #endif

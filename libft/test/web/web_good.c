@@ -5,11 +5,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-int web_good(char *buf, size_t n, double v) {
-  double *p = malloc(sizeof *p);
+int web_good(char* buf, size_t n, double v) {
+  double* p = malloc(sizeof *p);
   int k;
-  if(!p)
-    return -1;
+  if (!p) return -1;
   *p = sqrt(v);
   k = snprintf(buf, n, "%g", *p);
   free(p);

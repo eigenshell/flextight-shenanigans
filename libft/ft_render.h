@@ -20,10 +20,11 @@
  * the tests hold the LUT path to it. */
 #ifndef FT_RENDER_H
 #define FT_RENDER_H
+#include <stddef.h>
+
 #include "ft.h"
 #include "ft_curve.h"
 #include "ft_image.h"
-#include <stddef.h>
 
 typedef enum { FT_RENDER_NEG, FT_RENDER_SLIDE, FT_RENDER_BW } ft_render_mode;
 
@@ -49,13 +50,13 @@ typedef struct {
 /* neutral recipe for mode: base 0 (neg) / 3.0 (slide), range 1, exposure
  * and tint 0, grade 1.5, paper 0..2 D, Rec.709 b&w weights, the linear
  * sRGB -> Rec.2020 matrix, linear curves */
-void ft_recipe_default(ft_recipe *r, ft_render_mode m);
+void ft_recipe_default(ft_recipe* r, ft_render_mode m);
 /* -1 with e naming the field if any value is out of range */
-int ft_recipe_validate(const ft_recipe *r, ft_err *e);
+int ft_recipe_validate(const ft_recipe* r, ft_err* e);
 /* set base from per-channel film densities; b&w: folds them to the
  * luminance density of r->bw_weights and stores it in all three. If any
  * d[c] is not finite, r->base is left unchanged. */
-void ft_recipe_set_base(ft_recipe *r, const float d[3]);
+void ft_recipe_set_base(ft_recipe* r, const float d[3]);
 
 /* Accuracy: the compiled path is within 2/65535 (sRGB-encoded) of
  * ft_render_direct for grade/range up to ~25; up to ~15/65535 at the
@@ -78,20 +79,19 @@ typedef struct {
 
 /* an input LUT (in[] above) at transmittance t: linear between the two
  * nodes around t, clamped to the LUT's range (NaN and -inf: the floor) */
-float ft_render_lut_in(const float *tab, float t);
+float ft_render_lut_in(const float* tab, float t);
 /* validates r, then builds c; -1 with e filled on a bad recipe */
-int ft_render_compile(const ft_recipe *r, ft_render *c, ft_err *e);
+int ft_render_compile(const ft_recipe* r, ft_render* c, ft_err* e);
 /* npx interleaved RGB pixels; in == out is allowed. NaN, -inf and values
  * below the floor -> the floor; +inf and values above FT_RENDER_T_MAX ->
  * T_MAX. Never fails, never writes NaN */
-void ft_render_apply(
-    const ft_render *c, const float *in, float *out, size_t npx
-);
+void ft_render_apply(const ft_render* c, const float* in, float* out,
+                     size_t npx);
 /* the same pipeline in double, one pixel; r must be valid */
-void ft_render_direct(const ft_recipe *r, const float in[3], float out[3]);
+void ft_render_direct(const ft_recipe* r, const float in[3], float out[3]);
 /* apply to every pixel of im in place; im becomes linear Rec.2020
  * (xyz_to_rgb set to match) */
-void ft_render_image(const ft_render *c, ft_image *im);
+void ft_render_image(const ft_render* c, ft_image* im);
 
 /* sRGB transfer curve, clamped to [0,1] (shared with the writers) */
 double ft_srgb_encode(double v);

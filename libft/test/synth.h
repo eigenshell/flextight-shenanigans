@@ -51,9 +51,9 @@ typedef struct {
   } leak[4];
 } synth_spec;
 
-void synth_default(synth_spec *s, ft_film film);
-void synth_add(synth_spec *s, double y0, double len, int blank);
-float *synth_preview(const synth_spec *s); /* caller frees */
+void synth_default(synth_spec* s, ft_film film);
+void synth_add(synth_spec* s, double y0, double len, int blank);
+float* synth_preview(const synth_spec* s); /* caller frees */
 
 /* A window scan as ftpoc writes it for a share job: raw lines with the
  * tri-linear rows offset (aligned row l = R of raw l + 2k, G of l + k, B
@@ -81,6 +81,6 @@ typedef struct {
   float base[3]; /* the film base transmittance */
 } synth_win_scan;
 
-void synth_window(const synth_win *w, synth_win_scan *s);
-void synth_window_free(synth_win_scan *s);
+void synth_window(const synth_win* w, synth_win_scan* s);
+void synth_window_free(synth_win_scan* s);
 #endif

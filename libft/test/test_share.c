@@ -1,17 +1,18 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include "ft_plan.h"
-#include "ft_share.h"
-#include "test/ftest.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "ft_plan.h"
+#include "ft_share.h"
+#include "test/ftest.h"
 
 static ft_share_frame fr[FT_MAX_FRAMES];
 
 /* n frames of type t, len along, 24 mm across, every `pitch` mm from y0 */
 static void strip(int n, ft_frame_type t, double y0, double len, double pitch) {
   int i;
-  for(i = 0; i < n; i++) {
+  for (i = 0; i < n; i++) {
     fr[i].index = i + 1;
     fr[i].type = t;
     fr[i].y0 = y0 + pitch * i;
@@ -22,40 +23,34 @@ static void strip(int n, ft_frame_type t, double y0, double len, double pitch) {
 }
 
 /* keep only the frames whose index is not in skip (0-terminated) */
-static int select_all_but(int n, const int *skip, ft_share_frame *out) {
+static int select_all_but(int n, const int* skip, ft_share_frame* out) {
   int i, k, m = 0;
-  for(i = 0; i < n; i++) {
+  for (i = 0; i < n; i++) {
     int drop = 0;
-    for(k = 0; skip[k]; k++)
-      drop |= fr[i].index == skip[k];
-    if(!drop)
-      out[m++] = fr[i];
+    for (k = 0; skip[k]; k++) drop |= fr[i].index == skip[k];
+    if (!drop) out[m++] = fr[i];
   }
   return m;
 }
 
 /* the cheapest grouping by trying every partition (n <= 12) */
-static double brute(
-    const ft_share_frame *f, int n, const ft_share_opts *o, double ppi, int bin
-) {
+static double brute(const ft_share_frame* f, int n, const ft_share_opts* o,
+                    double ppi, int bin) {
   double best = HUGE_VAL;
   unsigned mask, lim = 1u << (n - 1);
-  for(mask = 0; mask < lim; mask++) {
+  for (mask = 0; mask < lim; mask++) {
     double t = 0;
     int i, start = 0;
-    for(i = 0; i < n; i++)
-      if(i == n - 1 || (mask >> i & 1)) { /* window ends at i */
+    for (i = 0; i < n; i++)
+      if (i == n - 1 || (mask >> i & 1)) { /* window ends at i */
         double a = f[start].y0 - o->margin_mm;
         double b = f[i].y0 + f[i].len + o->margin_mm;
-        if(a < 0)
-          a = 0;
-        if(b > o->scan_len_mm)
-          b = o->scan_len_mm;
+        if (a < 0) a = 0;
+        if (b > o->scan_len_mm) b = o->scan_len_mm;
         t += ft_scan_seconds(ppi, bin, b - a);
         start = i + 1;
       }
-    if(t < best)
-      best = t;
+    if (t < best) best = t;
   }
   return best;
 }
@@ -111,9 +106,8 @@ int main(void) {
     strip(12, FT_FRAME_HALF, 3, 18, 19);
     n = select_all_but(12, skip, sel);
     CHECK(n == 10);
-    CHECK(
-        ft_share_estimate(sel, n, &o, 1500, 1, &ft_lens_default, &est, &e) == 0
-    );
+    CHECK(ft_share_estimate(sel, n, &o, 1500, 1, &ft_lens_default, &est, &e) ==
+          0);
     CHECK(est.nwin == 3);
     /* one focus bracket for the strip: windows 2 and 3 carry it */
     CHECK_NEAR(est.focus_s, FT_SHARE_FOCUS_CROPS * FT_FOCUS_SAMPLE_S, 1e-12);
@@ -131,33 +125,29 @@ int main(void) {
 
   /* the DP equals brute force on random selections, several optics */
   srand(11);
-  for(k = 0; k < 300; k++) {
+  for (k = 0; k < 300; k++) {
     static const struct {
       double ppi;
       int bin;
-    } opt[] = {{1500, 1}, {1412, 2}, {1412, 4}, {2117, 1}};
+    } opt[] = {
+      {1500, 1},
+      {1412, 2},
+      {1412, 4},
+      {2117, 1}
+    };
     int which = k % 4;
-    strip(
-        12, k % 2 ? FT_FRAME_HALF : FT_FRAME_FULL, 3, k % 2 ? 18 : 36,
-        k % 2 ? 19 : 38
-    );
-    for(i = n = 0; i < (k % 2 ? 12 : 6); i++)
-      if(rand() % 3)
-        sel[n++] = fr[i];
-    if(!n)
-      continue;
-    CHECK(
-        ft_share_estimate(
-            sel, n, &o, opt[which].ppi, opt[which].bin, &ft_lens_default, &est,
-            &e
-        ) == 0
-    );
-    CHECK_NEAR(
-        est.scan_s, brute(sel, n, &o, opt[which].ppi, opt[which].bin), 1e-6
-    );
+    strip(12, k % 2 ? FT_FRAME_HALF : FT_FRAME_FULL, 3, k % 2 ? 18 : 36,
+          k % 2 ? 19 : 38);
+    for (i = n = 0; i < (k % 2 ? 12 : 6); i++)
+      if (rand() % 3) sel[n++] = fr[i];
+    if (!n) continue;
+    CHECK(ft_share_estimate(sel, n, &o, opt[which].ppi, opt[which].bin,
+                            &ft_lens_default, &est, &e) == 0);
+    CHECK_NEAR(est.scan_s, brute(sel, n, &o, opt[which].ppi, opt[which].bin),
+               1e-6);
     /* windows cover every frame once, in order */
     CHECK(est.win[0].first == 0 && est.win[est.nwin - 1].last == n - 1);
-    for(i = 1; i < est.nwin; i++)
+    for (i = 1; i < est.nwin; i++)
       CHECK(est.win[i].first == est.win[i - 1].last + 1);
   }
 
@@ -169,14 +159,13 @@ int main(void) {
   CHECK_NEAR(c[0].ppi, 1412, 1e-9);
   CHECK_NEAR(c[2].ppi, 1412, 1e-9);
   CHECK_NEAR(c[3].ppi, 1500, 1e-9);
-  for(i = 0; i < n; i++) {
+  for (i = 0; i < n; i++) {
     int b[6], nb = ft_bins_for_ppi(c[i].ppi, b), ok = 0;
-    while(nb--)
-      ok |= b[nb] == c[i].bin;
+    while (nb--) ok |= b[nb] == c[i].bin;
     CHECK(ok);                                   /* a bin ft_plan accepts */
     CHECK(i == 0 || c[i].dmax >= c[i - 1].dmax); /* less magnif. */
   }
-  for(i = 0; i < n; i++) { /* one bracket a strip: later windows carry it */
+  for (i = 0; i < n; i++) { /* one bracket a strip: later windows carry it */
     CHECK_NEAR(c[i].focus_s, FT_SHARE_FOCUS_CROPS * FT_FOCUS_SAMPLE_S, 1e-9);
   }
   CHECK(c[0].scan_s < c[3].scan_s); /* larger bin is faster */
@@ -217,7 +206,7 @@ int main(void) {
     memset(&j, 0, sizeof j);
     strcpy(j.holder, "24x217");
     j.nframes = 12;
-    for(i = 0; i < 12; i++) {
+    for (i = 0; i < 12; i++) {
       j.f[i].index = i + 1;
       j.f[i].type = i == 11 ? FT_FRAME_PARTIAL : FT_FRAME_HALF;
       j.f[i].include = 1;
@@ -233,8 +222,7 @@ int main(void) {
     CHECK(ft_share_select(&j, "", sel, &n, &e) == 0 && n == 11);
     CHECK(ft_share_select(&j, "1,3-6,8-12", sel, &n, &e) == 0);
     CHECK(
-        n == 10 && sel[0].index == 1 && sel[1].index == 3 && sel[9].index == 12
-    );
+      n == 10 && sel[0].index == 1 && sel[1].index == 3 && sel[9].index == 12);
     CHECK_NEAR(sel[1].y0, 41, 1e-12);
     CHECK(sel[1].type == FT_FRAME_HALF && sel[1].width == 24);
     CHECK(ft_share_select(&j, "4,2", sel, &n, &e) == 0); /* sorted */
@@ -246,12 +234,10 @@ int main(void) {
     CHECK(ft_share_select(&j, "1,,2", sel, &n, &e) == -1);
     CHECK(ft_share_select(&j, "1;2", sel, &n, &e) == -1);
     CHECK(ft_share_select(&j, " 1", sel, &n, &e) == -1);
-    for(i = 0; i < 12; i++)
-      j.f[i].type = FT_FRAME_PARTIAL;
+    for (i = 0; i < 12; i++) j.f[i].type = FT_FRAME_PARTIAL;
     CHECK(ft_share_select(&j, NULL, sel, &n, &e) == -1);
     CHECK(strstr(e.msg, "no frames") != NULL);
-    for(i = 0; i < 12; i++)
-      j.f[i].type = FT_FRAME_HALF;
+    for (i = 0; i < 12; i++) j.f[i].type = FT_FRAME_HALF;
 
     /* plan and apply: skip 2 and 7 -> groups 1, 2, 3 */
     CHECK(ft_share_select(&j, "1,3-6,8-12", sel, &n, &e) == 0);
@@ -268,7 +254,7 @@ int main(void) {
     CHECK(j.f[0].ppi == 1500 && j.f[0].bin == 1);
     CHECK(ft_job_validate(&j, &ft_lens_default, &e) == 0);
     /* windows match the estimate's */
-    for(i = 0; i < c[k].nwin; i++) {
+    for (i = 0; i < c[k].nwin; i++) {
       CHECK(ft_share_group_window(&j, i + 1, &o, &y0, &len) == 0);
       CHECK_NEAR(y0, c[k].win[i].y0, 1e-12);
       CHECK_NEAR(len, c[k].win[i].len, 1e-12);
@@ -283,7 +269,7 @@ int main(void) {
       memset(&s, 0, sizeof s);
       strcpy(s.holder, "24x217");
       s.nframes = 12;
-      for(i = 0; i < 12; i++) {
+      for (i = 0; i < 12; i++) {
         s.f[i].index = i + 1;
         s.f[i].type = FT_FRAME_HALF;
         s.f[i].include = 1;
@@ -296,22 +282,20 @@ int main(void) {
       }
       s.focus = FT_FOCUS_SHIFTED;
       s.focus_offset = 700;
-      CHECK(
-          ft_share_plan_sizes(&s, tg, 1, &ft_lens_default, o.scan_len_mm, &e) ==
-          3
-      );
+      CHECK(ft_share_plan_sizes(&s, tg, 1, &ft_lens_default, o.scan_len_mm,
+                                &e) == 3);
       CHECK(s.share == j.share && s.hf_half_res == j.hf_half_res);
       CHECK(s.focus == FT_FOCUS_PER_FRAME && s.focus_offset == 0);
-      for(i = 0; i < 12; i++)
-        CHECK(
-            s.f[i].include == j.f[i].include && s.f[i].group == j.f[i].group &&
-            s.f[i].ppi == j.f[i].ppi && s.f[i].bin == j.f[i].bin &&
-            s.f[i].share_px == 0
-        );
+      for (i = 0; i < 12; i++)
+        CHECK(s.f[i].include == j.f[i].include &&
+              s.f[i].group == j.f[i].group &&
+              s.f[i].ppi == j.f[i].ppi &&
+              s.f[i].bin == j.f[i].bin &&
+              s.f[i].share_px == 0);
 
       /* mixed, on full frames: 1-2 4MP, 3 6MP, 4 skipped, 5 4MP */
       s.nframes = 5; /* 5 full frames fit */
-      for(i = 0; i < 5; i++) {
+      for (i = 0; i < 5; i++) {
         s.f[i].type = FT_FRAME_FULL;
         s.f[i].len = 36;
         s.f[i].y0 = 4 + 38.0 * i;
@@ -323,10 +307,10 @@ int main(void) {
       n = ft_share_plan_sizes(&s, tg, 0, &ft_lens_default, o.scan_len_mm, &e);
       CHECK(n >= 3);
       CHECK(s.share == FT_SHARE_4MP && s.hf_half_res == 0);
-      CHECK(
-          s.f[0].share_px == 0 && s.f[1].share_px == 0 &&
-          s.f[2].share_px == FT_SHARE_6MP && s.f[4].share_px == 0
-      );
+      CHECK(s.f[0].share_px == 0 &&
+            s.f[1].share_px == 0 &&
+            s.f[2].share_px == FT_SHARE_6MP &&
+            s.f[4].share_px == 0);
       CHECK(!s.f[3].include && s.f[3].group == 0 && s.f[3].share_px == 0);
       /* runs never share a window; groups follow the strip */
       CHECK(s.f[0].group >= 1 && s.f[1].group >= s.f[0].group);
@@ -338,53 +322,41 @@ int main(void) {
       /* the smallest size is the strip's share */
       tg[0] = tg[1] = tg[4] = FT_SHARE_6MP;
       tg[2] = FT_SHARE_4MP;
-      CHECK(
-          ft_share_plan_sizes(&s, tg, 0, &ft_lens_default, o.scan_len_mm, &e) >=
-          3
-      );
-      CHECK(
-          s.share == FT_SHARE_4MP && s.f[2].share_px == 0 &&
-          s.f[0].share_px == FT_SHARE_6MP
-      );
+      CHECK(ft_share_plan_sizes(&s, tg, 0, &ft_lens_default, o.scan_len_mm,
+                                &e) >= 3);
+      CHECK(s.share == FT_SHARE_4MP &&
+            s.f[2].share_px == 0 &&
+            s.f[0].share_px == FT_SHARE_6MP);
       /* refusals */
-      for(i = 0; i < 5; i++)
-        tg[i] = 0;
-      CHECK(
-          ft_share_plan_sizes(&s, tg, 0, &ft_lens_default, o.scan_len_mm, &e) ==
-          -1
-      );
+      for (i = 0; i < 5; i++) tg[i] = 0;
+      CHECK(ft_share_plan_sizes(&s, tg, 0, &ft_lens_default, o.scan_len_mm,
+                                &e) == -1);
       CHECK(strcmp(e.msg, "share: no frames selected") == 0);
       tg[1] = 50;
-      CHECK(
-          ft_share_plan_sizes(&s, tg, 0, &ft_lens_default, o.scan_len_mm, &e) ==
-          -1
-      );
-      CHECK(
-          strcmp(
-              e.msg, "share: frame 2: 50 px is out of range "
-                     "(100..20000)"
-          ) == 0
-      );
+      CHECK(ft_share_plan_sizes(&s, tg, 0, &ft_lens_default, o.scan_len_mm,
+                                &e) == -1);
+      CHECK(strcmp(e.msg,
+                   "share: frame 2: 50 px is out of range "
+                   "(100..20000)") == 0);
     }
   }
   /* refusals */
   strip(2, FT_FRAME_FULL, 4, 36, 38);
-  CHECK(ft_share_estimate(fr, 0, &o, 1500, 1, &ft_lens_default, &est, &e) == -1);
-  CHECK(
-      ft_share_estimate(fr, 2, &o, 1000, 1, &ft_lens_default, &est, &e) == -1
-  ); /* optics 1000 */
+  CHECK(ft_share_estimate(fr, 0, &o, 1500, 1, &ft_lens_default, &est, &e) ==
+        -1);
+  CHECK(ft_share_estimate(fr, 2, &o, 1000, 1, &ft_lens_default, &est, &e) ==
+        -1); /* optics 1000 */
   CHECK(strstr(e.msg, "optics") != NULL);
-  CHECK(
-      ft_share_estimate(fr, 2, &o, 1500, 5, &ft_lens_default, &est, &e) == -1
-  ); /* 12 % 5 */
+  CHECK(ft_share_estimate(fr, 2, &o, 1500, 5, &ft_lens_default, &est, &e) ==
+        -1); /* 12 % 5 */
   sel[0] = fr[1];
   sel[1] = fr[0]; /* out of order */
-  CHECK(
-      ft_share_estimate(sel, 2, &o, 1500, 1, &ft_lens_default, &est, &e) == -1
-  );
+  CHECK(ft_share_estimate(sel, 2, &o, 1500, 1, &ft_lens_default, &est, &e) ==
+        -1);
   CHECK(strstr(e.msg, "frame 1") != NULL);
   fr[1].y0 = 220; /* past the holder */
-  CHECK(ft_share_estimate(fr, 2, &o, 1500, 1, &ft_lens_default, &est, &e) == -1);
+  CHECK(ft_share_estimate(fr, 2, &o, 1500, 1, &ft_lens_default, &est, &e) ==
+        -1);
   CHECK(strstr(e.msg, "outside") != NULL);
   CHECK(ft_share_candidates(fr, 0, &o, &ft_lens_default, c, &e) == -1);
   return TEST_DONE();

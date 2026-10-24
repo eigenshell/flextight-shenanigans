@@ -33,30 +33,27 @@ size_t ft_nr_scratch_bytes(int w, int h);
 
 /* the generalised Anscombe transform, n values: z = 2/S sqrt(S y +
  * 3/8 S^2 + O); S <= 0 is the Gaussian case z = y / sqrt(O) */
-void ft_nr_vst(const float *y, size_t n, double s, double o, float *z);
+void ft_nr_vst(const float* y, size_t n, double s, double o, float* z);
 /* its closed-form unbiased inverse, for denoised z */
-void ft_nr_vst_inv(const float *z, size_t n, double s, double o, float *y);
+void ft_nr_vst_inv(const float* z, size_t n, double s, double o, float* y);
 
 /* the noise sigma of a w x h plane: MAD / 0.6745 of the finest a-trous
  * scale over the flattest quarter of its 32 x 32 blocks (by the energy of
  * scale 2, so edges and texture do not count), divided by FT_ATROUS_F[0].
  * scratch: 4 planes. */
-double ft_nr_sigma(const float *plane, int w, int h, void *scratch);
+double ft_nr_sigma(const float* plane, int w, int h, void* scratch);
 
 /* a constant-noise profile measured on the image (S = 0, O = sigma^2 per
  * channel), for frames without a NoiseProfile */
-void ft_nr_estimate(
-    const float *rgb, int w, int h, double prof[6], void *scratch
-);
+void ft_nr_estimate(const float* rgb, int w, int h, double prof[6],
+                    void* scratch);
 /* the grain sigma of the Y opponent plane of the density */
-double ft_nr_grain_sigma(const float *rgb, int w, int h, void *scratch);
+double ft_nr_grain_sigma(const float* rgb, int w, int h, void* scratch);
 
 /* in place, rgb interleaved; prof = S,O per channel; kc = k * nr_chroma */
-void ft_nr_sensor(
-    float *rgb, int w, int h, const double prof[6], double k, double kc,
-    void *scratch
-);
+void ft_nr_sensor(float* rgb, int w, int h, const double prof[6], double k,
+                  double kc, void* scratch);
 /* in place */
-void ft_nr_grain(float *rgb, int w, int h, double k, void *scratch);
+void ft_nr_grain(float* rgb, int w, int h, double k, void* scratch);
 
 #endif

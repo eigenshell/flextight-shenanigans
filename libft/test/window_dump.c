@@ -4,27 +4,27 @@
  * job. One full frame, 1500 ppi bin 1, at holder 100..136 mm; the preview
  * put it at 101 (it crept 1 mm); window 99..139 mm; a patch of bare film
  * base inside the frame (renders as a neutral dark grey). */
-#include "test/synth.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
-static int dump(const char *path, const void *p, size_t n) {
-  FILE *f = fopen(path, "wb");
+#include "test/synth.h"
+
+static int dump(const char* path, const void* p, size_t n) {
+  FILE* f = fopen(path, "wb");
   int ok = f && fwrite(p, 1, n, f) == n;
-  if(f && fclose(f))
-    ok = 0;
+  if (f && fclose(f)) ok = 0;
   return ok ? 0 : -1;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   synth_win w;
   synth_win_scan s;
   char path[512];
-  FILE *f;
+  FILE* f;
   int rc = 0;
 
-  if(argc < 2) {
+  if (argc < 2) {
     fprintf(stderr, "usage: window_dump <base>\n");
     return 2;
   }
@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
   w.patch[0].x0 = 10;
   w.patch[0].x1 = 14;
   synth_window(&w, &s);
-  if(!s.raw) {
+  if (!s.raw) {
     fprintf(stderr, "window_dump: out of memory\n");
     return 1;
   }
@@ -54,23 +54,20 @@ int main(int argc, char **argv) {
   rc |= dump(path, s.cal, (size_t)s.cal_lines * s.px * 6);
   snprintf(path, sizeof path, "%s.raw.txt", argv[1]);
   f = fopen(path, "w");
-  if(f) {
-    fprintf(
-        f,
-        "preset=crop\nppi=1500\npx=%d\nx=%ld\nlines=%d\ny=%ld\n"
-        "bin=1\nkept=%d\nfilm=negative\nholder=24x217\n"
-        "share=2000\nhf_half_res=0\n"
-        "film_base=%.4f %.4f %.4f\n"
-        "share_frame=1 full 101.000 36.000 4.100 24.000\n",
-        s.px, s.x, s.lines, s.y, s.lines, -log10(s.base[0]), -log10(s.base[1]),
-        -log10(s.base[2])
-    );
+  if (f) {
+    fprintf(f,
+            "preset=crop\nppi=1500\npx=%d\nx=%ld\nlines=%d\ny=%ld\n"
+            "bin=1\nkept=%d\nfilm=negative\nholder=24x217\n"
+            "share=2000\nhf_half_res=0\n"
+            "film_base=%.4f %.4f %.4f\n"
+            "share_frame=1 full 101.000 36.000 4.100 24.000\n",
+            s.px, s.x, s.lines, s.y, s.lines, -log10(s.base[0]),
+            -log10(s.base[1]), -log10(s.base[2]));
     rc |= fclose(f) ? -1 : 0;
   } else {
     rc = -1;
   }
   synth_window_free(&s);
-  if(rc)
-    fprintf(stderr, "window_dump: cannot write %s*\n", argv[1]);
+  if (rc) fprintf(stderr, "window_dump: cannot write %s*\n", argv[1]);
   return rc ? 1 : 0;
 }

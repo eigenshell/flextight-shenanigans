@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+#include <math.h>
+#include <stdio.h>
+
 #include "ft_dmax.h"
 #include "ft_plan.h"
 #include "test/ftest.h"
-#include <math.h>
-#include <stdio.h>
 
 int main(void) {
   ft_optics_limits now = {FT_SCALE_MIN, FT_SCALE_MAX, &ft_lens_default};

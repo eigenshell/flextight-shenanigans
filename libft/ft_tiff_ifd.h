@@ -5,9 +5,10 @@
  * streaming tiled writer (ft_tiff.c). TIFF 6.0 and DNG 1.4. */
 #ifndef FT_TIFF_IFD_H
 #define FT_TIFF_IFD_H
-#include "ft_image.h"
 #include <stddef.h>
 #include <stdio.h>
+
+#include "ft_image.h"
 
 enum {
   FT_T_BYTE = 1,
@@ -25,7 +26,7 @@ enum {
 typedef struct {
   unsigned tag, type;
   unsigned long count;
-  unsigned char *data; /* count values, little-endian */
+  unsigned char* data; /* count values, little-endian */
   size_t len;
   unsigned long off; /* after ft_ifd_layout: file offset of the
                         value bytes (inside the entry when
@@ -37,43 +38,38 @@ typedef struct {
   int n, oom;
 } ft_ifd;
 
-void ft_le16(unsigned char *p, unsigned long v);
-void ft_le32(unsigned char *p, unsigned long v);
+void ft_le16(unsigned char* p, unsigned long v);
+void ft_le32(unsigned char* p, unsigned long v);
 
 /* a zeroed entry with room for count values; NULL (and oom set) when full
  * or out of memory. The ifd starts zeroed (memset). */
-unsigned char *ft_ifd_add(
-    ft_ifd *d, unsigned tag, unsigned type, unsigned long count
-);
-void ft_ifd_short(ft_ifd *d, unsigned tag, unsigned long v);
-void ft_ifd_long(ft_ifd *d, unsigned tag, unsigned long v);
-void ft_ifd_ascii(ft_ifd *d, unsigned tag, const char *s);
-void ft_ifd_bytes(
-    ft_ifd *d, unsigned tag, unsigned type, const unsigned char *b,
-    unsigned long n
-);
+unsigned char* ft_ifd_add(ft_ifd* d, unsigned tag, unsigned type,
+                          unsigned long count);
+void ft_ifd_short(ft_ifd* d, unsigned tag, unsigned long v);
+void ft_ifd_long(ft_ifd* d, unsigned tag, unsigned long v);
+void ft_ifd_ascii(ft_ifd* d, unsigned tag, const char* s);
+void ft_ifd_bytes(ft_ifd* d, unsigned tag, unsigned type,
+                  const unsigned char* b, unsigned long n);
 /* signed or unsigned rationals over a fixed denominator */
-void ft_ifd_rationals(
-    ft_ifd *d, unsigned tag, unsigned type, const double *v, int n, long den
-);
+void ft_ifd_rationals(ft_ifd* d, unsigned tag, unsigned type, const double* v,
+                      int n, long den);
 /* IEEE 754 doubles, little-endian whatever the host */
-void ft_ifd_doubles(ft_ifd *d, unsigned tag, const double *v, int n);
-ft_ifd_entry *ft_ifd_find(ft_ifd *d, unsigned tag);
+void ft_ifd_doubles(ft_ifd* d, unsigned tag, const double* v, int n);
+ft_ifd_entry* ft_ifd_find(ft_ifd* d, unsigned tag);
 
 /* The tags every file of ours carries: size, 16-bit samples, no
  * compression, description, make/model, orientation, resolution,
  * software, date; for a DNG also LinearRaw and the DNG set (version,
  * camera, white level, ColorMatrix1 from im, AsShotNeutral 1,1,1, D65).
  * The caller adds photometric (non-DNG) and the pixel layout tags. */
-void ft_ifd_common(
-    ft_ifd *d, const ft_image *im, int w, int h, int spp, int dng
-);
+void ft_ifd_common(ft_ifd* d, const ft_image* im, int w, int h, int spp,
+                   int dng);
 
 /* sorts the tags, sets every entry's off; returns the first byte after
  * the header, the IFD and the external values (where pixel data starts) */
-unsigned long ft_ifd_layout(ft_ifd *d);
+unsigned long ft_ifd_layout(ft_ifd* d);
 /* header + IFD + external values, as laid out; 0 ok, -1 write error */
-int ft_ifd_write(const ft_ifd *d, FILE *f);
-void ft_ifd_free(ft_ifd *d);
+int ft_ifd_write(const ft_ifd* d, FILE* f);
+void ft_ifd_free(ft_ifd* d);
 
 #endif

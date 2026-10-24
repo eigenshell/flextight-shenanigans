@@ -1,16 +1,17 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "ft_plan.h"
-#include "ft_geom.h"
+
 #include <math.h>
+
+#include "ft_geom.h"
 
 int ft_bins_for_ppi(double ppi, int bins[6]) {
   static const int all[] = {12, 6, 4, 3, 2, 1};
   int i, n = 0;
-  if(!isfinite(ppi) || !(ppi >= 525))
-    return 0;
-  for(i = 0; i < 6; i++) {
+  if (!isfinite(ppi) || !(ppi >= 525)) return 0;
+  for (i = 0; i < 6; i++) {
     double scale = ppi * all[i];
-    if(scale >= FT_SCALE_MIN - 1e-6 && scale <= FT_SCALE_MAX + 1e-6)
+    if (scale >= FT_SCALE_MIN - 1e-6 && scale <= FT_SCALE_MAX + 1e-6)
       bins[n++] = all[i];
   }
   return n;
@@ -18,13 +19,12 @@ int ft_bins_for_ppi(double ppi, int bins[6]) {
 
 int ft_bin_ok(double ppi, int bin) {
   int bins[6], n = ft_bins_for_ppi(ppi, bins), i;
-  for(i = 0; i < n; i++)
-    if(bins[i] == bin)
-      return 1;
+  for (i = 0; i < n; i++)
+    if (bins[i] == bin) return 1;
   return 0;
 }
 
-double ft_light_rel(const ft_lens *l, double scale) {
+double ft_light_rel(const ft_lens* l, double scale) {
   double r = (1 + l->p * 6300.0) / (1 + l->p * scale);
   return r * r;
 }

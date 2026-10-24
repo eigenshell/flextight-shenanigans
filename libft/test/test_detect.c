@@ -1,43 +1,42 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+#include <stdlib.h>
+#include <string.h>
+
 #include "ft_detect.h"
 #include "ft_holder.h"
 #include "ft_job.h"
 #include "test/ftest.h"
 #include "test/synth.h"
-#include <stdlib.h>
-#include <string.h>
 
 static ft_layout L;
 
-static int run(const synth_spec *s) {
+static int run(const synth_spec* s) {
   ft_axes ax;
   ft_err e;
-  float *t = synth_preview(s);
+  float* t = synth_preview(s);
   int rc;
   ax.y_mm0 = 0;
   ax.y_mm_per_line = s->y_mm_per_line;
   ax.x_mm0 = s->x_mm0;
   ax.x_mm_per_px = s->x_mm_per_px;
   CHECK(t != NULL);
-  rc = ft_detect(
-      t, s->lines, s->px, &ax, s->film, ft_holder_find("24x217"), &L, &e
-  );
+  rc = ft_detect(t, s->lines, s->px, &ax, s->film, ft_holder_find("24x217"), &L,
+                 &e);
   free(t);
   return rc;
 }
 
-static void ff6(synth_spec *s, ft_film film) {
+static void ff6(synth_spec* s, ft_film film) {
   int i;
   synth_default(s, film);
-  for(i = 0; i < 6; i++)
-    synth_add(s, 4 + 38.0 * i, 36, 0);
+  for (i = 0; i < 6; i++) synth_add(s, 4 + 38.0 * i, 36, 0);
 }
 
-static void expect_types(const char *want) /* F H P p per frame */
+static void expect_types(const char* want) /* F H P p per frame */
 {
   int i;
   CHECK(L.nframes == (int)strlen(want));
-  for(i = 0; want[i]; i++) {
+  for (i = 0; want[i]; i++) {
     ft_frame_type t = want[i] == 'F'   ? FT_FRAME_FULL
                       : want[i] == 'H' ? FT_FRAME_HALF
                       : want[i] == 'P' ? FT_FRAME_PANORAMA
@@ -49,16 +48,14 @@ static void expect_types(const char *want) /* F H P p per frame */
 
 static int nlow(void) {
   int i, n = 0;
-  for(i = 0; i < L.nframes; i++)
-    n += L.f[i].confidence_low;
+  for (i = 0; i < L.nframes; i++) n += L.f[i].confidence_low;
   return n;
 }
 
-static void hf12(synth_spec *s, double pitch) {
+static void hf12(synth_spec* s, double pitch) {
   int i;
   synth_default(s, FT_FILM_NEGATIVE);
-  for(i = 0; i < 12; i++)
-    synth_add(s, 4 + pitch * i, 18, 0);
+  for (i = 0; i < 12; i++) synth_add(s, 4 + pitch * i, 18, 0);
 }
 
 int main(void) {
@@ -69,7 +66,7 @@ int main(void) {
   ff6(&s, FT_FILM_NEGATIVE);
   CHECK(run(&s) == 0);
   expect_types("FFFFFF");
-  for(i = 0; i < 6; i++) {
+  for (i = 0; i < 6; i++) {
     CHECK_NEAR(L.f[i].y0, 4 + 38.0 * i, 0.3);
     CHECK_NEAR(L.f[i].y1, 40 + 38.0 * i, 0.3);
     CHECK_NEAR(L.f[i].x0, 4.1, 0.3);
@@ -86,16 +83,14 @@ int main(void) {
   /* job: sprockets widen the window across to the hole rows */
   {
     ft_job j;
-    ft_layout_to_job(
-        &L, ft_holder_find("24x217"), FT_FILM_NEGATIVE, 2000, 1, &j
-    );
+    ft_layout_to_job(&L, ft_holder_find("24x217"), FT_FILM_NEGATIVE, 2000, 1,
+                     &j);
     CHECK(j.nframes == 6 && j.f[0].sprockets && j.f[0].include);
     CHECK_NEAR(j.f[0].x0, L.holes_x0, 1e-9);
     CHECK_NEAR(j.f[0].width, L.holes_x1 - L.holes_x0, 1e-9);
     CHECK_NEAR(j.f[0].len, L.f[0].y1 - L.f[0].y0, 1e-9);
-    ft_layout_to_job(
-        &L, ft_holder_find("24x217"), FT_FILM_NEGATIVE, 2000, 0, &j
-    );
+    ft_layout_to_job(&L, ft_holder_find("24x217"), FT_FILM_NEGATIVE, 2000, 0,
+                     &j);
     CHECK_NEAR(j.f[0].x0, L.f[0].x0, 1e-9);
     CHECK(j.focus == FT_FOCUS_SHIFTED && j.f[0].ppi == 2000);
     /* the film base goes to the job as density */
@@ -107,13 +102,12 @@ int main(void) {
       ft_layout M = L;
       ft_job k;
       ft_err e2;
-      FILE *g = tmpfile();
+      FILE* g = tmpfile();
       M.base[0] = 1.02;
       M.base[1] = 0.3;
       M.base[2] = 0.1;
-      ft_layout_to_job(
-          &M, ft_holder_find("24x217"), FT_FILM_NEGATIVE, 2000, 0, &k
-      );
+      ft_layout_to_job(&M, ft_holder_find("24x217"), FT_FILM_NEGATIVE, 2000, 0,
+                       &k);
       CHECK(k.film_base[0] == 0);
       CHECK(ft_job_write(&k, g) == 0);
       rewind(g);
@@ -122,13 +116,11 @@ int main(void) {
       M.base[0] = FT_T_FLOOR / 2;
       M.base[1] = FT_T_FLOOR / 10;
       M.base[2] = 0;
-      ft_layout_to_job(
-          &M, ft_holder_find("24x217"), FT_FILM_NEGATIVE, 2000, 0, &k
-      );
-      CHECK(
-          k.film_base[0] == 4.5 && k.film_base[1] == 4.5 &&
-          k.film_base[2] == 4.5
-      );
+      ft_layout_to_job(&M, ft_holder_find("24x217"), FT_FILM_NEGATIVE, 2000, 0,
+                       &k);
+      CHECK(k.film_base[0] == 4.5 &&
+            k.film_base[1] == 4.5 &&
+            k.film_base[2] == 4.5);
     }
   }
 
@@ -136,7 +128,7 @@ int main(void) {
    * far hole row ends at 32.56 mm: the sprockets-in window is clamped
    * to the holder's 32 mm crop width and the job validates */
   {
-    const ft_holder *h = ft_holder_find("24x217");
+    const ft_holder* h = ft_holder_find("24x217");
     ft_job j;
     ft_err e;
     ff6(&s, FT_FILM_NEGATIVE);
@@ -151,7 +143,7 @@ int main(void) {
     CHECK_NEAR(L.holes_x1, 32.56, 0.3);
     CHECK(L.holes_x1 > h->scan_width_mm);
     ft_layout_to_job(&L, h, FT_FILM_NEGATIVE, 2000, 1, &j);
-    for(i = 0; i < j.nframes; i++) {
+    for (i = 0; i < j.nframes; i++) {
       CHECK_NEAR(j.f[i].x0, L.holes_x0, 1e-9);
       CHECK_NEAR(j.f[i].x0 + j.f[i].width, h->scan_width_mm, 1e-9);
     }
@@ -160,7 +152,7 @@ int main(void) {
     /* last frame cut by the strip end past 231 mm: clamped along */
     synth_default(&s, FT_FILM_NEGATIVE);
     s.x_mm0 = 0.92;
-    for(i = 0; i < 6; i++)
+    for (i = 0; i < 6; i++)
       synth_add(&s, 6 + 38.0 * i, 36, 0); /* last: 196..232 */
     CHECK(run(&s) == 0);
     CHECK(L.nframes == 6);
@@ -174,12 +166,10 @@ int main(void) {
 
   /* twelve half frames */
   synth_default(&s, FT_FILM_NEGATIVE);
-  for(i = 0; i < 12; i++)
-    synth_add(&s, 4 + 19.0 * i, 18, 0);
+  for (i = 0; i < 12; i++) synth_add(&s, 4 + 19.0 * i, 18, 0);
   CHECK(run(&s) == 0);
   expect_types("HHHHHHHHHHHH");
-  for(i = 0; i < 12; i++)
-    CHECK_NEAR(L.f[i].y0, 4 + 19.0 * i, 0.3);
+  for (i = 0; i < 12; i++) CHECK_NEAR(L.f[i].y0, 4 + 19.0 * i, 0.3);
 
   /* Autoreflex: full/half switching mid-roll, wider switch gaps */
   synth_default(&s, FT_FILM_NEGATIVE);
@@ -250,7 +240,7 @@ int main(void) {
   s.tilt_deg = 0.3;
   CHECK(run(&s) == 0);
   expect_types("FFFFFF");
-  for(i = 0; i < 6; i++) {
+  for (i = 0; i < 6; i++) {
     CHECK_NEAR(L.f[i].tilt_deg, 0.3, 0.05);
     CHECK_NEAR(L.f[i].y0, 4 + 38.0 * i, 0.3);
   }
@@ -286,8 +276,7 @@ int main(void) {
   /* frames touching each other: no edge anywhere -> grid, flagged */
   synth_default(&s, FT_FILM_NEGATIVE);
   s.film_y1 = 231.0;
-  for(i = 0; i < 6; i++)
-    synth_add(&s, 3 + 38.0 * i, 38, 0);
+  for (i = 0; i < 6; i++) synth_add(&s, 3 + 38.0 * i, 38, 0);
   CHECK(run(&s) == 0);
   CHECK(L.fallback && L.nframes == 6);
   CHECK(L.f[0].confidence_low && L.f[5].confidence_low);
@@ -301,7 +290,7 @@ int main(void) {
   expect_types("FFFFFF");
   CHECK(!L.fallback && nlow() == 0);
   CHECK_NEAR(L.base[0], 0.62, 0.02 * 0.62);
-  for(i = 0; i < 6; i++) {
+  for (i = 0; i < 6; i++) {
     CHECK_NEAR(L.f[i].y0, 4 + 38.0 * i, 0.3);
     CHECK_NEAR(L.f[i].y1, 40 + 38.0 * i, 0.3);
   }
@@ -319,8 +308,7 @@ int main(void) {
   s.blur_mm = 0.1;
   CHECK(run(&s) == 0);
   expect_types("HHHHHHHHHHHH");
-  for(i = 0; i < 12; i++)
-    CHECK_NEAR(L.f[i].y0, 4 + 18.5 * i, 0.3);
+  for (i = 0; i < 12; i++) CHECK_NEAR(L.f[i].y0, 4 + 18.5 * i, 0.3);
 
   /* same with grain only (no blur to average it away) */
   hf12(&s, 18.5);
@@ -333,7 +321,7 @@ int main(void) {
   s.tilt_deg = 0.5;
   CHECK(run(&s) == 0);
   expect_types("HHHHHHHHHHHH");
-  for(i = 0; i < 12; i++) {
+  for (i = 0; i < 12; i++) {
     CHECK_NEAR(L.f[i].y0, 4 + 18.5 * i, 0.3);
     CHECK_NEAR(L.f[i].tilt_deg, 0.5, 0.05);
   }
@@ -381,8 +369,7 @@ int main(void) {
   synth_default(&s, FT_FILM_NEGATIVE);
   s.film_y1 = 117;
   s.open_outside = 1;
-  for(i = 0; i < 3; i++)
-    synth_add(&s, 4 + 38.0 * i, 36, 0);
+  for (i = 0; i < 3; i++) synth_add(&s, 4 + 38.0 * i, 36, 0);
   CHECK(run(&s) == 0);
   expect_types("FFF");
   CHECK(L.has_holes && !L.fallback);
@@ -392,13 +379,11 @@ int main(void) {
   /* touching frames after a leader: the stretch is gridded and flagged,
    * never one long unflagged run */
   synth_default(&s, FT_FILM_NEGATIVE);
-  for(i = 0; i < 6; i++)
-    synth_add(&s, 6 + 37.5 * i, 37.5, 0);
+  for (i = 0; i < 6; i++) synth_add(&s, 6 + 37.5 * i, 37.5, 0);
   CHECK(run(&s) == 0);
   CHECK(L.nframes == 6 && nlow() == 6);
   CHECK_NEAR(L.f[0].y0, 6, 0.3);
-  for(i = 0; i < L.nframes; i++)
-    CHECK(L.f[i].y1 - L.f[i].y0 <= 39.5);
+  for (i = 0; i < L.nframes; i++) CHECK(L.f[i].y1 - L.f[i].y0 <= 39.5);
 
   /* hole rows outside the scanned width: global base, tilt from edges */
   ff6(&s, FT_FILM_SLIDE);
@@ -408,7 +393,7 @@ int main(void) {
   CHECK(run(&s) == 0);
   expect_types("FFFFFF");
   CHECK(!L.has_holes && nlow() == 0);
-  for(i = 0; i < 6; i++) {
+  for (i = 0; i < 6; i++) {
     CHECK_NEAR(L.f[i].y0, 4 + 38.0 * i, 0.3);
     CHECK_NEAR(L.f[i].tilt_deg, -0.3, 0.05);
   }
@@ -427,8 +412,7 @@ int main(void) {
   s.film_y1 = 227.2;
   s.blur_mm = 0.15; /* the metal edge is ~0.3 mm soft */
   s.cut_mm = 2.0;   /* open to 3.68 mm at 28.1 mm across */
-  for(i = 0; i < 6; i++)
-    synth_add(&s, 3.55 + 38.0 * i, 36, 0);
+  for (i = 0; i < 6; i++) synth_add(&s, 3.55 + 38.0 * i, 36, 0);
   CHECK(run(&s) == 0);
   CHECK(!L.has_holes);
   expect_types("FFFFFp");
@@ -452,14 +436,14 @@ int main(void) {
   s.patch[2].y1 = 116; /* frame 3 end */
   s.patch[3].y0 = 118;
   s.patch[3].y1 = 121.5; /* frame 4 start */
-  for(i = 0; i < 4; i++) {
+  for (i = 0; i < 4; i++) {
     s.patch[i].x0 = i % 2 ? 4.1 : 16;
     s.patch[i].x1 = i % 2 ? 16 : 28.1;
   }
   CHECK(run(&s) == 0);
   expect_types("FFFFFF");
   CHECK(!L.fallback && nlow() == 0);
-  for(i = 0; i < 6; i++) {
+  for (i = 0; i < 6; i++) {
     CHECK_NEAR(L.f[i].y0, 4 + 38.0 * i, 0.3);
     CHECK_NEAR(L.f[i].y1, 40 + 38.0 * i, 0.3);
   }
@@ -477,7 +461,7 @@ int main(void) {
   s.open[1].y1 = 107.5;
   synth_add(&s, 28.5, 36, 0);
   synth_add(&s, 66.5, 35.5, 0);
-  for(i = 0; i < 4; i++)
+  for (i = 0; i < 4; i++)
     synth_add(&s, 108.5 + 38.0 * i, 36, 0); /* last cut at 227.3 */
   CHECK(run(&s) == 0);
   expect_types("FFFFFp");
@@ -507,8 +491,7 @@ int main(void) {
   s.open[1].y1 = 107.5;
   synth_add(&s, 28.5, 36, 0);
   synth_add(&s, 66.5, 35.5, 0);
-  for(i = 0; i < 4; i++)
-    synth_add(&s, 108.5 + 38.0 * i, 36, 0);
+  for (i = 0; i < 4; i++) synth_add(&s, 108.5 + 38.0 * i, 36, 0);
   CHECK(run(&s) == 0);
   CHECK(L.has_holes);
   CHECK_NEAR(L.holes_x0, 2.6, 0.3);
@@ -534,14 +517,14 @@ int main(void) {
   s.patch[2].y1 = 116; /* frame 3 end */
   s.patch[3].y0 = 118;
   s.patch[3].y1 = 121.5; /* frame 4 start */
-  for(i = 0; i < 4; i++) {
+  for (i = 0; i < 4; i++) {
     s.patch[i].x0 = i % 2 ? 4.1 : 16;
     s.patch[i].x1 = i % 2 ? 16 : 28.1;
   }
   CHECK(run(&s) == 0);
   expect_types("FFFFFF");
   CHECK(!L.fallback && nlow() == 0);
-  for(i = 0; i < 6; i++) {
+  for (i = 0; i < 6; i++) {
     CHECK_NEAR(L.f[i].y0, 4 + 38.0 * i, 0.3);
     CHECK_NEAR(L.f[i].y1, 40 + 38.0 * i, 0.3);
   }
@@ -551,29 +534,17 @@ int main(void) {
     ft_axes ax = {0, 25.4 / 525, 0, 0};
     ft_err e;
     float px1[3 * 64] = {0};
-    CHECK(
-        ft_detect(
-            px1, 8, 8, &ax, FT_FILM_NEGATIVE, ft_holder_find("24x217"), &L, &e
-        ) == -1
-    );
+    CHECK(ft_detect(px1, 8, 8, &ax, FT_FILM_NEGATIVE, ft_holder_find("24x217"),
+                    &L, &e) == -1);
     ax.x_mm_per_px = 0.048;
-    CHECK(
-        ft_detect(
-            NULL, 8, 8, &ax, FT_FILM_NEGATIVE, ft_holder_find("24x217"), &L, &e
-        ) == -1
-    );
-    CHECK(
-        ft_detect(
-            px1, 0, 8, &ax, FT_FILM_NEGATIVE, ft_holder_find("24x217"), &L, &e
-        ) == -1
-    );
+    CHECK(ft_detect(NULL, 8, 8, &ax, FT_FILM_NEGATIVE, ft_holder_find("24x217"),
+                    &L, &e) == -1);
+    CHECK(ft_detect(px1, 0, 8, &ax, FT_FILM_NEGATIVE, ft_holder_find("24x217"),
+                    &L, &e) == -1);
     CHECK(ft_detect(px1, 8, 8, &ax, FT_FILM_NEGATIVE, NULL, &L, &e) == -1);
     ax.y_mm_per_line = NAN;
-    CHECK(
-        ft_detect(
-            px1, 8, 8, &ax, FT_FILM_NEGATIVE, ft_holder_find("24x217"), &L, &e
-        ) == -1
-    );
+    CHECK(ft_detect(px1, 8, 8, &ax, FT_FILM_NEGATIVE, ft_holder_find("24x217"),
+                    &L, &e) == -1);
   }
 
   /* empty holder */

@@ -10,27 +10,26 @@
 static const struct {
   double scale, ratio, axis;
 } EFF[] = {
-    {1500.0, 1491.5 / 1500.0, 4132.9},
-    {2000.0, 1992.4 / 2000.0, 4140.5},
-    {3150.0, 1.0, FT_CCD_AXIS},
+  {1500.0, 1491.5 / 1500.0, 4132.9     },
+  {2000.0, 1992.4 / 2000.0, 4140.5     },
+  {3150.0, 1.0,             FT_CCD_AXIS},
 };
 #define NEFF (sizeof EFF / sizeof EFF[0])
 
-static void eff(double scale, double *s, double *axis) {
+static void eff(double scale, double* s, double* axis) {
   unsigned i;
   double w;
-  if(!(scale < EFF[NEFF - 1].scale)) {
+  if (!(scale < EFF[NEFF - 1].scale)) {
     *s = scale;
     *axis = FT_CCD_AXIS;
     return;
   }
-  if(!(scale > EFF[0].scale)) {
+  if (!(scale > EFF[0].scale)) {
     *s = scale * EFF[0].ratio;
     *axis = EFF[0].axis;
     return;
   }
-  for(i = 1; scale > EFF[i].scale; i++)
-    ;
+  for (i = 1; scale > EFF[i].scale; i++);
   w = (scale - EFF[i - 1].scale) / (EFF[i].scale - EFF[i - 1].scale);
   *s = scale * (EFF[i - 1].ratio + w * (EFF[i].ratio - EFF[i - 1].ratio));
   *axis = EFF[i - 1].axis + w * (EFF[i].axis - EFF[i - 1].axis);

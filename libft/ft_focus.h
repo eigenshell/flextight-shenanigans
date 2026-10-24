@@ -8,8 +8,9 @@
  */
 #ifndef FT_FOCUS_H
 #define FT_FOCUS_H
-#include "ft.h"
 #include <stdio.h>
+
+#include "ft.h"
 
 /* Below ~3000 the thin-lens curve drifts from the true focus on this
  * unit (focus survey 2026-10-15/16, notes/hw/focusmap/RESULTS.md; the
@@ -25,7 +26,7 @@ typedef struct {
 } ft_lens;
 extern const ft_lens ft_lens_default;
 /* l's correction at scale (0 without a table) */
-double ft_lens_correction(const ft_lens *l, double scale);
+double ft_lens_correction(const ft_lens* l, double scale);
 
 /* The fit spans 3807..6230; the scanner's own focus table (FP<serial>.txt)
  * sits within ~2400 tandem steps of the curve down to scale ~1475
@@ -74,43 +75,40 @@ double ft_lens_correction(const ft_lens *l, double scale);
  * focus survey 2026-10-15/16 (notes/hw/focusmap/RESULTS.md 4: measured
  * 636 at 6300, 3651 at 2000, 5653 at 1500, bin 1; within ~10 %). */
 #define FT_DOF95_K 980.0
-double ft_lens_dof95(const ft_lens *l, double scale, int bin);
+double ft_lens_dof95(const ft_lens* l, double scale, int bin);
 
 int ft_bin_for_ppi(double ppi);   /* -1 if ppi > 6300 */
 int ft_ppi_supported(double ppi); /* 1 = crop can scan it in focus */
 /* 0 ok; -1 (outputs not written) for scale outside range / NaN or an
  * implausible lens or positions that overflow */
-int ft_optics_for(const ft_lens *l, double scale, long *ccd, long *optic);
+int ft_optics_for(const ft_lens* l, double scale, long* ccd, long* optic);
 int ft_positions_ok(long ccd, long optic);
 /* the curve's pair for scale with focus offset off on both (tandem);
  * same returns as ft_optics_for */
-int ft_optics_focus(
-    const ft_lens *l, double scale, long off, long *ccd, long *optic
-);
+int ft_optics_focus(const ft_lens* l, double scale, long off, long* ccd,
+                    long* optic);
 
 /* sharpness of a w x h single-channel linear image: rms Sobel gradient
  * of the 3x3-box-denoised image over its mean (~relative step per pixel;
  * gain-free). 0 when w or h < 5 or the mean is 0; NaN out of memory. */
-double ft_sharpness(const float *g, int w, int h);
+double ft_sharpness(const float* g, int w, int h);
 /* x must be ascending; -1 also if any y is not finite.
  * parabola peak through the maximum and its neighbours: 0 ok, 1 maximum
  * at an end (*peak = that x), -1 fewer than 3 points */
-int ft_peak(const long *x, const double *y, int n, double *peak);
+int ft_peak(const long* x, const double* y, int n, double* peak);
 /* offsets are averaged in double; per-frame if any is > margin from mean */
-ft_focus_mode ft_focus_decide(const long off[3], long *shift);
+ft_focus_mode ft_focus_decide(const long off[3], long* shift);
 
 /* focus.txt ("key = number" lines: film, w, fl, p; '#' comments; any
  * number of "correct = <scale> <offset>" lines, scales ascending) from
  * text[0..n) or a stream; -1 with e filled and *l untouched on error */
-int ft_lens_parse(ft_lens *l, const char *text, size_t n, ft_err *e);
-int ft_lens_read(ft_lens *l, FILE *f, ft_err *e);
-int ft_lens_write(const ft_lens *l, FILE *f);
+int ft_lens_parse(ft_lens* l, const char* text, size_t n, ft_err* e);
+int ft_lens_read(ft_lens* l, FILE* f, ft_err* e);
+int ft_lens_write(const ft_lens* l, FILE* f);
 /* least-squares fit of l (start value in, result out) to n >= 4 in-focus
  * points (scale M[i], CCD C[i], lens L[i]); rms residuals out. The fit
  * has no correction table: it is fitted to the points as they are. */
-int ft_lens_fit(
-    const double *M, const long *C, const long *L, int n, ft_lens *l,
-    double *rms_ccd, double *rms_lens
-);
+int ft_lens_fit(const double* M, const long* C, const long* L, int n,
+                ft_lens* l, double* rms_ccd, double* rms_lens);
 
 #endif

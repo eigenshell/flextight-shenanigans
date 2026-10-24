@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+#include <stdint.h>
+#include <string.h>
+
 #include "ft_pm.h"
 #include "ft_print.h"
 #include "ft_render_auto.h"
 #include "test/ftest.h"
-#include <stdint.h>
-#include <string.h>
 
 static ft_render ref;
 static ft_print_render pr;
@@ -24,13 +25,13 @@ static const double GAMMA[3] = {0.55, 0.62, 0.70};
 
 /* a colour negative of a grey ramp (12 steps over two decades of
  * exposure, the brightest at scale) with scanner-like noise */
-static void negative(ft_image *im, double scale) {
+static void negative(ft_image* im, double scale) {
   int x, y, c;
-  for(y = 0; y < H; y++)
-    for(x = 0; x < W; x++) {
+  for (y = 0; y < H; y++)
+    for (x = 0; x < W; x++) {
       int s = x * STEPS / W;
       double ex = scale * pow(10, -2 + 2.0 * s / (STEPS - 1));
-      for(c = 0; c < 3; c++) {
+      for (c = 0; c < 3; c++) {
         double d = BASE[c] + GAMMA[c] * log10(ex / 0.002);
         double t = pow(10, -d), sig = sqrt(0.0005 * 0.0005 + t / 6000);
         im->rgb[3 * (y * W + x) + c] = (float)(t + sig * gauss());
@@ -39,35 +40,34 @@ static void negative(ft_image *im, double scale) {
 }
 
 static const ft_emulsion CLASSIC = {
-    "test-classic", "Test classic",         FT_RENDER_NEG, &ft_pm_film_classic,
-    NULL,           &ft_pm_balance_classic, NULL,          &ft_pm_print_classic,
-    NULL,           &ft_pm_output_classic,  NULL
+  "test-classic", "Test classic",         FT_RENDER_NEG, &ft_pm_film_classic,
+  NULL,           &ft_pm_balance_classic, NULL,          &ft_pm_print_classic,
+  NULL,           &ft_pm_output_classic,  NULL};
+static const ft_emulsion CLASSIC_SLIDE = {"test-slide",
+                                          "Test slide",
+                                          FT_RENDER_SLIDE,
+                                          &ft_pm_film_classic,
+                                          NULL,
+                                          &ft_pm_balance_classic,
+                                          NULL,
+                                          &ft_pm_print_classic,
+                                          NULL,
+                                          &ft_pm_output_classic,
+                                          NULL};
+static const ft_pm_stock_par STOCK_ROLL = {
+  1.2f, 0, {1, 1, 1}
 };
-static const ft_emulsion CLASSIC_SLIDE = {
-    "test-slide",
-    "Test slide",
-    FT_RENDER_SLIDE,
-    &ft_pm_film_classic,
-    NULL,
-    &ft_pm_balance_classic,
-    NULL,
-    &ft_pm_print_classic,
-    NULL,
-    &ft_pm_output_classic,
-    NULL
+static const ft_pm_stock_par STOCK_FIXED = {
+  1.2f, 1, {1.1f, 1, 0.9f}
 };
-static const ft_pm_stock_par STOCK_ROLL = {1.2f, 0, {1, 1, 1}};
-static const ft_pm_stock_par STOCK_FIXED = {1.2f, 1, {1.1f, 1, 0.9f}};
 static const ft_emulsion STOCK = {
-    "test-stock", "Test stock",           FT_RENDER_NEG, &ft_pm_film_stock,
-    &STOCK_ROLL,  &ft_pm_balance_classic, NULL,          &ft_pm_print_classic,
-    NULL,         &ft_pm_output_classic,  NULL
-};
+  "test-stock", "Test stock",           FT_RENDER_NEG, &ft_pm_film_stock,
+  &STOCK_ROLL,  &ft_pm_balance_classic, NULL,          &ft_pm_print_classic,
+  NULL,         &ft_pm_output_classic,  NULL};
 static const ft_emulsion STOCK_FIX = {
-    "test-fixed", "Test fixed",           FT_RENDER_NEG, &ft_pm_film_stock,
-    &STOCK_FIXED, &ft_pm_balance_classic, NULL,          &ft_pm_print_classic,
-    NULL,         &ft_pm_output_classic,  NULL
-};
+  "test-fixed", "Test fixed",           FT_RENDER_NEG, &ft_pm_film_stock,
+  &STOCK_FIXED, &ft_pm_balance_classic, NULL,          &ft_pm_print_classic,
+  NULL,         &ft_pm_output_classic,  NULL};
 static const ft_emulsion BW = {"test-bw",    "Test b&w",
                                FT_RENDER_BW, &ft_pm_film_stock,
                                &STOCK_ROLL,  &ft_pm_balance_classic,
@@ -75,14 +75,13 @@ static const ft_emulsion BW = {"test-bw",    "Test b&w",
                                NULL,         &ft_pm_output_classic,
                                NULL};
 
-static double lift(const ft_recipe *r, int c) {
+static double lift(const ft_recipe* r, int c) {
   return r->exposure * log10(2) + r->tint[c] / 100.0;
 }
 
-static void one_frame(
-    const ft_emulsion *em, const ft_image *im, ft_cmyd k, ft_recipe *r
-) {
-  const ft_image *one[1];
+static void one_frame(const ft_emulsion* em, const ft_image* im, ft_cmyd k,
+                      ft_recipe* r) {
+  const ft_image* one[1];
   ft_print_frame fr;
   ft_print_roll roll;
   ft_err e;
@@ -93,7 +92,7 @@ static void one_frame(
 
 int main(void) {
   static const ft_cmyd NONE = {0, 0, 0, 0};
-  const ft_image *one[1];
+  const ft_image* one[1];
   ft_image im, under, out1, out2;
   ft_recipe r, a;
   ft_err e;
@@ -131,14 +130,10 @@ int main(void) {
     ft_recipe_default(&a, FT_RENDER_SLIDE);
     ft_recipe_set_base(&a, BLACK);
     CHECK(ft_render_auto(one, 1, &a, &e) == 0);
-    CHECK(
-        ft_print_roll_measure(&CLASSIC_SLIDE, BLACK, one, 1, &fr, &roll, &e) ==
-        0
-    );
-    CHECK(
-        ft_print_recipe(&CLASSIC_SLIDE, &roll, &fr, NONE, &r, NULL, NULL, &e) ==
-        0
-    );
+    CHECK(ft_print_roll_measure(&CLASSIC_SLIDE, BLACK, one, 1, &fr, &roll,
+                                &e) == 0);
+    CHECK(ft_print_recipe(&CLASSIC_SLIDE, &roll, &fr, NONE, &r, NULL, NULL,
+                          &e) == 0);
     CHECK(memcmp(&r, &a, sizeof r) == 0);
   }
 
@@ -150,7 +145,7 @@ int main(void) {
     one_frame(&CLASSIC, &im, NONE, &r0);
     one_frame(&CLASSIC, &im, cmy, &r1);
     one_frame(&CLASSIC, &im, d1, &r2);
-    for(c = 0; c < 3; c++) { /* +1 C +1 M +1 Y == +1 D */
+    for (c = 0; c < 3; c++) { /* +1 C +1 M +1 Y == +1 D */
       CHECK_NEAR(lift(&r1, c), lift(&r2, c), 1e-6);
       CHECK_NEAR(lift(&r2, c) - lift(&r0, c), -FT_PRINT_CLICK, 1e-6);
     }
@@ -169,7 +164,7 @@ int main(void) {
     /* on the print: +C takes red out of a mid grey, +D darkens it */
     {
       float t[3], o0[3], o1[3];
-      for(c = 0; c < 3; c++)
+      for (c = 0; c < 3; c++)
         t[c] = (float)pow(10, -(BASE[c] + GAMMA[c] * 1.4));
       ft_render_direct(&r0, t, o0);
       one_frame(&CLASSIC, &im, (ft_cmyd){4, 0, 0, 0}, &r1);
@@ -177,8 +172,7 @@ int main(void) {
       CHECK(o1[0] < o0[0] - 0.01);
       one_frame(&CLASSIC, &im, (ft_cmyd){0, 0, 0, 4}, &r1);
       ft_render_direct(&r1, t, o1);
-      for(c = 0; c < 3; c++)
-        CHECK(o1[c] < o0[c] - 0.01);
+      for (c = 0; c < 3; c++) CHECK(o1[c] < o0[c] - 0.01);
     }
   }
 
@@ -188,41 +182,29 @@ int main(void) {
     ft_print_roll roll;
     int clamped = -1;
     CHECK(ft_print_roll_measure(&CLASSIC, BASE, one, 1, &fr, &roll, &e) == 0);
-    CHECK(
-        ft_print_recipe(
-            &CLASSIC, &roll, &fr, (ft_cmyd){100, 0, 0, 0}, &r, NULL, NULL, &e
-        ) == -1
-    );
+    CHECK(ft_print_recipe(&CLASSIC, &roll, &fr, (ft_cmyd){100, 0, 0, 0}, &r,
+                          NULL, NULL, &e) == -1);
     CHECK(strcmp(e.msg, "cmyd: C 100 is out of range (-99..99)") == 0);
     CHECK(ft_print_clicks_ok(&CLASSIC, (ft_cmyd){0, 0, 0, -100}, &e) == -1);
     CHECK(strcmp(e.msg, "cmyd: D -100 is out of range (-99..99)") == 0);
     CHECK(ft_print_clicks_ok(&BW, (ft_cmyd){0, 1, 0, 0}, &e) == -1);
-    CHECK(
-        strcmp(
-            e.msg, "cmyd: test-bw is black and white: C, M and Y "
-                   "must be 0"
-        ) == 0
-    );
+    CHECK(strcmp(e.msg,
+                 "cmyd: test-bw is black and white: C, M and Y "
+                 "must be 0") == 0);
     CHECK(ft_print_clicks_ok(&BW, (ft_cmyd){0, 0, 0, -99}, &e) == 0);
     /* beyond the recipe's +-50 CC: clamped and reported */
-    CHECK(
-        ft_print_recipe(
-            &CLASSIC, &roll, &fr, (ft_cmyd){30, 0, 0, 0}, &r, NULL, &clamped, &e
-        ) == 0
-    );
+    CHECK(ft_print_recipe(&CLASSIC, &roll, &fr, (ft_cmyd){30, 0, 0, 0}, &r,
+                          NULL, &clamped, &e) == 0);
     CHECK(clamped == 1 && r.tint[0] == -50);
     CHECK(ft_recipe_validate(&r, &e) == 0);
-    CHECK(
-        ft_print_recipe(
-            &CLASSIC, &roll, &fr, (ft_cmyd){20, 0, 0, 0}, &r, NULL, &clamped, &e
-        ) == 0
-    );
+    CHECK(ft_print_recipe(&CLASSIC, &roll, &fr, (ft_cmyd){20, 0, 0, 0}, &r,
+                          NULL, &clamped, &e) == 0);
     CHECK(clamped == 0 && r.tint[0] == -50);
   }
 
   /* stock: one range for the roll, no per-frame stretch */
   {
-    const ft_image *roll2[2];
+    const ft_image* roll2[2];
     ft_print_frame fr[2];
     ft_print_roll roll;
     ft_recipe r0, r1;
@@ -230,44 +212,35 @@ int main(void) {
     roll2[1] = &under;
     /* classic: the thin frame is stretched to its own, smaller range */
     CHECK(ft_print_roll_measure(&CLASSIC, BASE, roll2, 2, fr, &roll, &e) == 0);
-    CHECK(
-        ft_print_recipe(&CLASSIC, &roll, &fr[0], NONE, &r0, NULL, NULL, &e) == 0
-    );
-    CHECK(
-        ft_print_recipe(&CLASSIC, &roll, &fr[1], NONE, &r1, NULL, NULL, &e) == 0
-    );
+    CHECK(ft_print_recipe(&CLASSIC, &roll, &fr[0], NONE, &r0, NULL, NULL, &e) ==
+          0);
+    CHECK(ft_print_recipe(&CLASSIC, &roll, &fr[1], NONE, &r1, NULL, NULL, &e) ==
+          0);
     CHECK(r1.range[1] < 0.7 * r0.range[1]);
     /* stock: both frames at scale x the roll's median ratio */
     CHECK(ft_print_roll_measure(&STOCK, BASE, roll2, 2, fr, &roll, &e) == 0);
     CHECK(roll.has_range);
-    CHECK(
-        ft_print_recipe(&STOCK, &roll, &fr[0], NONE, &r0, NULL, NULL, &e) == 0
-    );
-    CHECK(
-        ft_print_recipe(&STOCK, &roll, &fr[1], NONE, &r1, NULL, NULL, &e) == 0
-    );
+    CHECK(ft_print_recipe(&STOCK, &roll, &fr[0], NONE, &r0, NULL, NULL, &e) ==
+          0);
+    CHECK(ft_print_recipe(&STOCK, &roll, &fr[1], NONE, &r1, NULL, NULL, &e) ==
+          0);
     CHECK(memcmp(r0.range, r1.range, sizeof r0.range) == 0);
     CHECK_NEAR(r0.range[1], 1.2, 1e-6);
-    for(c = 0; c < 3; c += 2) /* the dye gammas' ratio */
+    for (c = 0; c < 3; c += 2) /* the dye gammas' ratio */
       CHECK_NEAR(r0.range[c] / r0.range[1], GAMMA[c] / GAMMA[1], 0.05);
     /* a fixed ratio: exactly scale x ratio */
-    CHECK(ft_print_roll_measure(&STOCK_FIX, BASE, roll2, 2, fr, &roll, &e) == 0);
-    CHECK(
-        ft_print_recipe(&STOCK_FIX, &roll, &fr[1], NONE, &r1, NULL, NULL, &e) ==
-        0
-    );
-    CHECK(
-        r1.range[0] == 1.2f * 1.1f && r1.range[1] == 1.2f &&
-        r1.range[2] == 1.2f * 0.9f
-    );
+    CHECK(ft_print_roll_measure(&STOCK_FIX, BASE, roll2, 2, fr, &roll, &e) ==
+          0);
+    CHECK(ft_print_recipe(&STOCK_FIX, &roll, &fr[1], NONE, &r1, NULL, NULL,
+                          &e) == 0);
+    CHECK(r1.range[0] == 1.2f * 1.1f &&
+          r1.range[1] == 1.2f &&
+          r1.range[2] == 1.2f * 0.9f);
     /* b&w: luminance base, one range, tint 0 */
     CHECK(ft_print_roll_measure(&BW, BASE, roll2, 2, fr, &roll, &e) == 0);
     CHECK(roll.base[0] == roll.base[1] && roll.base[1] == roll.base[2]);
-    CHECK(
-        ft_print_recipe(
-            &BW, &roll, &fr[0], (ft_cmyd){0, 0, 0, 3}, &r1, NULL, NULL, &e
-        ) == 0
-    );
+    CHECK(ft_print_recipe(&BW, &roll, &fr[0], (ft_cmyd){0, 0, 0, 3}, &r1, NULL,
+                          NULL, &e) == 0);
     CHECK(r1.range[0] == 1.2f && r1.range[2] == 1.2f);
     CHECK(r1.tint[0] == 0 && r1.tint[1] == 0 && r1.tint[2] == 0);
     CHECK(ft_recipe_validate(&r1, &e) == 0);

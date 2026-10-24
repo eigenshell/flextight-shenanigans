@@ -20,9 +20,8 @@ int sgio_dir(unsigned char dir, unsigned len);
  * reads while the host is ahead of the CCD), SGIO_TIMEOUT, or SGIO_ERROR
  * (CHECK CONDITION, a host/driver failure: DID_NO_CONNECT right after a
  * microcode upload, ...). */
-int sgio_result(
-    int status, int host, int driver, int resid, unsigned len, unsigned *got
-);
+int sgio_result(int status, int host, int driver, int resid, unsigned len,
+                unsigned* got);
 
 /* The data-out length the microcode itself asks for, whatever the host's
  * buffer: SET WINDOW (0x24, 3000:22e3) and WRITE BUFFER (0x3b,
@@ -32,9 +31,9 @@ int sgio_result(
  * 0x005400 = 21504 bytes, not the 84 of the descriptor: the Windows
  * miniport pads the rest silently, Linux's aic7xxx calls it a data
  * overrun (DID_ERROR). 10-byte CDBs only; anything else: data_len. */
-unsigned sgio_out_len(const unsigned char *cdb, int cdb_len, unsigned data_len);
+unsigned sgio_out_len(const unsigned char* cdb, int cdb_len, unsigned data_len);
 
 /* "DID_NO_CONNECT" for host_status 1 etc. ("" when unknown) */
-const char *sgio_host_name(int host);
+const char* sgio_host_name(int host);
 
 #endif

@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include "ft_calib.h"
-#include "ft_noise_model.h"
-#include "test/ftest.h"
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
+
+#include "ft_calib.h"
+#include "ft_noise_model.h"
+#include "test/ftest.h"
 
 static uint32_t rng = 77;
 static double urand(void) {
@@ -30,11 +31,11 @@ static unsigned short dn(double mean, double sig) {
  * signal above the black level too; each pixel its own level and span */
 static void make_cal(int nd, int nw) {
   int l, i;
-  for(l = 0; l < nd + nw; l++)
-    for(i = 0; i < PX * 3; i++)
+  for (l = 0; l < nd + nw; l++)
+    for (i = 0; i < PX * 3; i++)
       cal[(size_t)l * PX * 3 + i] =
-          l < nd ? dn(dark[i], RD)
-                 : dn(dark[i] + span[i], sqrt(G * span[i] + RD * RD));
+        l < nd ? dn(dark[i], RD)
+               : dn(dark[i] + span[i], sqrt(G * span[i] + RD * RD));
 }
 
 int main(void) {
@@ -42,7 +43,7 @@ int main(void) {
   ft_err e;
   int i, c, lvl, rc;
 
-  for(i = 0; i < PX * 3; i++) {
+  for (i = 0; i < PX * 3; i++) {
     dark[i] = 290 + 20 * urand();
     span[i] = 5500 + 1000 * urand() + 300 * (i % 3);
   }
@@ -51,9 +52,9 @@ int main(void) {
    * too: +1/12 DN^2) */
   make_cal(ND, NW);
   CHECK(ft_noise_model(cal, ND + NW, PX, prof, &e) == 0);
-  for(c = 0; c < 3; c++) {
+  for (c = 0; c < 3; c++) {
     double isp = 0, isp2 = 0, s, o;
-    for(i = c; i < PX * 3; i += 3) {
+    for (i = c; i < PX * 3; i += 3) {
       isp += 1 / span[i];
       isp2 += 1 / (span[i] * span[i]);
     }
@@ -68,18 +69,17 @@ int main(void) {
   /* the profile predicts the variance of developed pixels: flat fields
    * at four levels through ft_split_cal + ft_flatfield, within 5 % */
   CHECK(ft_split_cal(cal, ND + NW, PX, dref, wref, &e) == 0);
-  for(lvl = 0; lvl < 4; lvl++) {
+  for (lvl = 0; lvl < 4; lvl++) {
     static const double tv[4] = {0.01, 0.05, 0.3, 0.85};
-    for(i = 0; i < NL * PX * 3; i++) {
+    for (i = 0; i < NL * PX * 3; i++) {
       int p = i % (PX * 3);
       raw[i] =
-          dn(dark[p] + tv[lvl] * span[p],
-             sqrt(G * tv[lvl] * span[p] + RD * RD));
+        dn(dark[p] + tv[lvl] * span[p], sqrt(G * tv[lvl] * span[p] + RD * RD));
     }
     ft_flatfield(raw, NL, PX, dref, wref, t);
-    for(c = 0; c < 3; c++) {
+    for (c = 0; c < 3; c++) {
       double m = 0, m2 = 0, n = 0, want;
-      for(i = c; i < NL * PX * 3; i += 3) {
+      for (i = c; i < NL * PX * 3; i += 3) {
         m += t[i];
         m2 += (double)t[i] * t[i];
         n++;
@@ -95,17 +95,17 @@ int main(void) {
    * the lamp warming over the white lines. None of it is pixel noise:
    * S and O stay within 3 %. */
   make_cal(ND, NW);
-  for(i = 0; i < PX * 3; i++) {
+  for (i = 0; i < PX * 3; i++) {
     int l;
     cal[(size_t)(ND - 1) * PX * 3 + i] =
-        dn(dark[i] + (i / 3 < PX / 2 ? 0.08 : 0.02) * span[i], RD);
-    for(l = ND; l < ND + NW; l++)
+      dn(dark[i] + (i / 3 < PX / 2 ? 0.08 : 0.02) * span[i], RD);
+    for (l = ND; l < ND + NW; l++)
       cal[(size_t)l * PX * 3 + i] += (unsigned short)(l - ND) / 5;
   }
   CHECK(ft_noise_model(cal, ND + NW, PX, prof, &e) == 0);
-  for(c = 0; c < 3; c++) {
+  for (c = 0; c < 3; c++) {
     double isp = 0, isp2 = 0, s, o;
-    for(i = c; i < PX * 3; i += 3) {
+    for (i = c; i < PX * 3; i += 3) {
       isp += 1 / span[i];
       isp2 += 1 / (span[i] * span[i]);
     }
@@ -123,11 +123,11 @@ int main(void) {
   CHECK(strstr(e.msg, "40 dark") != NULL);
 
   /* no noise at all: S = 0, O at the 0.25 DN^2 floor, flagged */
-  for(i = 0; i < (ND + NW) * PX * 3; i++)
+  for (i = 0; i < (ND + NW) * PX * 3; i++)
     cal[i] = (unsigned short)(i < ND * PX * 3 ? 300 : 6300);
   rc = ft_noise_model(cal, ND + NW, PX, prof, &e);
   CHECK(rc == 1 && strstr(e.msg, "clamped") != NULL);
-  for(c = 0; c < 3; c++) {
+  for (c = 0; c < 3; c++) {
     CHECK(prof[2 * c] == 0);
     CHECK_NEAR(prof[2 * c + 1], 0.25 / (6000.0 * 6000.0), 1e-15);
   }

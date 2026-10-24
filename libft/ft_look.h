@@ -21,10 +21,11 @@
  * in the browser too. An ft_edit is ~100 KB: static or heap, not stack. */
 #ifndef FT_LOOK_H
 #define FT_LOOK_H
+#include <stddef.h>
+
 #include "ft.h"
 #include "ft_image.h"
 #include "ft_render.h"
-#include <stddef.h>
 
 #define FT_STOCK_VERSION 1    /* the newest [stock] this code reads */
 #define FT_LOOK_CURVE_TXT 320 /* 16 points of "0.123456,0.123456 " */
@@ -88,55 +89,49 @@ typedef struct {
   double nr_sensor, nr_chroma, nr_grain, sharpen;
 } ft_look_detail;
 
-void ft_edit_init(ft_edit *ed);
+void ft_edit_init(ft_edit* ed);
 /* the i-th taste key's name and FT_T_* bit (table order); NULL past the
  * last */
-const char *ft_taste_key(int i, unsigned *bit);
+const char* ft_taste_key(int i, unsigned* bit);
 /* one taste key from its text value, validated; -1 with e filled */
-int ft_taste_set(ft_taste *t, const char *key, const char *value, ft_err *e);
+int ft_taste_set(ft_taste* t, const char* key, const char* value, ft_err* e);
 /* text -> ed (FT_LOOK_FILE: no `from`, no [frame N]); errors name the
  * line: "line 7: grade: 9 is out of range (0.2..5)" */
-int ft_edit_parse(
-    const char *text, size_t n, ft_look_kind k, ft_edit *ed, ft_err *e
-);
+int ft_edit_parse(const char* text, size_t n, ft_look_kind k, ft_edit* ed,
+                  ft_err* e);
 /* ed -> text in buf (always NUL-terminated if cap > 0); returns the length
  * the whole text needs, without the NUL: a result >= cap means truncated */
-size_t ft_edit_write(const ft_edit *ed, ft_look_kind k, char *buf, size_t cap);
+size_t ft_edit_write(const ft_edit* ed, ft_look_kind k, char* buf, size_t cap);
 
 /* edit operations (the web UI's); frame = a frame index or FT_EDIT_ROLL */
-int ft_edit_set(
-    ft_edit *ed, int frame, const char *key, const char *value, ft_err *e
-);
+int ft_edit_set(ft_edit* ed, int frame, const char* key, const char* value,
+                ft_err* e);
 /* key NULL: every key of that scope */
-int ft_edit_clear(ft_edit *ed, int frame, const char *key, ft_err *e);
+int ft_edit_clear(ft_edit* ed, int frame, const char* key, ft_err* e);
 /* dst's overrides become a copy of src's (none if src has none) */
-int ft_edit_copy(ft_edit *ed, int src, int dst, ft_err *e);
+int ft_edit_copy(ft_edit* ed, int src, int dst, ft_err* e);
 /* the look's [stock] and [taste] replace the roll's; frames are kept */
-void ft_edit_apply_look(ft_edit *ed, const ft_edit *look, const char *name);
+void ft_edit_apply_look(ft_edit* ed, const ft_edit* look, const char* name);
 
 /* the frame's effective taste: the roll's, frame keys replacing them;
  * from_frame (NULL ok) gets the bits that came from the frame */
-void ft_edit_taste(
-    const ft_edit *ed, int frame, ft_taste *out, unsigned *from_frame
-);
-void ft_look_detail_of(const ft_taste *t, ft_look_detail *d);
+void ft_edit_taste(const ft_edit* ed, int frame, ft_taste* out,
+                   unsigned* from_frame);
+void ft_look_detail_of(const ft_taste* t, ft_look_detail* d);
 /* the recipe for frames im[0..n) (pooled statistics; usually one):
  * stock and taste NULL = none; base NULL = estimated from the frames.
  * Exposure after the offset is clamped to +-6 stops. The stock's
  * range_ratio applies to negatives only, the taste's tint not to b&w (both
  * ignored there). -1 with e filled */
-int ft_look_recipe(
-    const ft_stock *s, const ft_taste *t, ft_render_mode m, const float *base,
-    const ft_image *const *im, int n, ft_recipe *r, ft_err *e
-);
+int ft_look_recipe(const ft_stock* s, const ft_taste* t, ft_render_mode m,
+                   const float* base, const ft_image* const* im, int n,
+                   ft_recipe* r, ft_err* e);
 
 /* stock hints from n frames' measured ratios (range[c] / range[green] of
  * the stock-free auto-estimate): the median per channel, pooled with old
  * (NULL: none) weighted by frame count; old's bw weights are kept.
  * spread (NULL ok) = the largest max - min of the frames' r or b ratios */
-int ft_stock_learn(
-    const double (*ratio)[3], int n, const ft_stock *old, ft_stock *out,
-    double *spread, ft_err *e
-);
+int ft_stock_learn(const double (*ratio)[3], int n, const ft_stock* old,
+                   ft_stock* out, double* spread, ft_err* e);
 
 #endif

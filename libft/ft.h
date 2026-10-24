@@ -13,7 +13,7 @@ typedef struct {
 #ifdef __GNUC__
 __attribute__((format(printf, 2, 3)))
 #endif
-int ft_fail(ft_err *e, const char *fmt, ...);
+int ft_fail(ft_err* e, const char* fmt, ...);
 
 typedef enum { FT_FILM_NEGATIVE, FT_FILM_SLIDE } ft_film;
 typedef enum {

@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+#include <string.h>
+
 #include "ft.h"
 #include "test/ftest.h"
-#include <string.h>
 
 int main(void) {
   ft_err e;

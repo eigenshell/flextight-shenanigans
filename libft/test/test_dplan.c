@@ -1,18 +1,19 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Pinned seconds and pixel ranges were computed by hand (Python) from the
  * models in ft_plan.h and ft_geom.h, not from this code. */
+#include <math.h>
+#include <string.h>
+
 #include "ft_dplan.h"
 #include "ft_plan.h"
 #include "test/ftest.h"
-#include <math.h>
-#include <string.h>
 
 static ft_dframe fr[FT_MAX_FRAMES];
 
 /* n FF frames, 36 mm long, every 38 mm from 2 mm */
 static void strip(int n) {
   int i;
-  for(i = 0; i < n; i++) {
+  for (i = 0; i < n; i++) {
     fr[i].index = i + 1;
     fr[i].y0 = 2 + 38.0 * i;
     fr[i].len = 36;
@@ -21,33 +22,28 @@ static void strip(int n) {
 }
 
 /* the fastest in-focus grouping by trying every partition (n <= 12) */
-static double brute(const ft_dframe *f, int n, double ppi, long span) {
+static double brute(const ft_dframe* f, int n, double ppi, long span) {
   double best = HUGE_VAL;
   unsigned mask, lim = 1u << (n - 1);
-  for(mask = 0; mask < lim; mask++) {
+  for (mask = 0; mask < lim; mask++) {
     double t = 0;
     int i, k, start = 0, ok = 1;
-    for(i = 0; i < n && ok; i++)
-      if(i == n - 1 || (mask >> i & 1)) { /* a pass ends at i */
+    for (i = 0; i < n && ok; i++)
+      if (i == n - 1 || (mask >> i & 1)) { /* a pass ends at i */
         long lo = f[start].focus, hi = lo;
         double a = f[start].y0 - FT_DETAIL_MARGIN_MM;
         double b = f[i].y0 + f[i].len + FT_DETAIL_MARGIN_MM;
-        for(k = start; k <= i; k++) {
-          if(f[k].focus < lo)
-            lo = f[k].focus;
-          if(f[k].focus > hi)
-            hi = f[k].focus;
+        for (k = start; k <= i; k++) {
+          if (f[k].focus < lo) lo = f[k].focus;
+          if (f[k].focus > hi) hi = f[k].focus;
         }
         ok = hi - lo <= span;
-        if(a < 0)
-          a = 0;
-        if(b > 231)
-          b = 231;
+        if (a < 0) a = 0;
+        if (b > 231) b = 231;
         t += ft_scan_seconds(ppi, 1, b - a);
         start = i + 1;
       }
-    if(ok && t < best)
-      best = t;
+    if (ok && t < best) best = t;
   }
   return best;
 }
@@ -91,8 +87,7 @@ int main(void) {
   CHECK_NEAR(p.seconds, 2759.4038, 1e-3);
 
   /* the film height steps by 700 after frame 3: two passes */
-  for(i = 3; i < 6; i++)
-    fr[i].focus = 700;
+  for (i = 3; i < 6; i++) fr[i].focus = 700;
   CHECK(ft_dplan_make(fr, 6, 3150, 231, FT_DETAIL_DOF_SPAN, &p, &e) == 0);
   CHECK(p.npass == 2);
   CHECK(p.p[0].last == 2 && p.p[1].first == 3 && p.p[1].focus == 700);
@@ -124,38 +119,34 @@ int main(void) {
 
   /* span 0 and different heights: a pass per frame */
   strip(5);
-  for(i = 0; i < 5; i++)
-    fr[i].focus = i % 2 ? 700 : 0;
+  for (i = 0; i < 5; i++) fr[i].focus = i % 2 ? 700 : 0;
   CHECK(ft_dplan_make(fr, 5, 6300, 231, 0, &p, &e) == 0);
   CHECK(p.npass == 5);
 
   /* the DP equals brute force on random selections and heights */
-  for(trial = 0; trial < 300; trial++) {
+  for (trial = 0; trial < 300; trial++) {
     int n = 0, all = 6;
     double ppi = trial % 2 ? 6300 : 3150;
     strip(all);
-    for(i = 0; i < all; i++)
-      if(rnd() % 3) {
+    for (i = 0; i < all; i++)
+      if (rnd() % 3) {
         fr[n] = fr[i];
         fr[n].focus = (long)(rnd() % 1500) - 700;
         n++;
       }
-    if(n == 0)
-      continue;
+    if (n == 0) continue;
     CHECK(ft_dplan_make(fr, n, ppi, 231, FT_DETAIL_DOF_SPAN, &p, &e) == 0);
     CHECK_NEAR(p.seconds, brute(fr, n, ppi, FT_DETAIL_DOF_SPAN), 1e-6);
     { /* the passes cover the frames in order, each in focus */
       int k, next = 0;
       double sum = 0;
-      for(k = 0; k < p.npass; k++) {
+      for (k = 0; k < p.npass; k++) {
         long lo = fr[p.p[k].first].focus, hi = lo;
         int m;
         CHECK(p.p[k].first == next);
-        for(m = p.p[k].first; m <= p.p[k].last; m++) {
-          if(fr[m].focus < lo)
-            lo = fr[m].focus;
-          if(fr[m].focus > hi)
-            hi = fr[m].focus;
+        for (m = p.p[k].first; m <= p.p[k].last; m++) {
+          if (fr[m].focus < lo) lo = fr[m].focus;
+          if (fr[m].focus > hi) hi = fr[m].focus;
         }
         CHECK(hi - lo <= FT_DETAIL_DOF_SPAN);
         next = p.p[k].last + 1;

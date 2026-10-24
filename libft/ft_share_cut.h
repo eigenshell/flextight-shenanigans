@@ -24,13 +24,14 @@
  *     DNG's NoiseProfile, ft_noise_model.h) */
 #ifndef FT_SHARE_CUT_H
 #define FT_SHARE_CUT_H
+#include <stddef.h>
+#include <stdio.h>
+
 #include "ft.h"
 #include "ft_develop.h"
 #include "ft_image.h"
 #include "ft_job.h"
 #include "ft_share.h"
-#include <stddef.h>
-#include <stdio.h>
 
 typedef struct {
   /* the scan (ftpoc's own keys) */
@@ -51,9 +52,10 @@ typedef struct {
 /* parse a window scan's .txt; -1 with e naming the key on error or when
  * a required key (ppi px x y bin share, at least one share_frame) is
  * missing */
-int ft_share_meta_parse(const char *text, size_t n, ft_share_meta *m, ft_err *e);
+int ft_share_meta_parse(const char* text, size_t n, ft_share_meta* m,
+                        ft_err* e);
 /* append the share keys for group g of job j (to the scan's .txt) */
-int ft_share_meta_write(FILE *out, const ft_job *j, int g);
+int ft_share_meta_write(FILE* out, const ft_job* j, int g);
 
 typedef struct {
   int index;
@@ -79,12 +81,11 @@ typedef struct {
  * detect, cut every frame of m. Fills r (caller: ft_share_cut_free).
  * -1 with e filled when the scan cannot be developed or a frame's box
  * leaves the scan entirely. */
-int ft_share_cut(
-    const unsigned short *raw, int lines, const unsigned short *cal,
-    int cal_lines, const char *faul, size_t faul_n, const ft_defects *d,
-    const ft_share_meta *m, ft_share_cut_result *r, ft_err *e
-);
-void ft_share_cut_free(ft_share_cut_result *r);
+int ft_share_cut(const unsigned short* raw, int lines,
+                 const unsigned short* cal, int cal_lines, const char* faul,
+                 size_t faul_n, const ft_defects* d, const ft_share_meta* m,
+                 ft_share_cut_result* r, ft_err* e);
+void ft_share_cut_free(ft_share_cut_result* r);
 
 typedef struct {
   int frame;
@@ -101,18 +102,15 @@ typedef struct {
 
 /* the sidecar text into buf (snprintf's contract: the full length back,
  * at most cap - 1 bytes and a NUL written; buf may be NULL with cap 0) */
-int ft_share_sidecar_write_buf(
-    char *buf, size_t cap, const ft_share_meta *m, const ft_share_cut_frame *c
-);
+int ft_share_sidecar_write_buf(char* buf, size_t cap, const ft_share_meta* m,
+                               const ft_share_cut_frame* c);
 /* the same into a stream (ft_share_cut_io.c, as ft_share_meta_write) */
-int ft_share_sidecar_write(
-    FILE *out, const ft_share_meta *m, const ft_share_cut_frame *c
-);
+int ft_share_sidecar_write(FILE* out, const ft_share_meta* m,
+                           const ft_share_cut_frame* c);
 /* -1 with e naming the key if box or export_scale is missing or bad, or
  * noise_profile has not six numbers; a noise_profile out of range reads as
  * none (has_noise 0) */
-int ft_share_sidecar_parse(
-    const char *text, size_t n, ft_share_sidecar *s, ft_err *e
-);
+int ft_share_sidecar_parse(const char* text, size_t n, ft_share_sidecar* s,
+                           ft_err* e);
 
 #endif

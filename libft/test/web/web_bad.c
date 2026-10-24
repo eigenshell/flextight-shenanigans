@@ -3,7 +3,7 @@
  * files */
 #include <stdio.h>
 
-int web_bad(const char *path) {
-  FILE *f = fopen(path, "rb");
+int web_bad(const char* path) {
+  FILE* f = fopen(path, "rb");
   return f ? fclose(f) : -1;
 }

@@ -9,7 +9,7 @@
 
 typedef struct {
   int w, h;
-  float *rgb; /* h rows of w RGB floats, 0..1; after
+  float* rgb; /* h rows of w RGB floats, 0..1; after
                  ft_render_image a positive in linear Rec.2020,
                  no longer transmittance (write transmittance
                  formats before rendering) */
@@ -30,18 +30,17 @@ typedef struct {
 } ft_image;
 
 /* metadata defaults, no pixels (rgb NULL, w = h = 0) */
-void ft_image_init(ft_image *im);
+void ft_image_init(ft_image* im);
 /* allocates w x h pixels (zeroed); -1 with e filled on failure */
-int ft_image_alloc(ft_image *im, int w, int h, ft_err *e);
-void ft_image_free(ft_image *im);
+int ft_image_alloc(ft_image* im, int w, int h, ft_err* e);
+void ft_image_free(ft_image* im);
 /* the box x,y,w,h of im as a new image (allocated in cut, ppi kept); -1
  * with e filled if it does not fit */
-int ft_image_crop(
-    const ft_image *im, const int box[4], ft_image *cut, ft_err *e
-);
+int ft_image_crop(const ft_image* im, const int box[4], ft_image* cut,
+                  ft_err* e);
 /* im turned by deg clockwise (0, 90, 180 or 270) as a new image in out
  * (allocated; metadata copied, w and h swapped at 90 and 270); -1 with e
  * filled on another angle or out of memory */
-int ft_image_rotate(const ft_image *im, int deg, ft_image *out, ft_err *e);
+int ft_image_rotate(const ft_image* im, int deg, ft_image* out, ft_err* e);
 
 #endif

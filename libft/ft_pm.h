@@ -45,7 +45,7 @@ typedef struct {
                                 paper_white */
 } ft_pm_paper_par;           /* NULL par: ft_recipe_default's */
 typedef struct {
-  const ft_cube *cube;
+  const ft_cube* cube;
   float lo, hi; /* e (D) at cube coordinate 0 and 1 */
 } ft_pm_lut3d_par;
 
@@ -54,11 +54,10 @@ typedef struct {
 extern const ft_pm_output ft_pm_output_classic;
 
 /* lut3d's compiled form applied (ft_print_apply) */
-void ft_pm_lut3d_apply(
-    const ft_print_lut *l, const float *in, float *out, size_t npx
-);
+void ft_pm_lut3d_apply(const ft_print_lut* l, const float* in, float* out,
+                       size_t npx);
 
 /* median of v[0..n) (n >= 1); sorts v */
-double ft_print_median(double *v, int n);
+double ft_print_median(double* v, int n);
 
 #endif

@@ -1,16 +1,17 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include "ft_png.h"
-#include "test/ftest.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "ft_png.h"
+#include "test/ftest.h"
+
 int main(void) {
   static unsigned char rgb[300 * 300 * 3]; /* > 64 KiB: several blocks */
   unsigned char head[24];
-  const char *path = "test/png_test_out.png";
+  const char* path = "test/png_test_out.png";
   ft_err e;
-  FILE *f;
+  FILE* f;
   long size, raw = 300L * (300 * 3 + 1);
   long blocks = (raw + 65534) / 65535;
 

@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+#include <string.h>
+
 #include "ft_upload.h"
 #include "test/ftest.h"
-#include <string.h>
 
 int main(void) {
   static unsigned char code[FT_UPLOAD_CHUNK], buf[FT_UPLOAD_CHUNK + 10];
@@ -20,8 +21,7 @@ int main(void) {
   static const unsigned char want_trail[10] = {0x00, 0x30, 0x01, 0x00, 0x0e,
                                                0,    0,    0,    0,    0};
 
-  for(i = 0; i < FT_UPLOAD_CHUNK; i++)
-    code[i] = (unsigned char)(i * 7 + 3);
+  for (i = 0; i < FT_UPLOAD_CHUNK; i++) code[i] = (unsigned char)(i * 7 + 3);
 
   CHECK(ft_upload_chunk(0, code, cdb, buf, sizeof buf, &e) == 4106);
   CHECK(memcmp(cdb, want_chunk_cdb, 10) == 0);
@@ -59,10 +59,8 @@ int main(void) {
     CHECK(strcmp(p[0], "D:\\fw\\m.3xx") == 0);
     CHECK(ft_upload_paths("", "C:\\web\\ftpoc.exe", p) == 0);
     CHECK(ft_upload_paths("C:\\web\\ftpoc.exe", NULL, p) == 1);
-    CHECK(
-        ft_upload_paths(NULL, "c:\\flextight_shenanigans\\web\\ftpoc.exe", p) ==
-        2
-    );
+    CHECK(ft_upload_paths(NULL, "c:\\flextight_shenanigans\\web\\ftpoc.exe",
+                          p) == 2);
     CHECK(strcmp(p[0], "c:\\flextight_shenanigans\\web\\MICROCOD.3XX") == 0);
     CHECK(strcmp(p[1], "MICROCOD.3XX") == 0);
     CHECK(ft_upload_paths(NULL, "/opt/ft/bin/ftpoc", p) == 2);

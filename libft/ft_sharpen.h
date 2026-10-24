@@ -22,8 +22,7 @@
 size_t ft_sharpen_scratch_bytes(int w, int h);
 /* in place, rgb interleaved; scale: the resize scale that made the image
  * (<= 0 or > 1 count as 1) */
-void ft_sharpen(
-    float *rgb, int w, int h, double amount, double scale, void *scratch
-);
+void ft_sharpen(float* rgb, int w, int h, double amount, double scale,
+                void* scratch);
 
 #endif

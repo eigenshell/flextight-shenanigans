@@ -25,7 +25,7 @@ int ft_bins_for_ppi(double ppi, int bins[6]);
 /* 1 if bin is one of ft_bins_for_ppi's */
 int ft_bin_ok(double ppi, int bin);
 /* light per sample relative to the 6300 optics */
-double ft_light_rel(const ft_lens *l, double scale);
+double ft_light_rel(const ft_lens* l, double scale);
 /* per-read Dmax (R) estimate for that light */
 double ft_dmax_est(double light);
 /* seconds to read `lines` lines at bin (measured 2026-10-13: 9133 at

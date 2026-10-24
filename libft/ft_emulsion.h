@@ -11,8 +11,8 @@
 #define FT_EMULSION_REV 1
 
 /* NULL if no emulsion has that id */
-const ft_emulsion *ft_emulsion_find(const char *id);
+const ft_emulsion* ft_emulsion_find(const char* id);
 /* the i-th emulsion (0..), NULL past the last */
-const ft_emulsion *ft_emulsion_at(int i);
+const ft_emulsion* ft_emulsion_at(int i);
 
 #endif

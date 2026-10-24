@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include "ft_plan.h"
-#include "test/ftest.h"
 #include <math.h>
 #include <stdio.h>
+
+#include "ft_plan.h"
+#include "test/ftest.h"
 
 int main(void) {
   int b[6], n;
@@ -46,10 +47,8 @@ int main(void) {
   CHECK_NEAR(ft_line_seconds(FT_CAL_LINES, 1), 24.2, 1);  /* cal, bin 1 */
   CHECK_NEAR(ft_line_seconds(FT_CAL_LINES, 3), 7.8, 0.5); /* cal, bin 3 */
   /* a whole scan: fixed + calibration + lines */
-  CHECK_NEAR(
-      ft_scan_seconds(2000, 3, 36),
-      FT_SCAN_FIXED + (2834.6 + 250) * 2664 / 84000.0, 0.5
-  );
+  CHECK_NEAR(ft_scan_seconds(2000, 3, 36),
+             FT_SCAN_FIXED + (2834.6 + 250) * 2664 / 84000.0, 0.5);
   CHECK(ft_scan_seconds(2000, 1, 36) > 2.5 * ft_scan_seconds(2000, 3, 36));
 
   return TEST_DONE();

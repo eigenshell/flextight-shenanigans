@@ -1,38 +1,48 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include "ft_progress.h"
-#include "test/ftest.h"
 #include <string.h>
 
+#include "ft_progress.h"
+#include "test/ftest.h"
+
 /* p -> text == want, and want parses back to the same fields */
-static void both(const ft_progress *p, const char *want) {
+static void both(const ft_progress* p, const char* want) {
   char buf[400];
   ft_progress q;
   size_t n = ft_progress_fmt(p, buf, sizeof buf);
   CHECK(n == strlen(want) && strcmp(buf, want) == 0);
   CHECK(ft_progress_parse(want, strlen(want), &q) == 0);
   CHECK(q.type == p->type);
-  switch(p->type) {
-  case FT_PG_BEGIN: CHECK(q.kind == p->kind && q.n == p->n); break;
-  case FT_PG_UNIT:
-    CHECK(q.kind == p->kind && q.n == p->n && q.label == p->label);
-    break;
-  case FT_PG_LINES: CHECK(q.k == p->k && q.total == p->total); break;
-  case FT_PG_FILE: CHECK(strcmp(q.path, p->path) == 0); break;
-  case FT_PG_END: CHECK(q.status == p->status); break;
-  case FT_PG_FOCUS:
-    CHECK(q.k == p->k && q.label == p->label && q.off == p->off);
-    break;
-  case FT_PG_SHARP:
-    CHECK(
-        q.off == p->off && q.sharp > p->sharp - 5e-5 &&
-        q.sharp < p->sharp + 5e-5
-    );
-    break;
-  case FT_PG_FOCUSED: CHECK(q.off == p->off && q.how == p->how); break;
+  switch (p->type) {
+    case FT_PG_BEGIN:
+      CHECK(q.kind == p->kind && q.n == p->n);
+      break;
+    case FT_PG_UNIT:
+      CHECK(q.kind == p->kind && q.n == p->n && q.label == p->label);
+      break;
+    case FT_PG_LINES:
+      CHECK(q.k == p->k && q.total == p->total);
+      break;
+    case FT_PG_FILE:
+      CHECK(strcmp(q.path, p->path) == 0);
+      break;
+    case FT_PG_END:
+      CHECK(q.status == p->status);
+      break;
+    case FT_PG_FOCUS:
+      CHECK(q.k == p->k && q.label == p->label && q.off == p->off);
+      break;
+    case FT_PG_SHARP:
+      CHECK(q.off == p->off &&
+            q.sharp > p->sharp - 5e-5 &&
+            q.sharp < p->sharp + 5e-5);
+      break;
+    case FT_PG_FOCUSED:
+      CHECK(q.off == p->off && q.how == p->how);
+      break;
   }
 }
 
-static int bad(const char *s) {
+static int bad(const char* s) {
   ft_progress q;
   return ft_progress_parse(s, strlen(s), &q) == -1;
 }
@@ -122,14 +132,14 @@ int main(void) {
   /* parse: without the '\n', a '\r\n' ending, exactly n bytes */
   {
     ft_progress q;
-    CHECK(
-        ft_progress_parse("progress lines 5/9", 18, &q) == 0 &&
-        q.type == FT_PG_LINES && q.k == 5 && q.total == 9
-    );
-    CHECK(
-        ft_progress_parse("progress lines 5/9\r\n", 20, &q) == 0 && q.total == 9
-    );
-    CHECK(ft_progress_parse("progress lines 5/99", 18, &q) == 0 && q.total == 9);
+    CHECK(ft_progress_parse("progress lines 5/9", 18, &q) == 0 &&
+          q.type == FT_PG_LINES &&
+          q.k == 5 &&
+          q.total == 9);
+    CHECK(ft_progress_parse("progress lines 5/9\r\n", 20, &q) == 0 &&
+          q.total == 9);
+    CHECK(ft_progress_parse("progress lines 5/99", 18, &q) == 0 &&
+          q.total == 9);
   }
   /* anything else is not a progress line */
   CHECK(bad("frame 3: REFUSED (reason above)\n"));

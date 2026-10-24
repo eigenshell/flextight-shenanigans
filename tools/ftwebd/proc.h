@@ -18,18 +18,17 @@ typedef struct {
 
 /* argv[0] is the program (an absolute path); cwd the child's directory.
  * 0, or -1 with a message in err. */
-int proc_spawn(
-    proc *p, const char *const *argv, const char *cwd, char *err, size_t errn
-);
+int proc_spawn(proc* p, const char* const* argv, const char* cwd, char* err,
+               size_t errn);
 /* bytes read (> 0), 0 at end of output, -1 on error */
-long proc_read(proc *p, char *buf, size_t n);
+long proc_read(proc* p, char* buf, size_t n);
 /* waits for the child and closes the pipe; its exit code (-1: killed or
  * unknown) */
-int proc_wait(proc *p);
+int proc_wait(proc* p);
 /* asks the child to stop (Ctrl+Break / SIGINT); 0 if delivered */
-int proc_stop(proc *p);
+int proc_stop(proc* p);
 /* an absolute path for prog (resolved against the current directory);
  * 0, or -1 if it does not exist */
-int proc_abspath(const char *prog, char *out, size_t n);
+int proc_abspath(const char* prog, char* out, size_t n);
 
 #endif

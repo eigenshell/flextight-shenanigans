@@ -53,7 +53,7 @@ typedef struct {
   ft_axes ax;
   int px;
   ft_film film;
-  const ft_holder *h;
+  const ft_holder* h;
   int b0, b1; /* band columns [b0, b1) */
   int s0, s1; /* columns the image may lie in */
   int gap_lines, weak_lines, grid_lines, cut_lines, ring_cap;
@@ -71,9 +71,9 @@ typedef struct {
   long gap_s;      /* the current gap streak */
   int gap_n;
   long weak_s, weak_e;   /* the open run's last short gap, -1 none */
-  unsigned short *hist;  /* the open run: px x 3 density bins */
-  unsigned short *valid; /* per column: lines on film */
-  float *scratch;        /* the band's densities, 3 x band */
+  unsigned short* hist;  /* the open run: px x 3 density bins */
+  unsigned short* valid; /* per column: lines on film */
+  float* scratch;        /* the band's densities, 3 x band */
   /* out */
   int nframes;
   ft_sdet_frame f[FT_MAX_FRAMES];
@@ -82,19 +82,17 @@ typedef struct {
 
 /* px pixels per line (RGB transmittance), ax the preview's axes, h the
  * holder. -1 with e filled when the band misses the line or no memory. */
-int ft_sdet_init(
-    ft_sdet *d, const ft_axes *ax, int px, ft_film film, const ft_holder *h,
-    ft_err *e
-);
-void ft_sdet_free(ft_sdet *d);
+int ft_sdet_init(ft_sdet* d, const ft_axes* ax, int px, ft_film film,
+                 const ft_holder* h, ft_err* e);
+void ft_sdet_free(ft_sdet* d);
 /* one line (px x 3 floats); the frames it sealed (appended to d->f) */
-int ft_sdet_line(ft_sdet *d, const float *line);
+int ft_sdet_line(ft_sdet* d, const float* line);
 /* n lines in a row; the frames they sealed */
-int ft_sdet_feed(ft_sdet *d, const float *lines, int n);
+int ft_sdet_feed(ft_sdet* d, const float* lines, int n);
 /* the strip ended: the open run sealed (0 or 1) */
-int ft_sdet_end(ft_sdet *d);
+int ft_sdet_end(ft_sdet* d);
 /* the film base (negative) or black (slide) as transmittance; 0 if none
  * seen yet (base untouched) */
-int ft_sdet_base(const ft_sdet *d, float base[3]);
+int ft_sdet_base(const ft_sdet* d, float base[3]);
 
 #endif

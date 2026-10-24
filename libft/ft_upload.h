@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef FT_UPLOAD_H
 #define FT_UPLOAD_H
-#include "ft.h"
 #include <stddef.h>
+
+#include "ft.h"
 
 /* MICROCOD.3XX upload to the resident loader, byte for byte as FlexColor
  * sends it (session 2/3 traces). Same packet format as ft_maint.h: each
@@ -19,17 +20,15 @@
 
 /* Fills cdb[10] and buf (cap bytes); returns the data length, or -1 with
  * e filled. */
-int ft_upload_chunk(
-    int i, const unsigned char code[FT_UPLOAD_CHUNK], unsigned char cdb[10],
-    unsigned char *buf, size_t cap, ft_err *e
-);
-int ft_upload_trailer(
-    unsigned char cdb[10], unsigned char *buf, size_t cap, ft_err *e
-);
+int ft_upload_chunk(int i, const unsigned char code[FT_UPLOAD_CHUNK],
+                    unsigned char cdb[10], unsigned char* buf, size_t cap,
+                    ft_err* e);
+int ft_upload_trailer(unsigned char cdb[10], unsigned char* buf, size_t cap,
+                      ft_err* e);
 
 /* 1 if the INQUIRY data (n bytes) names the loader ("SCSI Loader" at
  * product byte 16), the only state in which FlexColor uploads. */
-int ft_upload_is_loader(const unsigned char *inq, size_t n);
+int ft_upload_is_loader(const unsigned char* inq, size_t n);
 
 /* Where ftpoc looks for the microcode when the loader answers, in order:
  * the given path alone (--microcode; no other place is tried), else
@@ -40,8 +39,7 @@ int ft_upload_is_loader(const unsigned char *inq, size_t n);
  * (0: the given path is too long or empty). */
 #define FT_UPLOAD_FILE "MICROCOD.3XX"
 #define FT_UPLOAD_PATH 520
-int ft_upload_paths(
-    const char *given, const char *exe, char out[2][FT_UPLOAD_PATH]
-);
+int ft_upload_paths(const char* given, const char* exe,
+                    char out[2][FT_UPLOAD_PATH]);
 
 #endif

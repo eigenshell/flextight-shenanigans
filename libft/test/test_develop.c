@@ -1,27 +1,25 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "ft_develop.h"
 #include "ft_dng.h"
 #include "ft_geom.h"
 #include "ft_out.h"
 #include "test/ftest.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
-static unsigned rd16(const unsigned char *p) {
-  return p[0] | p[1] << 8;
-}
-static unsigned long rd32(const unsigned char *p) {
+static unsigned rd16(const unsigned char* p) { return p[0] | p[1] << 8; }
+static unsigned long rd32(const unsigned char* p) {
   return rd16(p) | (unsigned long)rd16(p + 2) << 16;
 }
 
 /* the IFD entry for tag, or NULL */
-static const unsigned char *find_tag(const unsigned char *f, unsigned tag) {
-  const unsigned char *ifd = f + rd32(f + 4);
+static const unsigned char* find_tag(const unsigned char* f, unsigned tag) {
+  const unsigned char* ifd = f + rd32(f + 4);
   unsigned n = rd16(ifd), i;
-  for(i = 0; i < n; i++)
-    if(rd16(ifd + 2 + 12 * i) == tag)
-      return ifd + 2 + 12 * i;
+  for (i = 0; i < n; i++)
+    if (rd16(ifd + 2 + 12 * i) == tag) return ifd + 2 + 12 * i;
   return NULL;
 }
 
@@ -30,8 +28,9 @@ int main(void) {
 
   /* defect map: pixel, optional channels, comments */
   {
-    static const char txt[] = "# stuck column\n3021\n 400 g # green\n"
-                              "\n500 rb\n";
+    static const char txt[] =
+      "# stuck column\n3021\n 400 g # green\n"
+      "\n500 rb\n";
     ft_defects d;
     CHECK(ft_defects_parse(txt, sizeof txt - 1, &d, &e) == 0);
     CHECK(d.n == 3);
@@ -49,8 +48,8 @@ int main(void) {
     ft_develop_opts o;
     ft_image im;
     int l, c;
-    for(l = 0; l < L; l++)
-      for(c = 0; c < P; c++) {
+    for (l = 0; l < L; l++)
+      for (c = 0; c < P; c++) {
         t[(l * P + c) * 3 + 0] = (float)(l * 10 + c);
         t[(l * P + c) * 3 + 1] = 0.5f;
         t[(l * P + c) * 3 + 2] = -1;
@@ -82,12 +81,12 @@ int main(void) {
     ft_defects d;
     ft_image im;
     int l, i, c;
-    for(l = 0; l < CL; l++)
-      for(i = 0; i < P * 3; i++)
+    for (l = 0; l < CL; l++)
+      for (i = 0; i < P * 3; i++)
         cal[l * P * 3 + i] = (unsigned short)(l < 200 ? 300 : 4300);
-    for(l = 0; l < L; l++)
-      for(c = 0; c < P; c++)
-        for(i = 0; i < 3; i++) /* T = 0.25, px 3 stuck white */
+    for (l = 0; l < L; l++)
+      for (c = 0; c < P; c++)
+        for (i = 0; i < 3; i++) /* T = 0.25, px 3 stuck white */
           raw[(l * P + c) * 3 + i] = c == 3 ? 4300 : 1300;
     memset(&o, 0, sizeof o);
     o.x = 10;
@@ -111,9 +110,9 @@ int main(void) {
     im.ppi = 2000;
     CHECK(ft_writer_find("dng")->write("test_develop.dng", &im, &e) == 0);
     {
-      FILE *f = fopen("test_develop.dng", "rb");
-      unsigned char *b = malloc(1 << 16);
-      const unsigned char *t;
+      FILE* f = fopen("test_develop.dng", "rb");
+      unsigned char* b = malloc(1 << 16);
+      const unsigned char* t;
       size_t n;
       unsigned prev = 0, k, ntags;
       CHECK(f && b);
@@ -121,7 +120,7 @@ int main(void) {
       fclose(f);
       CHECK(n > 8 && memcmp(b, "II*\0", 4) == 0);
       ntags = rd16(b + rd32(b + 4));
-      for(k = 0; k < ntags; k++) { /* ascending tags */
+      for (k = 0; k < ntags; k++) { /* ascending tags */
         unsigned tag = rd16(b + rd32(b + 4) + 2 + 12 * k);
         CHECK(tag > prev);
         prev = tag;
@@ -136,7 +135,7 @@ int main(void) {
       CHECK((t = find_tag(b, 282)) && rd32(b + rd32(t + 8)) == 2000000UL);
       CHECK((t = find_tag(b, 273)) != NULL);
       {
-        const unsigned char *px = b + rd32(t + 8); /* one strip */
+        const unsigned char* px = b + rd32(t + 8); /* one strip */
         CHECK(rd16(px) == 16384);                  /* 0.25 * 65535 + 0.5 */
         CHECK(rd16(px + 6 * (3 * im.w + 5) + 2) == 16384);
       }

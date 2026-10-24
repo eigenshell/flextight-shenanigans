@@ -2,9 +2,10 @@
 /* sgio.c: SG_IO directions and how completions map to ftpoc's codes. The
  * literals are Linux's (scsi/sg.h; the midlayer's host bytes), pinned
  * here, not taken from sgio.c. */
+#include <string.h>
+
 #include "ftest.h"
 #include "sgio.h"
-#include <string.h>
 
 int main(void) {
   unsigned got = 99;
