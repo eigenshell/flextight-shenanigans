@@ -10,19 +10,19 @@
  *   their range (no halos)
  *   RGB *= (Lp' / Lp)^3: hue and saturation stay, neutrals stay neutral
  *
- * amount 0 returns the image untouched; pixels with Lp <= 1e-6 (Y <= 1e-18) are left alone;
- * NaN/inf -> 0 otherwise. Pure C99 (no I/O, no allocation). */
+ * amount 0 returns the image untouched; pixels with Lp <= 1e-6 (Y <= 1e-18) are
+ * left alone; NaN/inf -> 0 otherwise. Pure C99 (no I/O, no allocation). */
 #ifndef FT_SHARPEN_H
 #define FT_SHARPEN_H
 #include <stddef.h>
 
-#define FT_SHARPEN_T     0.004  /* tune on hardware scans */
+#define FT_SHARPEN_T 0.004 /* tune on hardware scans */
 #define FT_SHARPEN_CLAMP 0.10
 
 size_t ft_sharpen_scratch_bytes(int w, int h);
 /* in place, rgb interleaved; scale: the resize scale that made the image
  * (<= 0 or > 1 count as 1) */
-void ft_sharpen(float *rgb, int w, int h, double amount, double scale,
-                void *scratch);
+void ft_sharpen(float* rgb, int w, int h, double amount, double scale,
+                void* scratch);
 
 #endif

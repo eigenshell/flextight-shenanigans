@@ -9,8 +9,8 @@
 #include "ft_focus.h"
 
 typedef struct {
-    double scale_min, scale_max;   /* optical scale (ppi x bin) range */
-    const ft_lens *lens;
+  double scale_min, scale_max; /* optical scale (ppi x bin) range */
+  const ft_lens* lens;
 } ft_optics_limits;
 
 /* 1 and *dmax if some bin in {12,6,4,3,2,1} puts the scale ppi x bin in
@@ -18,6 +18,6 @@ typedef struct {
  * per-read Dmax (R) at the lowest such scale (the most light); 0 and
  * *dmax untouched otherwise (also non-finite or <= 0 ppi, no limits or
  * no lens) */
-int ft_dmax_for_ppi(const ft_optics_limits *lim, double ppi, double *dmax);
+int ft_dmax_for_ppi(const ft_optics_limits* lim, double ppi, double* dmax);
 
 #endif

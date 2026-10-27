@@ -19,29 +19,28 @@
 #define FT_DENSITY_H
 #include <stddef.h>
 
-#define FT_DENS_OFFSET 0.1          /* D: the film base's place above 0 */
-#define FT_DENS_RANGE  4.0          /* D: codes 0..65535 span this */
+#define FT_DENS_OFFSET 0.1 /* D: the film base's place above 0 */
+#define FT_DENS_RANGE 4.0  /* D: codes 0..65535 span this */
 
 /* one table per channel: 3 x 128 KB, keep it off the stack */
 typedef struct {
-    unsigned short lut[3][65536];
-    double base[3];
+  unsigned short lut[3][65536];
+  double base[3];
 } ft_dens;
 
 /* T (0..1) -> u16 as the negative files store it; NaN -> 0 */
-void ft_dens_t16(const float *t, unsigned short *out, size_t n);
+void ft_dens_t16(const float* t, unsigned short* out, size_t n);
 /* tables for film base densities base[3] (each clamped to 0..4.5) */
-void ft_dens_init(ft_dens *d, const double base[3]);
+void ft_dens_init(ft_dens* d, const double base[3]);
 /* colour: npx RGB pixels of u16 transmittance -> RGB codes */
-void ft_dens_rgb(const ft_dens *d, const unsigned short *t16,
-                 unsigned short *out, size_t npx);
+void ft_dens_rgb(const ft_dens* d, const unsigned short* t16,
+                 unsigned short* out, size_t npx);
 /* b/w mono: one code per pixel, sum(w[c] x code[c]) rounded; w from
  * ft_dens_weights (sums to 1). The codes are affine in D - D_base with
  * one scale, so this is the weighted mean of the base-corrected
  * densities, encoded (up to rounding and the clamps). */
-void ft_dens_mono(const ft_dens *d, const double w[3],
-                  const unsigned short *t16, unsigned short *out,
-                  size_t npx);
+void ft_dens_mono(const ft_dens* d, const double w[3],
+                  const unsigned short* t16, unsigned short* out, size_t npx);
 /* inverse-noise weights from per-channel variances, normalised to sum
  * to 1; a variance <= 0 or not finite gives equal weights */
 void ft_dens_weights(const double var[3], double w[3]);
