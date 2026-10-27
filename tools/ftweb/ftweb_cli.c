@@ -28,7 +28,7 @@
  *
  *   ftweb_cli --dmax ppi
  *
- * libft's Dmax estimate (ft_dmax_for_ppi on today's optics limits) as
+ * libft's Dmax estimate (ft_estimate_dmax on today's optics limits) as
  * %.6f, or null without one.
  */
 #include <stdio.h>
@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
   if(argc == 3 && strcmp(argv[1], "--dmax") == 0) {
     const ft_optics_limits lim = {FT_SCALE_MIN, FT_SCALE_MAX, &ft_lens_default};
     double d;
-    if(ft_dmax_for_ppi(&lim, atof(argv[2]), &d))
+    if(ft_estimate_dmax(&lim, atof(argv[2]), &d))
       printf("%.6f\n", d);
     else
       printf("null\n");

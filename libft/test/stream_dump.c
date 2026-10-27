@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
   t = ft_develop_t(raw, (int)(nr / (px * 6)), (int)px, cal,
                    (int)(nc / (px * 6)), NULL, 0, &o, &nl, &e);
   ft_preview_axes(ft_preview_find("standard"), x, &ax);
-  if(!t || ft_sdet_init(&d, &ax, (int)px, film, ft_holder_find("24x217"), &e)) {
+  if(!t || ft_sdet_init(&d, &ax, (int)px, film, ft_find_holder("24x217"), &e)) {
     fprintf(stderr, "stream_dump: %s\n", e.msg);
     return 1;
   }

@@ -144,7 +144,7 @@ int ft_share_meta_parse(const char* text, size_t n, ft_share_meta* m,
                    : !(seen & 16) ? "bin"
                                   : "share");
   if(!m->nframes) return ft_fail(e, "share meta: no share_frame");
-  if(!ft_holder_find(m->holder))
+  if(!ft_find_holder(m->holder))
     return ft_fail(e, "share meta: unknown holder %s", m->holder);
   return 0;
 }
@@ -224,7 +224,7 @@ int ft_share_cut(const unsigned short* raw, int lines,
     ft_err de;
     ft_box_down(t, nl, m->px, f, ds);
     r->detect_ok = ft_detect(ds, nl / f, m->px / f, &ax, m->film,
-                             ft_holder_find(m->holder), &L, &de) == 0;
+                             ft_find_holder(m->holder), &L, &de) == 0;
   }
   free(ds);
   if(!r->detect_ok) L.nframes = 0;

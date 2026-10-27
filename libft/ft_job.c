@@ -475,7 +475,7 @@ static int share_groups(const ft_job* j, ft_err* e) {
 }
 
 int ft_job_validate(const ft_job* j, const ft_lens* lens, ft_err* e) {
-  const ft_holder* h = ft_holder_find(j->holder);
+  const ft_holder* h = ft_find_holder(j->holder);
   int i;
   if(!h) return ft_fail(e, "unknown holder '%s'", j->holder);
   if(j->nframes <= 0) return ft_fail(e, "no frames");
@@ -510,10 +510,10 @@ int ft_job_validate(const ft_job* j, const ft_lens* lens, ft_err* e) {
          f->width > 0 &&
          f->y0 >= 0 &&
          f->x0 >= 0 &&
-         f->y0 + f->len <= h->scan_len_mm &&
+         f->y0 + f->len <= h->scan_length_mm &&
          f->x0 + f->width <= h->scan_width_mm))
       return ft_fail(e, "%s: window outside the holder (%.0f x %.0f mm)", w,
-                     h->scan_len_mm, h->scan_width_mm);
+                     h->scan_length_mm, h->scan_width_mm);
     if(!(fabs(f->tilt_deg) <= 45))
       return ft_fail(e, "%s: tilt %g out of range (+-45 degrees)", w,
                      f->tilt_deg);

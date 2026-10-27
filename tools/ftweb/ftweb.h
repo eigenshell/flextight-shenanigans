@@ -34,7 +34,7 @@ int ftw_emulsions(ftw* w);
 /* the landing page's resolutions, one per ppi[i] -> out: [{"ppi","mp",
  * "px","dmax"}]: mp = a 36x24 frame's megapixels (one decimal), px = its
  * long side (the planner's target, FT_SHARE_FF_LONG_MM), dmax = libft's
- * rough per-read Dmax (R) estimate (ft_dmax_for_ppi on today's optics
+ * rough per-read Dmax (R) estimate (ft_estimate_dmax on today's optics
  * limits: FT_SCALE_MIN, FT_SCALE_MAX, ft_lens_default) to one decimal, or
  * null where it has none (the page shows #N/A). -1 for a ppi no bin
  * reaches. */

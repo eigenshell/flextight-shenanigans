@@ -2816,7 +2816,7 @@ static int plan_share(ft_job* j, const ft_holder* h, double share, int hf,
   ft_err e;
   int n, nc, k, i, w;
 
-  ft_share_opts_default(&o, h->scan_len_mm);
+  ft_share_opts_default(&o, h->scan_length_mm);
   o.target_px = share;
   o.hf_half_res = hf;
   if(ft_share_select(j, select, sel, &n, &e)) {
@@ -2864,7 +2864,7 @@ static int cmd_frames(int argc, char** argv) {
   int sprockets = 0, i, lines = 0, px = 0, rc, focus_failed = 0;
   int hf_half_res = -1;
   const char* select = NULL;
-  const ft_holder* h = ft_holder_find("24x217");
+  const ft_holder* h = ft_find_holder("24x217");
   const ft_preview* pm = ft_preview_find("standard");
   static ft_layout L;
   static ft_job j;
@@ -3211,7 +3211,7 @@ static void job_window(const ft_job_frame* fr, const ft_holder* h, long off,
   y0 = fr->y0 - margin;
   if(y0 < 0) y0 = 0;
   y1 = fr->y0 + fr->len + margin;
-  if(y1 > h->scan_len_mm) y1 = h->scan_len_mm;
+  if(y1 > h->scan_length_mm) y1 = h->scan_length_mm;
   memset(q, 0, sizeof *q);
   q->ppi = fr->ppi;
   q->bin = fr->bin;
@@ -3361,7 +3361,7 @@ static int detail_window(const ft_job* j, int pass, const ft_holder* h,
   y0 -= FT_DETAIL_MARGIN_MM;
   y1 += FT_DETAIL_MARGIN_MM;
   if(y0 < 0) y0 = 0;
-  if(y1 > h->scan_len_mm) y1 = h->scan_len_mm;
+  if(y1 > h->scan_length_mm) y1 = h->scan_length_mm;
   ft_dscan_reach(ppi, FT_DETAIL_BIN, &lo, &hi);
   lo += JOB_EDGE;
   hi -= JOB_EDGE;
@@ -3405,7 +3405,7 @@ static int detail_plan(const float* t, int lines, int px, const ft_axes* ax,
                        double ppi, const char* select, ft_job* j) {
   static ft_dframe df[FT_MAX_FRAMES];
   static ft_dplan plan;
-  const ft_holder* h = ft_holder_find(j->holder);
+  const ft_holder* h = ft_find_holder(j->holder);
   int idx[FT_MAX_FRAMES], ok[FT_MAX_FRAMES], n = 0, i, k, p, nok = 0;
   long meas[FT_MAX_FRAMES], med = 0;
   double total_s = 0, total_b = 0;
@@ -3467,7 +3467,8 @@ static int detail_plan(const float* t, int lines, int px, const ft_axes* ax,
     df[k].len = f->len;
     df[k].focus = ok[k] ? meas[k] : med;
   }
-  if(ft_dplan_make(df, n, ppi, h->scan_len_mm, FT_DETAIL_DOF_SPAN, &plan, &e)) {
+  if(ft_dplan_make(df, n, ppi, h->scan_length_mm, FT_DETAIL_DOF_SPAN, &plan,
+                   &e)) {
     fprintf(stderr, "frames: %s\n", e.msg);
     return -1;
   }
@@ -3688,7 +3689,7 @@ static int share_request(const ft_job* j, const ft_holder* h, int g,
   int i;
   for(i = 0; i < j->nframes && !fr; i++)
     if(j->f[i].include && j->f[i].group == g) fr = &j->f[i];
-  ft_share_opts_default(&o, h->scan_len_mm);
+  ft_share_opts_default(&o, h->scan_length_mm);
   if(!fr || ft_share_group_window(j, g, &o, &y0, &len)) return -1;
   scale = fr->ppi * ft_job_bin(fr);
   lo = ft_ccd_to_mm(FT_CCD_FIRST, scale);
@@ -3994,7 +3995,7 @@ static int cmd_scanjob(int argc, char** argv) {
     fprintf(stderr, "%s: %s\n", path, e.msg);
     return 1;
   }
-  h = ft_holder_find(j.holder);
+  h = ft_find_holder(j.holder);
   if(!h) return 1; /* validate checked it */
   if(j.detail != FT_DETAIL_NONE) return scan_detail(&j, path, jobbase, h);
   if(j.share > 0) return scan_share(&j, path, jobbase, h);

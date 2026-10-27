@@ -33,7 +33,7 @@ static void run_chunked(const synth_spec* s, int chunk, unsigned seed,
   int got = 0, before;
   CHECK(t != NULL);
   axes(s, &ax);
-  CHECK(ft_sdet_init(&d, &ax, s->px, s->film, ft_holder_find("24x217"), &e) ==
+  CHECK(ft_sdet_init(&d, &ax, s->px, s->film, ft_find_holder("24x217"), &e) ==
         0);
   while(l < s->lines) {
     int n = 1, k;
@@ -104,12 +104,13 @@ static void expect_box(int i, double y0, double len, const synth_spec* s,
 
 int main(void) {
   synth_spec s;
-  const ft_holder* h = ft_holder_find("24x217");
+  const ft_holder* h = ft_find_holder("24x217");
   int i;
 
   /* the holder knows where the image may lie across */
-  CHECK(h && h->band_x0_mm > 0 && h->band_x1_mm > h->band_x0_mm + 15);
-  CHECK(h->img_x0_mm < h->band_x0_mm && h->img_x1_mm > h->band_x1_mm);
+  CHECK(h && h->band_start_mm > 0 && h->band_end_mm > h->band_start_mm + 15);
+  CHECK(h->image_start_mm < h->band_start_mm &&
+        h->image_end_mm > h->band_end_mm);
 
   /* six full frames, colour negative */
   synth_default(&s, FT_FILM_NEGATIVE);
@@ -162,7 +163,7 @@ int main(void) {
   run(&s);
   expect_types("HHHHHHHHHHHH");
   for(i = 0; i < 11; i++) expect_box(i, 4 + 19.0 * i, 18, &s, 0.15);
-  CHECK(F[11].y1 == h->scan_len_mm); /* the box stays in the holder */
+  CHECK(F[11].y1 == h->scan_length_mm); /* the box stays in the holder */
 
   /* full and half mixed on one strip */
   synth_default(&s, FT_FILM_NEGATIVE);

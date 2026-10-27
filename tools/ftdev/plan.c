@@ -75,7 +75,7 @@ int ftdev_plan(int argc, char** argv) {
     fprintf(stderr, "plan: %s: %s\n", path, e.msg);
     return 1;
   }
-  h = ft_holder_find(j.holder);
+  h = ft_find_holder(j.holder);
   if(!h) {
     fprintf(stderr, "plan: unknown holder '%s'\n", j.holder);
     return 1;
@@ -121,7 +121,7 @@ int ftdev_plan(int argc, char** argv) {
     fprintf(stderr, "plan: no --size\n");
     return 2;
   }
-  ng = ft_share_plan_sizes(&j, tg, hf, &ft_lens_default, h->scan_len_mm, &e);
+  ng = ft_share_plan_sizes(&j, tg, hf, &ft_lens_default, h->scan_length_mm, &e);
   if(ng < 0 || ft_job_validate(&j, &ft_lens_default, &e)) {
     fprintf(stderr, "plan: %s\n", e.msg);
     return 1;

@@ -47,26 +47,26 @@ int main(void) {
   CHECK_NEAR(ft_ccd_to_mm(3000, 3149.999), ft_ccd_to_mm(3000, 3150), 1e-4);
   CHECK_NEAR(ft_ccd_to_mm(3000, 1999.999), ft_ccd_to_mm(3000, 2000.001), 1e-4);
 
-  h = ft_holder_find("24x217");
+  h = ft_find_holder("24x217");
   CHECK(h != NULL);
-  CHECK_NEAR(h->scan_len_mm, 231.0, 1e-9);
+  CHECK_NEAR(h->scan_length_mm, 231.0, 1e-9);
   CHECK_NEAR(h->scan_width_mm, 32.0, 1e-9);
-  CHECK(h->grid_frames == 6);
+  CHECK(h->grid_frame_count == 6);
   CHECK(strcmp(h->name, "24x217") == 0);
   /* FlexColor 3f autoframe: 50, 943, 992 lines at 630 ppi */
-  CHECK_NEAR(h->grid_first_mm, 50 / 630.0 * 25.4, 0.01);
+  CHECK_NEAR(h->grid_first_frame_mm, 50 / 630.0 * 25.4, 0.01);
   CHECK_NEAR(h->grid_pitch_mm, 943 / 630.0 * 25.4, 0.01);
-  CHECK_NEAR(h->grid_frame_mm, 992 / 630.0 * 25.4, 0.01);
+  CHECK_NEAR(h->grid_frame_length_mm, 992 / 630.0 * 25.4, 0.01);
   /* the last grid frame overshoots the scan length; callers clip it */
-  CHECK_NEAR(h->grid_first_mm +
-               (h->grid_frames - 1) * h->grid_pitch_mm +
-               h->grid_frame_mm,
+  CHECK_NEAR(h->grid_first_frame_mm +
+               (h->grid_frame_count - 1) * h->grid_pitch_mm +
+               h->grid_frame_length_mm,
              232.12, 1e-9);
-  CHECK(h->grid_first_mm +
-          (h->grid_frames - 1) * h->grid_pitch_mm +
-          h->grid_frame_mm >
-        h->scan_len_mm);
-  CHECK(ft_holder_find("60x180") == NULL);
-  CHECK(ft_holder_find(NULL) == NULL);
+  CHECK(h->grid_first_frame_mm +
+          (h->grid_frame_count - 1) * h->grid_pitch_mm +
+          h->grid_frame_length_mm >
+        h->scan_length_mm);
+  CHECK(ft_find_holder("60x180") == NULL);
+  CHECK(ft_find_holder(NULL) == NULL);
   return TEST_DONE();
 }

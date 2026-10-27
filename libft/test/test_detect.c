@@ -20,7 +20,7 @@ static int run(const synth_spec* s) {
   ax.x_mm0 = s->x_mm0;
   ax.x_mm_per_px = s->x_mm_per_px;
   CHECK(t != NULL);
-  rc = ft_detect(t, s->lines, s->px, &ax, s->film, ft_holder_find("24x217"), &L,
+  rc = ft_detect(t, s->lines, s->px, &ax, s->film, ft_find_holder("24x217"), &L,
                  &e);
   free(t);
   return rc;
@@ -83,13 +83,13 @@ int main(void) {
   /* job: sprockets widen the window across to the hole rows */
   {
     ft_job j;
-    ft_layout_to_job(&L, ft_holder_find("24x217"), FT_FILM_NEGATIVE, 2000, 1,
+    ft_layout_to_job(&L, ft_find_holder("24x217"), FT_FILM_NEGATIVE, 2000, 1,
                      &j);
     CHECK(j.nframes == 6 && j.f[0].sprockets && j.f[0].include);
     CHECK_NEAR(j.f[0].x0, L.holes_x0, 1e-9);
     CHECK_NEAR(j.f[0].width, L.holes_x1 - L.holes_x0, 1e-9);
     CHECK_NEAR(j.f[0].len, L.f[0].y1 - L.f[0].y0, 1e-9);
-    ft_layout_to_job(&L, ft_holder_find("24x217"), FT_FILM_NEGATIVE, 2000, 0,
+    ft_layout_to_job(&L, ft_find_holder("24x217"), FT_FILM_NEGATIVE, 2000, 0,
                      &j);
     CHECK_NEAR(j.f[0].x0, L.f[0].x0, 1e-9);
     CHECK(j.focus == FT_FOCUS_SHIFTED && j.f[0].ppi == 2000);
@@ -106,7 +106,7 @@ int main(void) {
       M.base[0] = 1.02;
       M.base[1] = 0.3;
       M.base[2] = 0.1;
-      ft_layout_to_job(&M, ft_holder_find("24x217"), FT_FILM_NEGATIVE, 2000, 0,
+      ft_layout_to_job(&M, ft_find_holder("24x217"), FT_FILM_NEGATIVE, 2000, 0,
                        &k);
       CHECK(k.film_base[0] == 0);
       CHECK(ft_job_write(&k, g) == 0);
@@ -116,7 +116,7 @@ int main(void) {
       M.base[0] = FT_T_FLOOR / 2;
       M.base[1] = FT_T_FLOOR / 10;
       M.base[2] = 0;
-      ft_layout_to_job(&M, ft_holder_find("24x217"), FT_FILM_NEGATIVE, 2000, 0,
+      ft_layout_to_job(&M, ft_find_holder("24x217"), FT_FILM_NEGATIVE, 2000, 0,
                        &k);
       CHECK(k.film_base[0] == 4.5 &&
             k.film_base[1] == 4.5 &&
@@ -128,7 +128,7 @@ int main(void) {
    * far hole row ends at 32.56 mm: the sprockets-in window is clamped
    * to the holder's 32 mm crop width and the job validates */
   {
-    const ft_holder* h = ft_holder_find("24x217");
+    const ft_holder* h = ft_find_holder("24x217");
     ft_job j;
     ft_err e;
     ff6(&s, FT_FILM_NEGATIVE);
@@ -156,10 +156,10 @@ int main(void) {
       synth_add(&s, 6 + 38.0 * i, 36, 0); /* last: 196..232 */
     CHECK(run(&s) == 0);
     CHECK(L.nframes == 6);
-    CHECK(L.f[5].y1 > h->scan_len_mm);
+    CHECK(L.f[5].y1 > h->scan_length_mm);
     ft_layout_to_job(&L, h, FT_FILM_NEGATIVE, 2000, 0, &j);
     CHECK_NEAR(j.f[5].y0, L.f[5].y0, 1e-9);
-    CHECK_NEAR(j.f[5].y0 + j.f[5].len, h->scan_len_mm, 1e-9);
+    CHECK_NEAR(j.f[5].y0 + j.f[5].len, h->scan_length_mm, 1e-9);
     CHECK_NEAR(j.f[0].len, L.f[0].y1 - L.f[0].y0, 1e-9);
     CHECK(ft_job_validate(&j, &ft_lens_default, &e) == 0);
   }
@@ -534,16 +534,16 @@ int main(void) {
     ft_axes ax = {0, 25.4 / 525, 0, 0};
     ft_err e;
     float px1[3 * 64] = {0};
-    CHECK(ft_detect(px1, 8, 8, &ax, FT_FILM_NEGATIVE, ft_holder_find("24x217"),
+    CHECK(ft_detect(px1, 8, 8, &ax, FT_FILM_NEGATIVE, ft_find_holder("24x217"),
                     &L, &e) == -1);
     ax.x_mm_per_px = 0.048;
-    CHECK(ft_detect(NULL, 8, 8, &ax, FT_FILM_NEGATIVE, ft_holder_find("24x217"),
+    CHECK(ft_detect(NULL, 8, 8, &ax, FT_FILM_NEGATIVE, ft_find_holder("24x217"),
                     &L, &e) == -1);
-    CHECK(ft_detect(px1, 0, 8, &ax, FT_FILM_NEGATIVE, ft_holder_find("24x217"),
+    CHECK(ft_detect(px1, 0, 8, &ax, FT_FILM_NEGATIVE, ft_find_holder("24x217"),
                     &L, &e) == -1);
     CHECK(ft_detect(px1, 8, 8, &ax, FT_FILM_NEGATIVE, NULL, &L, &e) == -1);
     ax.y_mm_per_line = NAN;
-    CHECK(ft_detect(px1, 8, 8, &ax, FT_FILM_NEGATIVE, ft_holder_find("24x217"),
+    CHECK(ft_detect(px1, 8, 8, &ax, FT_FILM_NEGATIVE, ft_find_holder("24x217"),
                     &L, &e) == -1);
   }
 

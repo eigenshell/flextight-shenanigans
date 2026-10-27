@@ -254,7 +254,7 @@ static int scan_choices(const char* body, char* text, size_t cap, char* msg,
   v = strtod(ppi, &end);
   if(end == ppi || *end || !ft_bins_for_ppi(v, bins))
     return snprintf(msg, mcap, "ppi: %s is out of the optics' range", ppi), -1;
-  if(!ft_holder_find(holder))
+  if(!ft_find_holder(holder))
     return snprintf(msg, mcap, "holder: no holder '%s'", holder), -1;
   if(!ft_emulsion_find(em))
     return snprintf(msg, mcap, "emulsion: no emulsion '%s'", em), -1;

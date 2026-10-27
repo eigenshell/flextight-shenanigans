@@ -251,8 +251,8 @@ int ftw_resolutions(ftw* w, const double* ppi, int n) {
       outf(w, "%s{\"ppi\":%g,\"mp\":%.1f,\"px\":%.0f,\"dmax\":", i ? "," : "",
            ppi[i], mp, ppi[i] * in);
     if(!rc)
-      rc = ft_dmax_for_ppi(&lim, ppi[i], &dmax) ? outf(w, "%.1f}", dmax)
-                                                : outf(w, "null}");
+      rc = ft_estimate_dmax(&lim, ppi[i], &dmax) ? outf(w, "%.1f}", dmax)
+                                                 : outf(w, "null}");
   }
   return rc ? rc : outf(w, "]");
 }
@@ -262,12 +262,12 @@ int ftw_holders(ftw* w) {
   int i, rc;
   out_reset(w);
   rc = outf(w, "[");
-  for(i = 0; !rc && (h = ft_holder_at(i)) != NULL; i++) {
+  for(i = 0; !rc && (h = ft_get_holder_at(i)) != NULL; i++) {
     rc = outf(w, "%s{\"name\":", i ? "," : "");
     rc = rc ? rc : out_str(w, h->name);
     rc = rc ? rc : outf(w, ",\"label\":");
     rc = rc ? rc : out_str(w, h->label);
-    rc = rc ? rc : outf(w, ",\"frames\":%d}", h->grid_frames);
+    rc = rc ? rc : outf(w, ",\"frames\":%u}", h->grid_frame_count);
   }
   return rc ? rc : outf(w, "]");
 }
@@ -423,9 +423,10 @@ int ftw_plan(ftw* w, const double* px, int n) {
   if(!w->has_job) return fail(w, "no strip.job");
   if(n != w->job.nframes) return fail(w, "plan: one size per frame of the job");
   j = w->job;
-  h = ft_holder_find(j.holder);
+  h = ft_find_holder(j.holder);
   if(!h) return fail(w, "plan: unknown holder");
-  ng = ft_share_plan_sizes(&j, px, j.hf_half_res, &w->lens, h->scan_len_mm, &e);
+  ng =
+    ft_share_plan_sizes(&j, px, j.hf_half_res, &w->lens, h->scan_length_mm, &e);
   if(ng < 0 || ft_job_validate(&j, &w->lens, &e)) return fail_e(w, &e);
   w->plan = j;
   w->has_plan = 1;
@@ -1087,7 +1088,7 @@ int ftw_stream_begin(ftw* w, const unsigned short* cal, size_t cal_n,
                      const char* faul, size_t faul_n, const char* meta,
                      size_t meta_n, int slide) {
   const ft_preview* pm = ft_preview_find("standard");
-  const ft_holder* h = ft_holder_find("24x217");
+  const ft_holder* h = ft_find_holder("24x217");
   long px = meta_key(meta, meta_n, "px"), x = meta_key(meta, meta_n, "x"),
        bin = meta_key(meta, meta_n, "bin");
   ft_film film = slide ? FT_FILM_SLIDE : FT_FILM_NEGATIVE;
@@ -1137,7 +1138,7 @@ int ftw_stream_begin(ftw* w, const unsigned short* cal, size_t cal_n,
 static int stream_seal(ftw* w, const ft_sdet_frame* f, ft_err* e) {
   static ft_layout L;
   static ft_job j;
-  const ft_holder* h = ft_holder_find("24x217");
+  const ft_holder* h = ft_find_holder("24x217");
   int has_base;
   memset(&L, 0, sizeof L);
   has_base = ft_sdet_base(&w->st_det, L.base);

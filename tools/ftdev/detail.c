@@ -300,7 +300,7 @@ int ftdev_detail(int argc, char** argv) {
     goto done;
   }
   o.margin_mm = FT_DETAIL_MARGIN_MM;
-  o.holder = ft_holder_find(j.holder);
+  o.holder = ft_find_holder(j.holder);
   o.meta = &metaimg;
   o.base = base;
   o.pass = pass;
@@ -433,7 +433,7 @@ int ftdev_bench(int argc, char** argv) {
   o.film_base[1] = 0.40;
   o.film_base[2] = 0.60;
   o.margin_mm = FT_DETAIL_MARGIN_MM;
-  o.holder = ft_holder_find("24x217");
+  o.holder = ft_find_holder("24x217");
   o.meta = &meta;
   o.base = base;
   o.pass = 1;

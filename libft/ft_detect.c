@@ -999,9 +999,10 @@ int ft_detect(const float* t, int lines, int px, const ft_axes* ax,
   if(nok == 0 && (d->f1 - d->f0) * d->ym > FALLBACK_MM) {
     double fy0 = L->film_y0, fy1 = L->film_y1;
     L->fallback = 1;
-    for(i = 0; i < h->grid_frames; i++) {
-      double y0 = h->grid_first_mm + i * h->grid_pitch_mm;
-      double y1 = y0 + h->grid_frame_mm;
+    for(uint32_t grid_index = 0; grid_index < h->grid_frame_count;
+        grid_index++) {
+      double y0 = h->grid_first_frame_mm + grid_index * h->grid_pitch_mm;
+      double y1 = y0 + h->grid_frame_length_mm;
       ft_det_frame* f;
       if(y0 < fy0) y0 = fy0;
       if(y1 > fy1) y1 = fy1;
@@ -1088,8 +1089,8 @@ void ft_layout_to_job(const ft_layout* L, const ft_holder* h, ft_film film,
     ft_job_frame* f = &j->f[j->nframes++];
     double x0 = sprockets ? L->holes_x0 : d->x0;
     double x1 = sprockets ? L->holes_x1 : d->x1;
-    double y0 = clampd(d->y0, 0, h->scan_len_mm);
-    double y1 = clampd(d->y1, 0, h->scan_len_mm);
+    double y0 = clampd(d->y0, 0, h->scan_length_mm);
+    double y1 = clampd(d->y1, 0, h->scan_length_mm);
     x0 = clampd(x0, 0, h->scan_width_mm);
     x1 = clampd(x1, 0, h->scan_width_mm);
     f->index = d->index;

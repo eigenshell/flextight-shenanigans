@@ -71,10 +71,10 @@ int ft_sdet_init(ft_sdet* d, const ft_axes* ax, int px, ft_film film,
   d->px = px;
   d->film = film;
   d->h = h;
-  d->b0 = col(h->band_x0_mm, ax, 1);
-  d->b1 = col(h->band_x1_mm, ax, 0);
-  d->s0 = col(h->img_x0_mm, ax, 0);
-  d->s1 = col(h->img_x1_mm, ax, 1);
+  d->b0 = col(h->band_start_mm, ax, 1);
+  d->b1 = col(h->band_end_mm, ax, 0);
+  d->s0 = col(h->image_start_mm, ax, 0);
+  d->s1 = col(h->image_end_mm, ax, 1);
   if(d->b0 < 0) d->b0 = 0;
   if(d->b1 > px) d->b1 = px;
   if(d->s0 < 0) d->s0 = 0;
@@ -220,8 +220,8 @@ static int seal(ft_sdet* d, long s, long e, int ts, int te, int grid) {
   f->grid = grid;
   f->l0 = s;
   f->l1 = e;
-  f->y0 = clampd(ax->y_mm0 + s * ym - FT_SDET_PAD_MM, 0, d->h->scan_len_mm);
-  f->y1 = clampd(ax->y_mm0 + e * ym + FT_SDET_PAD_MM, 0, d->h->scan_len_mm);
+  f->y0 = clampd(ax->y_mm0 + s * ym - FT_SDET_PAD_MM, 0, d->h->scan_length_mm);
+  f->y1 = clampd(ax->y_mm0 + e * ym + FT_SDET_PAD_MM, 0, d->h->scan_length_mm);
   f->x0 = clampd(ax->x_mm0 + c0 * ax->x_mm_per_px - FT_SDET_PAD_MM, 0,
                  d->h->scan_width_mm);
   f->x1 = clampd(ax->x_mm0 + c1 * ax->x_mm_per_px + FT_SDET_PAD_MM, 0,
