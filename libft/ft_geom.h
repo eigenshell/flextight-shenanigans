@@ -7,9 +7,9 @@
 #ifndef FT_GEOM_H
 #define FT_GEOM_H
 
-#define FT_CCD_AXIS   4118.0   /* CCD pixel on the optical axis */
-#define FT_CCD_FIRST  144.0    /* CCD pixel under output pixel 0 at x = 0 */
-#define FT_CCD_PIXELS 7992     /* preview: 666 px x bin 12 */
+#define FT_CCD_AXIS 4118.0 /* CCD pixel on the optical axis */
+#define FT_CCD_FIRST 144.0 /* CCD pixel under output pixel 0 at x = 0 */
+#define FT_CCD_PIXELS 7992 /* preview: 666 px x bin 12 */
 
 double ft_mm_to_ccd(double mm, double scale);
 double ft_ccd_to_mm(double ccd, double scale);

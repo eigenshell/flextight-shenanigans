@@ -14,18 +14,18 @@
 #define FT_PLAN_H
 #include "ft_focus.h"
 
-#define FT_OUT_PX_RATE    84000.0  /* output px/s over the full line */
-#define FT_SCAN_FIXED     10.0     /* s per scan: hold, settling, moves */
-#define FT_CAL_LINES      250      /* calibration lines, same line rate */
-#define FT_DMAX_6300      3.0      /* per-read Dmax (R) at 6300 optics */
-#define FT_DMAX_CEIL      3.73     /* log10((16383 - 310) / 3 DN) */
+#define FT_OUT_PX_RATE 84000.0 /* output px/s over the full line */
+#define FT_SCAN_FIXED 10.0     /* s per scan: hold, settling, moves */
+#define FT_CAL_LINES 250       /* calibration lines, same line rate */
+#define FT_DMAX_6300 3.0       /* per-read Dmax (R) at 6300 optics */
+#define FT_DMAX_CEIL 3.73      /* log10((16383 - 310) / 3 DN) */
 
 /* bins usable at ppi, largest (fastest) first; returns how many (0..6) */
 int ft_bins_for_ppi(double ppi, int bins[6]);
 /* 1 if bin is one of ft_bins_for_ppi's */
 int ft_bin_ok(double ppi, int bin);
 /* light per sample relative to the 6300 optics */
-double ft_light_rel(const ft_lens *l, double scale);
+double ft_light_rel(const ft_lens* l, double scale);
 /* per-read Dmax (R) estimate for that light */
 double ft_dmax_est(double light);
 /* seconds to read `lines` lines at bin (measured 2026-10-13: 9133 at

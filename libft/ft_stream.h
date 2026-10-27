@@ -8,6 +8,7 @@
 #ifndef FT_STREAM_H
 #define FT_STREAM_H
 #include <stddef.h>
+
 #include "ft.h"
 #include "ft_develop.h"
 
@@ -17,16 +18,16 @@ typedef struct ft_stream ft_stream;
  * lines); faul: the Faul Pixs dump or NULL; o: x, bin, defects (its crop
  * is ignored). NULL with e filled on bad input, a calibration that does
  * not split, too many defects or out of memory. */
-ft_stream *ft_stream_open(int px, const unsigned short *cal, int cal_lines,
-                          const char *faul, size_t faul_n,
-                          const ft_develop_opts *o, ft_err *e);
+ft_stream* ft_stream_open(int px, const unsigned short* cal, int cal_lines,
+                          const char* faul, size_t faul_n,
+                          const ft_develop_opts* o, ft_err* e);
 /* tri-linear offset k: the first output line comes with raw line 2k */
-int ft_stream_k(const ft_stream *s);
+int ft_stream_k(const ft_stream* s);
 /* one raw line (px x 3) in. 1 with out (px x 3 transmittance) filled,
  * 0 while the first 2k lines fill the ring, -1 with e filled (out of
  * memory). */
-int ft_stream_push(ft_stream *s, const unsigned short *raw, float *out,
-                   ft_err *e);
-void ft_stream_close(ft_stream *s);
+int ft_stream_push(ft_stream* s, const unsigned short* raw, float* out,
+                   ft_err* e);
+void ft_stream_close(ft_stream* s);
 
 #endif

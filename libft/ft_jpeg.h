@@ -7,6 +7,7 @@
 #ifndef FT_JPEG_H
 #define FT_JPEG_H
 #include <stddef.h>
+
 #include "ft.h"
 
 #define FT_JPEG_QUALITY 90
@@ -21,13 +22,13 @@
 #define FT_JPEG_COMMENT_MAX 65533
 /* the JPEG in a malloc'd buffer: *out (the caller frees it), *n bytes.
  * -1 with e filled (*out NULL, *n 0) on bad arguments or no memory. */
-int ft_jpeg_encode(const unsigned char *rgb, int w, int h, int quality,
-                   double ppi, const unsigned char *icc, size_t icc_n,
-                   const char *comment, unsigned char **out, size_t *n,
-                   ft_err *e);
+int ft_jpeg_encode(const unsigned char* rgb, int w, int h, int quality,
+                   double ppi, const unsigned char* icc, size_t icc_n,
+                   const char* comment, unsigned char** out, size_t* n,
+                   ft_err* e);
 /* the same into the file path (removed again on failure) */
-int ft_jpeg_write(const char *path, const unsigned char *rgb, int w, int h,
-                  int quality, double ppi, const unsigned char *icc,
-                  size_t icc_n, const char *comment, ft_err *e);
+int ft_jpeg_write(const char* path, const unsigned char* rgb, int w, int h,
+                  int quality, double ppi, const unsigned char* icc,
+                  size_t icc_n, const char* comment, ft_err* e);
 
 #endif

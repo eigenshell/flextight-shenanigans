@@ -20,16 +20,16 @@
 
 typedef struct ftw ftw;
 
-ftw *ftw_new(void);
-void ftw_free(ftw *w);
-const char *ftw_error(const ftw *w);
-const unsigned char *ftw_out(const ftw *w);
-size_t ftw_out_len(const ftw *w);
+ftw* ftw_new(void);
+void ftw_free(ftw* w);
+const char* ftw_error(const ftw* w);
+const unsigned char* ftw_out(const ftw* w);
+size_t ftw_out_len(const ftw* w);
 /* the last print text (ftw_jpeg): the JPEG's .txt and comment */
-const char *ftw_text(const ftw *w);
+const char* ftw_text(const ftw* w);
 
 /* the compiled-in emulsions -> out: [{"id","name","mode"}...] */
-int ftw_emulsions(ftw *w);
+int ftw_emulsions(ftw* w);
 
 /* the landing page's resolutions, one per ppi[i] -> out: [{"ppi","mp",
  * "px","dmax"}]: mp = a 36x24 frame's megapixels (one decimal), px = its
@@ -38,16 +38,16 @@ int ftw_emulsions(ftw *w);
  * limits: FT_SCALE_MIN, FT_SCALE_MAX, ft_lens_default) to one decimal, or
  * null where it has none (the page shows #N/A). -1 for a ppi no bin
  * reaches. */
-int ftw_resolutions(ftw *w, const double *ppi, int n);
+int ftw_resolutions(ftw* w, const double* ppi, int n);
 /* the holders -> out: [{"name","label","frames"}] */
-int ftw_holders(ftw *w);
+int ftw_holders(ftw* w);
 
 /* the planner's focus fit: the box's focus.txt (default: libft's
  * built-in curve, ft_lens_default) */
-int ftw_lens(ftw *w, const char *text, size_t n);
+int ftw_lens(ftw* w, const char* text, size_t n);
 /* the 95 % depth of field in tandem focus steps at an optical scale
  * (ppi x bin) and bin, on that lens (ft_lens_dof95) */
-double ftw_dof95(const ftw *w, double scale, int bin);
+double ftw_dof95(const ftw* w, double scale, int bin);
 
 /* strip.job. ftw_job_load: the preview's job (strip.preview.job, every
  * frame as detected), the base every plan starts from (the planner
@@ -62,18 +62,18 @@ double ftw_dof95(const ftw *w, double scale, int bin);
  * the preview's strip.raw.txt, NULL/0: the standard preview's),
  * px/ppi/group/done from the plan (0/0/0/false without one), dof:
  * ftw_dof95 at the planned frame's ppi and bin (0 unplanned). */
-int ftw_job_load(ftw *w, const char *text, size_t n);
-int ftw_plan_load(ftw *w, const char *text, size_t n);
-int ftw_plan(ftw *w, const double *px, int n);
-int ftw_job_text(ftw *w);
-int ftw_job_json(ftw *w, const char *preview_txt, size_t n);
+int ftw_job_load(ftw* w, const char* text, size_t n);
+int ftw_plan_load(ftw* w, const char* text, size_t n);
+int ftw_plan(ftw* w, const double* px, int n);
+int ftw_job_text(ftw* w);
+int ftw_job_json(ftw* w, const char* preview_txt, size_t n);
 /* a crop: frame's box in the preview image's pixels (as ftw_job_json
  * gives it: x along, y across, w, h; preview_txt as there) becomes the
  * base job's window, checked as the box checks jobs (inside the holder).
  * -> out: the base job's text (strip.preview.job). The plan is not
  * rerun: call ftw_plan. */
-int ftw_frame_box(ftw *w, int frame, const double *box,
-                  const char *preview_txt, size_t n);
+int ftw_frame_box(ftw* w, int frame, const double* box, const char* preview_txt,
+                  size_t n);
 
 /* strip.print: load (or start one: ftw_print_new), change the emulsion
  * (frames whose clicks it does not take go back to auto; their count),
@@ -81,43 +81,43 @@ int ftw_frame_box(ftw *w, int frame, const double *box,
  * 0 90 180 270; ftw_print_rotation returns it), and write (-> out, the
  * file text). ftw_print_emulsion -> out: the emulsion's id. The turn
  * applies to ftw_display, ftw_jpeg and ftw_zip. */
-int ftw_print_load(ftw *w, const char *text, size_t n);
-int ftw_print_new(ftw *w, const char *emulsion);
-int ftw_print_emulsion(ftw *w, const char *emulsion);
-int ftw_print_get(ftw *w, int frame, int *cmyd);
-int ftw_print_clicks(ftw *w, int frame, int c, int m, int y, int d);
-int ftw_print_rotate(ftw *w, int frame, int deg);
-int ftw_print_rotation(ftw *w, int frame);
+int ftw_print_load(ftw* w, const char* text, size_t n);
+int ftw_print_new(ftw* w, const char* emulsion);
+int ftw_print_emulsion(ftw* w, const char* emulsion);
+int ftw_print_get(ftw* w, int frame, int* cmyd);
+int ftw_print_clicks(ftw* w, int frame, int c, int m, int y, int d);
+int ftw_print_rotate(ftw* w, int frame, int deg);
+int ftw_print_rotation(ftw* w, int frame);
 /* a frame's name, its files' name without extension ("" = none: the
  * zip's <base>_frameNN): ftw_print_name -> out; ftw_print_set_name (""
  * clears; file-safe characters only). The zip names frames by it. */
-int ftw_print_name(ftw *w, int frame);
-int ftw_print_set_name(ftw *w, int frame, const char *name);
-int ftw_print_text(ftw *w);
+int ftw_print_name(ftw* w, int frame);
+int ftw_print_set_name(ftw* w, int frame, const char* name);
+int ftw_print_text(ftw* w);
 
 /* one window scan (ftpoc scan --job): its raw lines, the .cal, the .faul
  * (NULL/0: none), the .txt and a defects file (NULL/0: none) -> its
  * frames, cut, replacing frames of the same number. Returns the number
  * of frames cut; out: JSON {"detect_ok","noise_note","frames":[{"frame",
  * "estimated","shift_mm","w","h"}]}. */
-int ftw_cut(ftw *w, const unsigned short *raw, size_t raw_n,
-            const unsigned short *cal, size_t cal_n, const char *faul,
-            size_t faul_n, const char *meta, size_t meta_n,
-            const char *defects, size_t defects_n);
+int ftw_cut(ftw* w, const unsigned short* raw, size_t raw_n,
+            const unsigned short* cal, size_t cal_n, const char* faul,
+            size_t faul_n, const char* meta, size_t meta_n, const char* defects,
+            size_t defects_n);
 /* the landed frames' numbers, ascending, into frames (cap); the count */
-int ftw_frames(const ftw *w, int *frames, int cap);
+int ftw_frames(const ftw* w, int* frames, int cap);
 
 /* each landed frame's colour balance, measured from the frame alone
  * (per-frame balance: ftdev print --roll on that one frame, its own
  * film base): rerun as frames land. -> out: notes, one per line (the
  * "[frame N] not in the job" warning, estimated base) */
-int ftw_measure(ftw *w);
+int ftw_measure(ftw* w);
 /* one frame's share JPEG (-> out) and its text (ftw_text) with its
  * clicks from strip.print */
-int ftw_jpeg(ftw *w, int frame);
+int ftw_jpeg(ftw* w, int frame);
 /* the screen copy: the frame printed at long_edge px (never up), sRGB,
  * no NR or sharpening -> out: RGBA rows; *pw x *ph */
-int ftw_display(ftw *w, int frame, int long_edge, int *pw, int *ph);
+int ftw_display(ftw* w, int frame, int long_edge, int* pw, int* ph);
 /* the preview (strip.raw, .cal, .faul or NULL/0, strip.raw.txt: a
  * standard 525 ppi preview) with the preview's job (ftw_job_load): each
  * frame's box cut as a share frame is (x along). Returns the number of
@@ -125,14 +125,13 @@ int ftw_display(ftw *w, int frame, int long_edge, int *pw, int *ph);
  * printed with strip.print's emulsion, its own balance (per-frame, as
  * the share prints it), the job's film base, no clicks and no turn, at most
  * long_edge px -> out: RGBA rows; *pw x *ph. */
-int ftw_preview_load(ftw *w, const unsigned short *raw, size_t raw_n,
-                     const unsigned short *cal, size_t cal_n,
-                     const char *faul, size_t faul_n, const char *meta,
-                     size_t meta_n);
-int ftw_preview_display(ftw *w, int frame, int long_edge, int *pw, int *ph);
+int ftw_preview_load(ftw* w, const unsigned short* raw, size_t raw_n,
+                     const unsigned short* cal, size_t cal_n, const char* faul,
+                     size_t faul_n, const char* meta, size_t meta_n);
+int ftw_preview_display(ftw* w, int frame, int long_edge, int* pw, int* ph);
 /* the same with strip.print's clicks and turn: the review's view of a
  * frame before it is scanned */
-int ftw_preview_print(ftw *w, int frame, int long_edge, int *pw, int *ph);
+int ftw_preview_print(ftw* w, int frame, int long_edge, int* pw, int* ph);
 /* the standard preview's px per line (strip.raw's lines while it scans) */
 int ftw_preview_px(void);
 /* the live bar while the preview scans: whole raw lines (px x 3 samples
@@ -140,8 +139,8 @@ int ftw_preview_px(void);
  * line count. first: these lines start a preview, their brightest sample
  * per channel is its white until the next first. neg: inverted. No
  * calibration: the colour is only roughly right. */
-int ftw_live_rows(ftw *w, const unsigned short *raw, size_t n, int px,
-                  int neg, int first);
+int ftw_live_rows(ftw* w, const unsigned short* raw, size_t n, int px, int neg,
+                  int first);
 /* the streamed preview: frames found as the preview arrives.
  * ftw_stream_begin: strip.raw.cal (written before the raw), .faul
  * (NULL/0: none), strip.raw.txt (a standard preview) and the film (slide
@@ -158,18 +157,18 @@ int ftw_live_rows(ftw *w, const unsigned short *raw, size_t n, int px,
  * grid (no gap seen). The same frames whatever the chunking.
  * ftw_stream_windows: the windows of a job the page wrote (its crops)
  * onto the stream's frames of the same number; the frames moved. */
-int ftw_stream_begin(ftw *w, const unsigned short *cal, size_t cal_n,
-                     const char *faul, size_t faul_n, const char *meta,
+int ftw_stream_begin(ftw* w, const unsigned short* cal, size_t cal_n,
+                     const char* faul, size_t faul_n, const char* meta,
                      size_t meta_n, int slide);
-int ftw_stream_feed(ftw *w, const unsigned short *raw, size_t n);
-int ftw_stream_end(ftw *w);
-int ftw_stream_windows(ftw *w, const char *text, size_t n);
+int ftw_stream_feed(ftw* w, const unsigned short* raw, size_t n);
+int ftw_stream_end(ftw* w);
+int ftw_stream_windows(ftw* w, const char* text, size_t n);
 /* every landed frame's JPEG and text, <base>_frameNN.jpg(.txt), in a
  * store-only zip -> out */
-int ftw_zip(ftw *w, const char *base);
+int ftw_zip(ftw* w, const char* base);
 
 /* the page's heap */
-void *ftw_alloc(size_t n);
-void ftw_release(void *p);
+void* ftw_alloc(size_t n);
+void ftw_release(void* p);
 
 #endif
