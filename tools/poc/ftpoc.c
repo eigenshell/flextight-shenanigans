@@ -54,6 +54,7 @@
 #include "ft_upload.h"
 #include "ftio.h"
 #include "ring.h"
+#include "sc_live.h"
 #include "worker.h"
 
 #define TIMEOUT_MS 5000
@@ -94,40 +95,40 @@ static int g_inq_n;
 
 enum { PROBE_PREFER_MICROCODE, PROBE_MICROCODE_ONLY };
 
-/* The \\.\ScannerN that answers INQUIRY as Imacon (g_dev, g_inq set), or
- * IO_NONE. The loader and the microcode can answer on
+/* The \\.\ScannerN that answers INQUIRY as Imacon (g_scanner, g_inq set), or
+ * NO_SCANNER. The loader and the microcode can answer on
  * different N (seen: Scanner0 loader, Scanner4 microcode), so the
  * microcode wins: a loader is kept only while no later N answers with
  * the microcode (PROBE_PREFER_MICROCODE), or never (PROBE_MICROCODE_ONLY,
  * after an upload). */
-static io_dev probe_scanner(int want) {
+static io_scanner_handle probe_scanner(int want) {
   static const BYTE inq[6] = {0x12, 0, 0, 0, 0x60, 0};
-  io_dev loader = IO_NONE;
+  io_scanner_handle loader = NO_SCANNER;
   BYTE loader_inq[96];
   int i, attempt, loader_n = 0;
-  char path[IO_PATH_MAX + 1];
+  char path[PATH_BUF_MAX + 1];
 
-  for(i = 0; io_dev_path(i, path, sizeof path); i++) {
-    io_dev h;
+  for(i = 0; scanner_candidate_path(i, path, sizeof path); i++) {
+    io_scanner_handle h;
     int keep = 0;
-    h = io_open(path);
-    if(h == IO_NONE) continue;
-    g_dev = h;
+    h = scanner_open(path);
+    if(h == NO_SCANNER) continue;
+    g_scanner = h;
     for(attempt = 0; attempt < 8; attempt++) {
       BYTE buf[96];
       int r;
       memset(buf, 0, sizeof buf);
-      r = srb_exec(inq, 6, 0x40, buf, sizeof buf, 3000);
+      r = scsi_send_command(inq, 6, 0x40, buf, sizeof buf, 3000);
       if(r >= 0) {
         printf("%s: %.8s %.16s %.4s\n", path, buf + 8, buf + 16, buf + 32);
         if(memcmp(buf + 8, "Imacon", 6) != 0) break;
         if(!ft_is_loader(buf, (size_t)r)) {
-          if(loader != IO_NONE) io_close(loader);
+          if(loader != NO_SCANNER) scanner_close(loader);
           memcpy(g_inq, buf, sizeof g_inq);
           g_inq_n = r;
           return h;
         }
-        if(want == PROBE_PREFER_MICROCODE && loader == IO_NONE) {
+        if(want == PROBE_PREFER_MICROCODE && loader == NO_SCANNER) {
           loader = h; /* unless the microcode answers later */
           memcpy(loader_inq, buf, sizeof loader_inq);
           loader_n = r;
@@ -137,21 +138,21 @@ static io_dev probe_scanner(int want) {
       }
     }
     if(attempt == 8) printf("%s: no INQUIRY answer, skipping\n", path);
-    if(!keep) io_close(h);
-    g_dev = IO_NONE;
+    if(!keep) scanner_close(h);
+    g_scanner = NO_SCANNER;
   }
-  if(loader != IO_NONE) {
-    g_dev = loader;
+  if(loader != NO_SCANNER) {
+    g_scanner = loader;
     memcpy(g_inq, loader_inq, sizeof g_inq);
     g_inq_n = loader_n;
   }
   return loader;
 }
 
-static io_dev open_scanner(void) {
-  io_dev h = probe_scanner(PROBE_PREFER_MICROCODE);
-  if(h != IO_NONE) return h;
-  fprintf(stderr, "ftpoc: no " IO_DEV_NAME
+static io_scanner_handle open_scanner(void) {
+  io_scanner_handle h = probe_scanner(PROBE_PREFER_MICROCODE);
+  if(h != NO_SCANNER) return h;
+  fprintf(stderr, "ftpoc: no " SCANNER_DEVICE_NAME
                   " answered as Imacon. Is the scanner powered,\n"
                   "and FlexColor (or anything else holding it) closed?\n");
   exit(1);
@@ -517,9 +518,10 @@ static int cmd_inquiry(void) {
   BYTE buf[96];
   int r, i;
   memset(buf, 0, sizeof buf);
-  r = srb_exec(CDB_INQUIRY, 6, SRB_DIR_IN, buf, sizeof buf, TIMEOUT_MS);
+  r = scsi_send_command(CDB_INQUIRY, 6, SCSI_FROM_DEVICE, buf, sizeof buf,
+                        TIMEOUT_MS);
   if(r < 0) {
-    printf("INQUIRY: %s\n", srb_errstr(r));
+    printf("INQUIRY: %s\n", scsi_error_text(r));
     return 1;
   }
   printf("INQUIRY: %d bytes\n", r);
@@ -577,12 +579,13 @@ static int poll_once(void) {
   BYTE buf[2];
   int r;
   memset(buf, 0, sizeof buf);
-  r = srb_exec(CDB_POLL, 6, SRB_DIR_IN, buf, sizeof buf, TIMEOUT_MS);
+  r = scsi_send_command(CDB_POLL, 6, SCSI_FROM_DEVICE, buf, sizeof buf,
+                        TIMEOUT_MS);
   if(r < 0) return r;
 #ifndef _WIN32
   /* SG_IO completes an underrun as a short read (scsiscan: -3); a
    * short status reply is no status, never "idle" (the zeroed buffer) */
-  if(r != (int)sizeof buf) return IO_SHORT;
+  if(r != (int)sizeof buf) return SCSI_SHORT_REPLY;
 #endif
   return (buf[0] << 8) | buf[1];
 }
@@ -592,7 +595,7 @@ static int cmd_poll(int n, int quiet) {
   for(i = 0; i < n; i++) {
     int v = poll_once();
     if(v < 0) {
-      printf("poll %d: %s\n", i, srb_errstr(v));
+      printf("poll %d: %s\n", i, scsi_error_text(v));
       return 1;
     }
     if(!quiet)
@@ -610,7 +613,7 @@ static int win_exchange(BYTE desc[84], int trace) {
   BYTE send[84];
   int r, i;
   memcpy(send, desc, 84);
-  r = srb_exec(CDB_WIN, 10, SRB_DIR_OUT, desc, 84, TIMEOUT_MS);
+  r = scsi_send_command(CDB_WIN, 10, SCSI_TO_DEVICE, desc, 84, TIMEOUT_MS);
   if(trace) {
     printf("  sent:");
     for(i = 0; i < 84; i++) printf(" %02x", send[i]);
@@ -627,7 +630,7 @@ static int send_win(const BYTE* tmpl, const char* label) {
   int r;
   memcpy(desc, tmpl, 84);
   r = win_exchange(desc, 0);
-  if(r < 0) printf("SetWindow (%s): %s\n", label, srb_errstr(r));
+  if(r < 0) printf("SetWindow (%s): %s\n", label, scsi_error_text(r));
   return r < 0 ? 1 : 0;
 }
 
@@ -637,7 +640,7 @@ static int cmd_win(void) {
   memcpy(desc, IDLE_WIN, 84);
   r = win_exchange(desc, 1);
   if(r < 0) {
-    printf("SetWindow: %s\n", srb_errstr(r));
+    printf("SetWindow: %s\n", scsi_error_text(r));
     return 1;
   }
   printf(
@@ -651,12 +654,12 @@ static int cmd_win(void) {
  * may take a moment to start: a 0000 only counts once something else was
  * seen, or after 3 s of uninterrupted 0000. Prints status changes only. */
 static int wait_settled(DWORD timeout_ms) {
-  DWORD start = io_ms(), now;
+  DWORD start = now_ms(), now;
   int v, last = -1, seen_busy = 0;
   for(;;) {
     v = poll_once();
     if(v < 0) return v;
-    now = io_ms() - start;
+    now = now_ms() - start;
     if(v != last)
       printf("  ... %04x %s (%lu ms)\n", v, poll_name((unsigned)v),
              (unsigned long)now);
@@ -666,7 +669,7 @@ static int wait_settled(DWORD timeout_ms) {
     else if(seen_busy || now > 3000)
       return 0;
     if(now > timeout_ms) return -100;
-    io_sleep(150);
+    sleep_ms(150);
   }
 }
 
@@ -684,7 +687,7 @@ static int move_to(long pos, const char* why) {
   printf("move -> %ld (%s)\n", pos, why);
   r = win_exchange(desc, 0);
   if(r < 0) {
-    printf("SetWindow: %s\n", srb_errstr(r));
+    printf("SetWindow: %s\n", scsi_error_text(r));
     return 1;
   }
   r = wait_settled(60000);
@@ -726,11 +729,12 @@ static int cmd_scanstop(void) {
   /* scsiscan rejects a NULL carrier (GLE 87): try no-data flags with a
    * dummy buffer first, then a 2-byte data-in. */
   BYTE dummy[2] = {0, 0};
-  int r = srb_exec(CDB_SCANSTOP, 6, 0x00, dummy, 0, TIMEOUT_MS);
-  printf("ScanStop (no data): %s\n", r >= 0 ? "ok" : srb_errstr(r));
+  int r = scsi_send_command(CDB_SCANSTOP, 6, 0x00, dummy, 0, TIMEOUT_MS);
+  printf("ScanStop (no data): %s\n", r >= 0 ? "ok" : scsi_error_text(r));
   if(r < 0) {
-    r = srb_exec(CDB_SCANSTOP, 6, SRB_DIR_IN, dummy, 2, TIMEOUT_MS);
-    printf("ScanStop (2-byte in): %s\n", r >= 0 ? "ok" : srb_errstr(r));
+    r = scsi_send_command(CDB_SCANSTOP, 6, SCSI_FROM_DEVICE, dummy, 2,
+                          TIMEOUT_MS);
+    printf("ScanStop (2-byte in): %s\n", r >= 0 ? "ok" : scsi_error_text(r));
   }
   return r < 0;
 }
@@ -795,9 +799,10 @@ static int read_pages(int verbose) {
     cdb[7] = (BYTE)(pages[i].len >> 8);
     cdb[8] = (BYTE)(pages[i].len & 0xff);
     memset(buf, 0, sizeof buf);
-    r = srb_exec(cdb, 10, SRB_DIR_IN, buf, pages[i].len, TIMEOUT_MS);
+    r = scsi_send_command(cdb, 10, SCSI_FROM_DEVICE, buf, pages[i].len,
+                          TIMEOUT_MS);
     if(r < 0) {
-      printf("%s: %s\n", pages[i].name, srb_errstr(r));
+      printf("%s: %s\n", pages[i].name, scsi_error_text(r));
       continue;
     }
     if(!verbose) continue;
@@ -815,20 +820,20 @@ static int read_pages(int verbose) {
  * = flag 7639 "3b/24 command pending" (the df reply is 08 00 while it is
  * set), not a motor state. */
 static int maint_wait_idle(void) {
-  DWORD start = io_ms();
+  DWORD start = now_ms();
   int v;
   for(;;) {
     v = poll_once();
     printf("  poll %04x %s\n", v < 0 ? 0 : v,
            v < 0 ? "poll failed" : poll_name((unsigned)v));
     if(v == 0x0000) return 0;
-    if(io_ms() - start > 10000) {
+    if(now_ms() - start > 10000) {
       printf(
         "not idle after 10 s: STOP, power-cycle and re-upload "
         "(README: Maintenance writes)\n");
       return 1;
     }
-    io_sleep(200);
+    sleep_ms(200);
   }
 }
 
@@ -845,9 +850,9 @@ static int maint_dump_flash(const char* path) {
   } part[] = {
     {0xe000, 0x10000},
     {0xf000, 0x10000},
-    {0xc000, FT_MAINT_LOADER_LEN},
+    {0xc000, FT_MAINT_LOADER_BYTES},
   };
-  static BYTE img[2 * 0x10000 + FT_MAINT_LOADER_LEN];
+  static BYTE img[2 * 0x10000 + FT_MAINT_LOADER_BYTES];
   BYTE cdb[10];
   unsigned seg, off;
   unsigned long sum = 0, fnv = 2166136261UL;
@@ -864,20 +869,20 @@ static int maint_dump_flash(const char* path) {
   }
   for(p = 0; p < sizeof part / sizeof part[0]; p++) {
     seg = part[p].seg;
-    for(off = 0; off < part[p].len; off += FT_MAINT_MAX_PEEK) {
-      if(ft_maint_peek(seg, off, FT_MAINT_MAX_PEEK, cdb, &e) < 0) {
+    for(off = 0; off < part[p].len; off += FT_MAINT_MAX_PEEK_BYTES) {
+      if(ft_build_memory_read(seg, off, FT_MAINT_MAX_PEEK_BYTES, cdb, &e) < 0) {
         fprintf(stderr, "%s\n", e.message);
         return 1;
       }
-      r =
-        srb_exec(cdb, 10, SRB_DIR_IN, img + at, FT_MAINT_MAX_PEEK, TIMEOUT_MS);
-      if(r != FT_MAINT_MAX_PEEK) {
+      r = scsi_send_command(cdb, 10, SCSI_FROM_DEVICE, img + at,
+                            FT_MAINT_MAX_PEEK_BYTES, TIMEOUT_MS);
+      if(r != FT_MAINT_MAX_PEEK_BYTES) {
         printf("%04x:%04x: %s; dump incomplete, nothing written\n", seg, off,
-               r < 0 ? srb_errstr(r) : "short read");
+               r < 0 ? scsi_error_text(r) : "short read");
         maint_wait_idle();
         return 1;
       }
-      at += FT_MAINT_MAX_PEEK;
+      at += FT_MAINT_MAX_PEEK_BYTES;
       if(off % 0x4000 == 0x3c00) printf("  %04x:%04x done\n", seg, off);
     }
   }
@@ -916,9 +921,9 @@ static int maint_dump_flash(const char* path) {
  * while the scanner is idle. Writes complete on the bus before the device
  * acts on them, so "send ok" proves nothing: check with peek. */
 static int cmd_maint(int argc, char** argv) {
-  /* buf holds a peek reply (<= FT_MAINT_MAX_PEEK) or a write packet
-   * (FT_MAINT_HDR + FT_MAINT_MAX_DATA, smaller) */
-  BYTE cdb[10], buf[FT_MAINT_MAX_PEEK], data[FT_MAINT_MAX_DATA];
+  /* buf holds a peek reply (<= FT_MAINT_MAX_PEEK_BYTES) or a write packet
+   * (FT_MAINT_HEADER_BYTES + FT_MAINT_MAX_DATA_BYTES, smaller) */
+  BYTE cdb[10], buf[FT_MAINT_MAX_PEEK_BYTES], data[FT_MAINT_MAX_DATA_BYTES];
   ft_err e;
   int len, i, v, r, peek = 0;
   unsigned seg = 0, off = 0;
@@ -932,7 +937,7 @@ static int cmd_maint(int argc, char** argv) {
       fprintf(stderr, "maint: address must be seg:off in hex\n");
       return 2;
     }
-    len = ft_maint_peek(seg, off, (size_t)cnt, cdb, &e) < 0 ? -1 : (int)cnt;
+    len = ft_build_memory_read(seg, off, (size_t)cnt, cdb, &e) < 0 ? -1 : (int)cnt;
     peek = 1;
   } else if(argc == 4 &&
             strcmp(argv[3], "--confirm") == 0 &&
@@ -944,7 +949,7 @@ static int cmd_maint(int argc, char** argv) {
       return 2;
     }
     len =
-      ft_maint_io((unsigned)port, (unsigned char)val, cdb, buf, sizeof buf, &e);
+      ft_build_port_write((unsigned)port, (unsigned char)val, cdb, buf, sizeof buf, &e);
   } else if(argc == 4 &&
             strcmp(argv[3], "--confirm") == 0 &&
             strcmp(argv[0], "mem") == 0) {
@@ -963,7 +968,7 @@ static int cmd_maint(int argc, char** argv) {
       fprintf(stderr, "maint: bad hex bytes\n");
       return 2;
     }
-    len = ft_maint_mem(seg, off, data, n, cdb, buf, sizeof buf, &e);
+    len = ft_build_memory_write(seg, off, data, n, cdb, buf, sizeof buf, &e);
   } else {
     fprintf(stderr,
             "maint io <0x342|0x344> <byte> --confirm\n"
@@ -989,9 +994,10 @@ static int cmd_maint(int argc, char** argv) {
 
   if(peek) {
     memset(buf, 0, sizeof buf);
-    r = srb_exec(cdb, 10, SRB_DIR_IN, buf, (DWORD)len, TIMEOUT_MS);
+    r =
+      scsi_send_command(cdb, 10, SCSI_FROM_DEVICE, buf, (DWORD)len, TIMEOUT_MS);
     if(r < 0) {
-      printf("peek: %s\n", srb_errstr(r));
+      printf("peek: %s\n", scsi_error_text(r));
       return 1;
     }
     for(i = 0; i < r; i++) {
@@ -1005,20 +1011,116 @@ static int cmd_maint(int argc, char** argv) {
   printf("data:");
   for(i = 0; i < len; i++) printf(" %02x", buf[i]);
   printf("\n");
-  r = srb_exec(cdb, 10, SRB_DIR_OUT, buf, (DWORD)len, TIMEOUT_MS);
-  printf("send: %s\n", r < 0 ? srb_errstr(r) : "ok (check with peek)");
+  r = scsi_send_command(cdb, 10, SCSI_TO_DEVICE, buf, (DWORD)len, TIMEOUT_MS);
+  printf("send: %s\n", r < 0 ? scsi_error_text(r) : "ok (check with peek)");
   if(r < 0) return 1;
   /* The completed 3b sets "pending" (7639, poll 0800) and the main loop
    * runs it only while the last CDB opcode (8f42) is still 3b: any
    * command sent before that (a poll) overwrites 8f42, the packet is never
    * run and 7639 stays set until the next scan. So stay off the bus for
    * a while first. */
-  io_sleep(MAINT_SETTLE_MS);
+  sleep_ms(MAINT_SETTLE_MS);
   if(maint_wait_idle()) {
     printf("still pending: the write was probably NOT executed\n");
     return 1;
   }
   return 0;
+}
+
+/* live poke <hexoff> <hexbytes> [settle_ms]
+ * Test H10 (notes/handoff-live-mode-focus-test.md): write a few bytes to
+ * scanner memory 4000:<hexoff> while a scan runs, then read them back.
+ * Only the live whitelist is allowed (libft ft_build_live_write). Unlike
+ * maint, this does not need an idle scanner, but it refuses unless the
+ * scan state (INQUIRY byte 0x35) is 36 (scanning) or 8 (idle). The bytes
+ * are given in memory order: "11223344" writes 11 at <hexoff>. */
+static int cmd_live(int argc, char** argv) {
+  if(argc < 3 || argc > 4 || strcmp(argv[0], "poke") != 0) {
+    fprintf(stderr, "live poke <hexoff> <hexbytes> [settle_ms]\n");
+    return 2;
+  }
+
+  /* the address: hex, inside segment 4000 */
+  char* end_of_number;
+  unsigned long offset = strtoul(argv[1], &end_of_number, 16);
+  if(argv[1][0] == '\0' || *end_of_number != '\0') {
+    fprintf(stderr, "live: offset must be hex, e.g. 8eee\n");
+    return 2;
+  }
+
+  /* the bytes: two hex digits each, at most 4 */
+  uint8_t data[4];
+  uint32_t length = 0;
+  const char* hex_digits = argv[2];
+  while(
+    hex_digits[0] != '\0' && hex_digits[1] != '\0' && length < sizeof data) {
+    unsigned value;
+    if(sscanf(hex_digits, "%2x", &value) != 1) {
+      break;
+    }
+    data[length] = (uint8_t)value;
+    length++;
+    hex_digits += 2;
+  }
+  if(*hex_digits != '\0' || length == 0) {
+    fprintf(stderr, "live: bad hex bytes (1..4 bytes, e.g. 11223344)\n");
+    return 2;
+  }
+
+  /* optional: how long to stay off the bus after the write */
+  uint32_t settle_ms = SC_LIVE_DEFAULT_SETTLE_MS;
+  if(argc == 4) {
+    settle_ms = (uint32_t)strtoul(argv[3], NULL, 10);
+  }
+
+  /* Ask for the scan state now (the INQUIRY from opening is stale). */
+  int32_t scan_state = sc_live_read_scan_state();
+  if(scan_state != SC_LIVE_STATE_SCANNING && scan_state != SC_LIVE_STATE_IDLE) {
+    fprintf(stderr,
+            "live: scan state %d, not 36 (scanning) or 8 (idle); "
+            "refusing\n",
+            (int)scan_state);
+    return 1;
+  }
+  printf("scan state %d\n", (int)scan_state);
+
+  uint8_t read_back[4];
+  int32_t scsi_code = 0;
+  ft_err error;
+  sc_live_result result = sc_live_poke_and_verify(
+    (uint32_t)offset, data, length, read_back, &scsi_code, &error, settle_ms);
+
+  printf("wrote 4000:%04lx:", offset);
+  for(uint32_t i = 0; i < length; i++) {
+    printf(" %02x", data[i]);
+  }
+  printf("  (settle %u ms)\n", (unsigned)settle_ms);
+
+  int exit_code = 1;
+  switch(result) {
+    case SC_LIVE_OK:
+      printf("read back: same bytes: PASS\n");
+      exit_code = 0;
+      break;
+    case SC_LIVE_REFUSED:
+      fprintf(stderr, "%s\n", error.message);
+      exit_code = 2;
+      break;
+    case SC_LIVE_SEND_FAILED:
+      printf("write: %s\n", scsi_error_text(scsi_code));
+      break;
+    case SC_LIVE_PEEK_FAILED:
+      printf("read back: %s\n", scsi_error_text(scsi_code));
+      break;
+    case SC_LIVE_MISMATCH:
+      printf("read back:");
+      for(uint32_t i = 0; i < length; i++) {
+        printf(" %02x", read_back[i]);
+      }
+      printf("  MISMATCH: write lost or not run yet\n");
+      break;
+  }
+  return exit_code;
 }
 
 /* Save the device's Faul Pixs table (e0 @ 0x400, 318 B; ASCII, per
@@ -1033,9 +1135,9 @@ static void save_faul(const char* path) {
   cdb[4] = 0x04;
   cdb[7] = 0x01;
   cdb[8] = 0x3e;
-  r = srb_exec(cdb, 10, SRB_DIR_IN, buf, sizeof buf, TIMEOUT_MS);
+  r = scsi_send_command(cdb, 10, SCSI_FROM_DEVICE, buf, sizeof buf, TIMEOUT_MS);
   if(r < 0) {
-    printf("Faul Pixs: %s\n", srb_errstr(r));
+    printf("Faul Pixs: %s\n", scsi_error_text(r));
     return;
   }
   f = fopen(path, "wb");
@@ -1073,9 +1175,10 @@ static int cmd_grab(long blocks, WORD blklen, const char* out) {
   }
 
   for(b = 0; b < blocks; b++) {
-    int r = srb_exec(cdb, 10, SRB_DIR_IN, buf, blklen, TIMEOUT_MS);
+    int r =
+      scsi_send_command(cdb, 10, SCSI_FROM_DEVICE, buf, blklen, TIMEOUT_MS);
     if(r < 0) {
-      printf("grab %ld: %s, stopping\n", b, srb_errstr(r));
+      printf("grab %ld: %s, stopping\n", b, scsi_error_text(r));
       bad = 1;
       break;
     }
@@ -1101,9 +1204,9 @@ static int cmd_getwin(void) {
   BYTE buf[0x100];
   int r, i;
   memset(buf, 0, sizeof buf);
-  r = srb_exec(cdb, 10, SRB_DIR_IN, buf, 0x54, TIMEOUT_MS);
+  r = scsi_send_command(cdb, 10, SCSI_FROM_DEVICE, buf, 0x54, TIMEOUT_MS);
   if(r < 0) {
-    printf("getwin: %s\n", srb_errstr(r));
+    printf("getwin: %s\n", scsi_error_text(r));
     return 1;
   }
   printf("getwin: %d bytes", r);
@@ -1163,11 +1266,11 @@ static void run_probe(long line, const char* kinds, DWORD t) {
       cmd_inquiry();
     } else if(*kinds == 'g') {
       cmd_getwin();
-    } else if(*kinds == 'p' && ft_maint_peek(0x4000, 0x8ed0, 8, cdb, &e) >= 0) {
+    } else if(*kinds == 'p' && ft_build_memory_read(0x4000, 0x8ed0, 8, cdb, &e) >= 0) {
       memset(buf, 0, sizeof buf);
-      r = srb_exec(cdb, 10, SRB_DIR_IN, buf, 8, TIMEOUT_MS);
+      r = scsi_send_command(cdb, 10, SCSI_FROM_DEVICE, buf, 8, TIMEOUT_MS);
       if(r < 0) {
-        printf("peek 8ed0: %s\n", srb_errstr(r));
+        printf("peek 8ed0: %s\n", scsi_error_text(r));
         continue;
       }
       printf("peek 4000:8ed0:");
@@ -1179,7 +1282,7 @@ static void run_probe(long line, const char* kinds, DWORD t) {
   fflush(stdout);
 }
 
-/* Pipelined flood: keep DEPTH ReadExt requests queued (ftio.h io_queue:
+/* Pipelined flood: keep DEPTH ReadExt requests queued (ftio.h read_queue:
  * overlapped on Windows, sg's async interface on Linux) so the port
  * driver issues them back-to-back (FlexColor reaches ~1700 reads/s;
  * one-at-a-time reads top out at ~460/s).
@@ -1190,21 +1293,21 @@ static void run_probe(long line, const char* kinds, DWORD t) {
 #define DEPTH 8
 
 static long read_flood(long n, WORD blklen, FILE* f) {
-  io_queue* q;
+  read_queue* q;
   BYTE cdb[10];
   long issued = 0, done = 0, kept = 0, shorts = 0, short_bytes = 0;
   DWORD last_full;
   int i, err = 0, hook_due = 0, stalled = 0;
   char probed[MAX_PROBES] = {0};
-  DWORD t0 = io_ms(), dt;
+  DWORD t0 = now_ms(), dt;
 
   memcpy(cdb, CDB_GRAB, 10);
   cdb[7] = (BYTE)(blklen >> 8);
   cdb[8] = (BYTE)(blklen & 0xff);
-  q = ioq_open(DEPTH, cdb, blklen, TIMEOUT_MS);
+  q = read_queue_open(DEPTH, cdb, blklen, TIMEOUT_MS);
   if(!q) return 0;
 
-  last_full = io_ms();
+  last_full = now_ms();
   while(kept < n) {
     if(g_abort && !err) {
       printf("\ninterrupted\n");
@@ -1222,23 +1325,23 @@ static long read_flood(long n, WORD blklen, FILE* f) {
       for(i = 0; i < g_nprobe; i++)
         if(!probed[i] && kept >= g_probe[i].line) {
           probed[i] = 1;
-          run_probe(kept, g_probe[i].kinds, io_ms() - t0);
+          run_probe(kept, g_probe[i].kinds, now_ms() - t0);
         }
       if(!stalled && g_stall_line >= 0 && kept >= g_stall_line) {
         stalled = 1;
         printf("\nstall at line %ld: no reads for %lu ms\n", kept,
                (unsigned long)g_stall_ms);
         fflush(stdout);
-        io_sleep(g_stall_ms);
+        sleep_ms(g_stall_ms);
       }
       hook_due = 0;
-      last_full = io_ms();
+      last_full = now_ms();
     }
     while(!err &&
           !hook_due &&
           kept + (issued - done) < n &&
           issued - done < DEPTH) {
-      if(ioq_issue(q, (int)(issued % DEPTH), issued)) {
+      if(read_queue_issue(q, (int)(issued % DEPTH), issued)) {
         err = 1;
         break;
       }
@@ -1248,22 +1351,22 @@ static long read_flood(long n, WORD blklen, FILE* f) {
       if(hook_due) continue;
       break;
     }
-    if(io_ms() - last_full > 5000) {
+    if(now_ms() - last_full > 5000) {
       printf("\nno full block for 5 s; scan data ended?\n");
       err = 1;
     }
     /* reap the oldest */
     {
       int slot = (int)(done % DEPTH);
-      BYTE* buf = ioq_buf(q, slot);
+      BYTE* buf = read_queue_buffer(q, slot);
       DWORD got = 0;
-      int r = ioq_reap(q, slot, done, TIMEOUT_MS, &got);
-      if(r == IOQ_TIMEOUT) {
+      int r = read_queue_wait(q, slot, done, TIMEOUT_MS, &got);
+      if(r == READ_TIMEOUT) {
         printf("\nflood read %ld: timed out\n", done);
         err = 1;
         break;
       }
-      if(r == IOQ_SHORT) {
+      if(r == READ_SHORT) {
         /* a short transfer, the host is ahead of the CCD: no
          * line. Its bytes are never kept: on Windows there are
          * none, on Linux every empty read brings 10 (ff ff ff ff
@@ -1272,8 +1375,8 @@ static long read_flood(long n, WORD blklen, FILE* f) {
          * (one line per read would bury ftwebd's log). */
         shorts++;
         short_bytes += got;
-      } else if(r != IOQ_FULL) {
-        err = 1; /* ioq_reap said why */
+      } else if(r != READ_FULL) {
+        err = 1; /* read_queue_wait said why */
       } else if(!err) {
         if(f && fwrite(buf, 1, got, f) != got)
           err = 1;
@@ -1281,7 +1384,7 @@ static long read_flood(long n, WORD blklen, FILE* f) {
           err = 1;
         else
           kept++;
-        last_full = io_ms();
+        last_full = now_ms();
       }
       done++;
       if(g_progress) {
@@ -1292,8 +1395,8 @@ static long read_flood(long n, WORD blklen, FILE* f) {
       }
     }
   }
-  ioq_close(q, err);
-  dt = io_ms() - t0;
+  read_queue_close(q, err);
+  dt = now_ms() - t0;
   printf("  [flood: %ld reads in %lu ms; %ld full, %ld short (%ld bytes)]\n",
          done, (unsigned long)dt, kept, shorts, short_bytes);
   return kept;
@@ -1308,21 +1411,21 @@ static int send_end(const struct preset* p) {
 /* Poll (265 ms, like FlexColor) until the carriage move that follows a
  * calibration batch is over: idle, and at least min_ms since the batch. */
 static int wait_move(DWORD min_ms, DWORD timeout_ms, const char* what) {
-  DWORD t0 = io_ms();
+  DWORD t0 = now_ms();
   int v, last = -1;
   for(;;) {
-    io_sleep(265);
+    sleep_ms(265);
     v = poll_once();
     if(v < 0) {
-      printf("poll: %s\n", srb_errstr(v));
+      printf("poll: %s\n", scsi_error_text(v));
       return 1;
     }
     if(v != last)
       printf("  ... %04x %s (%lu ms)\n", v, poll_name((unsigned)v),
-             (unsigned long)(io_ms() - t0));
+             (unsigned long)(now_ms() - t0));
     last = v;
-    if(v == 0x0000 && io_ms() - t0 >= min_ms) return 0;
-    if(io_ms() - t0 > timeout_ms) {
+    if(v == 0x0000 && now_ms() - t0 >= min_ms) return 0;
+    if(now_ms() - t0 > timeout_ms) {
       printf("%s: carriage never went idle\n", what);
       return 1;
     }
@@ -1419,30 +1522,30 @@ static int cmd_scan(const struct preset* p, long y, long keep, DWORD hold_ms,
   {
     int r = win_exchange(desc, 0);
     if(r < 0) {
-      printf("SetWindow (scan): %s\n", srb_errstr(r));
+      printf("SetWindow (scan): %s\n", scsi_error_text(r));
       return 1;
     }
     scanned = 1;
   }
-  start = io_ms();
+  start = now_ms();
   if(wait_settled(120000)) {
     printf("device never settled; stopping\n");
     send_end(p);
     return 1;
   }
   printf("holding %lu ms before calibration\n", (unsigned long)hold_ms);
-  while(io_ms() - start < hold_ms) {
+  while(now_ms() - start < hold_ms) {
     v = poll_once();
     if(v < 0) {
-      printf("poll: %s\n", srb_errstr(v));
+      printf("poll: %s\n", scsi_error_text(v));
       send_end(p);
       return 1;
     }
     if(v != last)
       printf("  ... %04x %s (%lu ms)\n", v, poll_name((unsigned)v),
-             (unsigned long)(io_ms() - start));
+             (unsigned long)(now_ms() - start));
     last = v;
-    io_sleep(265);
+    sleep_ms(265);
   }
 
   /* Calibration: count FULL lines — at high resolution many reads come
@@ -1488,22 +1591,22 @@ static int cmd_scan(const struct preset* p, long y, long keep, DWORD hold_ms,
   printf("waiting for carriage at the start line (up to 90 s)\n");
   {
     int seen_busy = 0;
-    start = io_ms();
+    start = now_ms();
     last = -1;
     for(;;) {
       v = poll_once();
       if(v < 0) break;
       if(v != last)
         printf("  ... %04x %s (%lu ms)\n", v, poll_name((unsigned)v),
-               (unsigned long)(io_ms() - start));
+               (unsigned long)(now_ms() - start));
       last = v;
       if(v == 0x1060 || (v == 0x0000 && seen_busy)) break;
       if(v != 0x0000) seen_busy = 1;
-      if(io_ms() - start > 90000) {
+      if(now_ms() - start > 90000) {
         v = -100;
         break;
       }
-      io_sleep(150);
+      sleep_ms(150);
     }
   }
   if(v != 0x1060 && v != 0x0000) {
@@ -1585,9 +1688,10 @@ static int upload_microcode(const char* file) {
   long sz;
 
   memset(inq, 0, sizeof inq);
-  r = srb_exec(CDB_INQUIRY, 6, SRB_DIR_IN, inq, sizeof inq, TIMEOUT_MS);
+  r = scsi_send_command(CDB_INQUIRY, 6, SCSI_FROM_DEVICE, inq, sizeof inq,
+                        TIMEOUT_MS);
   if(r < 0) {
-    printf("INQUIRY: %s; not uploading\n", srb_errstr(r));
+    printf("INQUIRY: %s; not uploading\n", scsi_error_text(r));
     return 1;
   }
   if(!ft_is_loader(inq, (size_t)r)) {
@@ -1615,8 +1719,8 @@ static int upload_microcode(const char* file) {
     /* FlexColor reads the D800 page from the loader right before the
      * chunks (cold-boot traces); do the same */
     static const BYTE pg[10] = {0x3c, 0, 0xd8, 0, 0, 0, 0, 0, 0x42, 0};
-    r = srb_exec(pg, 10, SRB_DIR_IN, buf, 0x42, TIMEOUT_MS);
-    printf("loader page d800 (0x42): %s\n", r < 0 ? srb_errstr(r) : "ok");
+    r = scsi_send_command(pg, 10, SCSI_FROM_DEVICE, buf, 0x42, TIMEOUT_MS);
+    printf("loader page d800 (0x42): %s\n", r < 0 ? scsi_error_text(r) : "ok");
   }
   for(i = 0; i < FT_UPLOAD_CHUNK_COUNT; i++) {
     if(fread(code, 1, sizeof code, f) != sizeof code) {
@@ -1629,9 +1733,9 @@ static int upload_microcode(const char* file) {
       fclose(f);
       return 1;
     }
-    r = srb_exec(cdb, 10, SRB_DIR_OUT, buf, (DWORD)len, 10000);
+    r = scsi_send_command(cdb, 10, SCSI_TO_DEVICE, buf, (DWORD)len, 10000);
     printf("chunk %2d (to %02x00:0000): %s\n", i, 0x30 + i,
-           r < 0 ? srb_errstr(r) : "ok");
+           r < 0 ? scsi_error_text(r) : "ok");
     if(r < 0) {
       /* never send the run trailer after a partial load */
       fclose(f);
@@ -1645,10 +1749,10 @@ static int upload_microcode(const char* file) {
     fprintf(stderr, "%s\n", e.message);
     return 1;
   }
-  r = srb_exec(cdb, 10, SRB_DIR_OUT, buf, (DWORD)len, 10000);
-  printf("trailer: %s\n", r < 0 ? srb_errstr(r) : "ok");
+  r = scsi_send_command(cdb, 10, SCSI_TO_DEVICE, buf, (DWORD)len, 10000);
+  printf("trailer: %s\n", r < 0 ? scsi_error_text(r) : "ok");
   printf("waiting for firmware commit (poll until idle)\n");
-  start = io_ms();
+  start = now_ms();
   {
     int last = 0x10000, fails = 0;
     for(;;) {
@@ -1656,10 +1760,10 @@ static int upload_microcode(const char* file) {
       if(v == 0x0000) break;
       if(v != last) {
         if(v < 0)
-          printf("  %5lu ms: poll %s\n", (unsigned long)(io_ms() - start),
-                 srb_errstr(v));
+          printf("  %5lu ms: poll %s\n", (unsigned long)(now_ms() - start),
+                 scsi_error_text(v));
         else
-          printf("  %5lu ms: %04x %s\n", (unsigned long)(io_ms() - start), v,
+          printf("  %5lu ms: %04x %s\n", (unsigned long)(now_ms() - start), v,
                  poll_name((unsigned)v));
         last = v;
       }
@@ -1667,22 +1771,22 @@ static int upload_microcode(const char* file) {
        * loader did: after 2 s of failed polls, probe again */
       if(v < 0 && ++fails >= 10) {
         fails = 0;
-        if(g_dev != IO_NONE) io_close(g_dev);
-        g_dev = IO_NONE;
-        if(probe_scanner(PROBE_MICROCODE_ONLY) == IO_NONE)
+        if(g_scanner != NO_SCANNER) scanner_close(g_scanner);
+        g_scanner = NO_SCANNER;
+        if(probe_scanner(PROBE_MICROCODE_ONLY) == NO_SCANNER)
           printf("  no microcode answering yet\n");
         last = 0x10000;
       } else if(v >= 0) {
         fails = 0;
       }
-      if(io_ms() - start > 60000) {
+      if(now_ms() - start > 60000) {
         printf("timed out; upload may have failed\n");
         return 1;
       }
-      io_sleep(200);
+      sleep_ms(200);
     }
   }
-  printf("device idle after %lu ms\n", (unsigned long)(io_ms() - start));
+  printf("device idle after %lu ms\n", (unsigned long)(now_ms() - start));
   if(await_microcode()) return 1;
   printf("upload complete. Don't upload again until a power cycle\n");
   return 0;
@@ -1690,15 +1794,16 @@ static int upload_microcode(const char* file) {
 
 /* After the commit the microcode, not the loader, must answer INQUIRY;
  * it can come up on another \\.\ScannerN (seen: Scanner0 -> Scanner4),
- * so probe again (INQUIRY only) for up to 30 s. 0: g_dev is the
+ * so probe again (INQUIRY only) for up to 30 s. 0: g_scanner is the
  * microcode's handle. */
 static int await_microcode(void) {
-  DWORD start = io_ms();
+  DWORD start = now_ms();
   int r;
   memset(g_inq, 0, sizeof g_inq);
-  r = g_dev == IO_NONE
+  r = g_scanner == NO_SCANNER
         ? -1
-        : srb_exec(CDB_INQUIRY, 6, SRB_DIR_IN, g_inq, sizeof g_inq, TIMEOUT_MS);
+        : scsi_send_command(CDB_INQUIRY, 6, SCSI_FROM_DEVICE, g_inq,
+                            sizeof g_inq, TIMEOUT_MS);
   g_inq_n = r < 0 ? 0 : r;
   if(r >= 0 &&
      memcmp(g_inq + 8, "Imacon", 6) == 0 &&
@@ -1708,11 +1813,11 @@ static int await_microcode(void) {
   }
   printf("the microcode does not answer on this handle yet; probing\n");
   for(;;) {
-    if(g_dev != IO_NONE) io_close(g_dev);
-    g_dev = IO_NONE;
-    if(probe_scanner(PROBE_MICROCODE_ONLY) != IO_NONE) return 0;
-    if(io_ms() - start > 30000) break;
-    io_sleep(1000);
+    if(g_scanner != NO_SCANNER) scanner_close(g_scanner);
+    g_scanner = NO_SCANNER;
+    if(probe_scanner(PROBE_MICROCODE_ONLY) != NO_SCANNER) return 0;
+    if(now_ms() - start > 30000) break;
+    sleep_ms(1000);
   }
   fprintf(stderr,
           "ftpoc: the microcode did not answer within 30 s of the upload\n"
@@ -1728,9 +1833,9 @@ static const char* g_microcode;
  * with the paths tried on stderr. Nothing else is ever tried. */
 static int find_microcode(char* path, size_t cap) {
   static char cand[2][FT_UPLOAD_PATH_BYTES];
-  char exe[IO_PATH_MAX + 1];
+  char exe[PATH_BUF_MAX + 1];
   int i, k;
-  io_exe_path(exe);
+  own_exe_path(exe);
   k = ft_find_microcode_paths(g_microcode, exe, cand);
   for(i = 0; i < k; i++) {
     FILE* f = fopen(cand[i], "rb");
@@ -1872,7 +1977,8 @@ static float* load_corrected(const char* scan, int px, int bin, int x,
     snprintf(path, sizeof path, "%s.faul", scan);
     faul = load_file(path, &nfaul);
     if(faul) {
-      int pixs[3][FT_FAULTY_PIXEL_MAX], cnt[3];
+      int32_t pixs[3][FT_FAULTY_PIXEL_MAX];
+      uint32_t cnt[3];
       ft_parse_faulty_pixels(faul, (size_t)nfaul, pixs, cnt);
       free(faul);
       if(ft_repair_faulty_pixels(t, (int)lines, px, pixs, cnt, x, bin)) {
@@ -1907,7 +2013,9 @@ static float* load_preview_ds(const char* scan, int px, int bin, int x, int f,
   long ncal = 0, nfaul = 0, total, cl, done, n, lo, po, i;
   unsigned short *cal = NULL, *buf = NULL;
   float *dark = NULL, *white = NULL, *tf = NULL, *t = NULL;
-  int pixs[3][FT_FAULTY_PIXEL_MAX], cnt[3] = {0, 0, 0}, have_faul = 0, ok = 0;
+  int32_t pixs[3][FT_FAULTY_PIXEL_MAX];
+  uint32_t cnt[3] = {0, 0, 0};
+  int have_faul = 0, ok = 0;
   long chunk = 64L * f;
   FILE* fr = NULL;
   ft_err e;
@@ -2480,8 +2588,8 @@ static void put_px(unsigned char* img, int w, int h, long x, long y,
   img[o + 2] = b;
 }
 
-static voiddraw_number(unsigned char* img, int w, int h, long x, long y,
-                       int v) {
+static void draw_number(unsigned char* img, int w, int h, long x, long y,
+                        int v) {
   char s[16];
   int i, r, c, k, scale = 4;
   snprintf(s, sizeof s, "%d", v);
@@ -2526,7 +2634,7 @@ static int write_strip_png(const char* path, const float* t, int lines, int px,
         v = v > 0 ? pow(v < 1 ? v : 1, 1 / 2.2) : 0;
         img[((size_t)c * lines + l) * 3 + k] = (unsigned char)(v * 255 + 0.5);
       }
-  for(i = 0; i < j->frame_count; i++) {
+  for(i = 0; i < (int)j->frame_count; i++) {
     const ft_job_frame* f = &j->frames[i];
     long x0 = mm_to_idx(f->along_start_mm, ax->first_line_mm, ax->mm_per_line, lines);
     long x1 = mm_to_idx(f->along_start_mm + f->length_mm, ax->first_line_mm, ax->mm_per_line, lines);
@@ -2554,11 +2662,12 @@ static int write_strip_png(const char* path, const float* t, int lines, int px,
  * the fastest and the most-light choice. The job's bin key picks one. */
 static void print_options(const ft_job* j) {
   double t_fast = 0, t_light = 0;
-  int i, k, n, b[6], any = 0;
+  int i, k, n, any = 0;
+  uint32_t b[6];
   printf(
     "\n optics per frame: bin = time, light per sample, Dmax~ "
     "(job key bin; 0 = fastest)\n");
-  for(i = 0; i < j->frame_count; i++) {
+  for(i = 0; i < (int)j->frame_count; i++) {
     const ft_job_frame* f = &j->frames[i];
     if(!f->is_included) continue;
     n = ft_find_bins_for_ppi(f->ppi, b);
@@ -2589,7 +2698,7 @@ static const char* type_name(ft_frame_type t) {
 static void print_job(const ft_job* j) {
   int i;
   printf("\n frame  type      y0     len    x0   width  tilt  ppi   conf\n");
-  for(i = 0; i < j->frame_count; i++) {
+  for(i = 0; i < (int)j->frame_count; i++) {
     const ft_job_frame* f = &j->frames[i];
     printf(" %3d%s  %-8s %6.1f %6.1f %5.1f %6.1f %5.2f %5g  %s\n", f->index,
            f->is_included ? " " : "-", type_name(f->type), f->along_start_mm, f->length_mm, f->across_start_mm,
@@ -2711,7 +2820,7 @@ static int focus_check(const float* t, int lines, int px, const ft_axes* ax,
   int pos[3], dir[3], p, i, k, rc;
   long off[3];
 
-  for(i = 0; i < j->frame_count && i < FT_MAX_FRAMES; i++)
+  for(i = 0; i < (int)j->frame_count && i < FT_MAX_FRAMES; i++)
     if(j->frames[i].type != FT_FRAME_PARTIAL) {
       used[nc] = 0;
       cand[nc++] = i;
@@ -2769,7 +2878,7 @@ static int focus_check(const float* t, int lines, int px, const ft_axes* ax,
          j->focus_mode == FT_FOCUS_PER_FRAME ? "per-frame focus" : "shifted curve");
   if(j->focus_mode == FT_FOCUS_PER_FRAME) {
     int n = 0;
-    for(i = 0; i < j->frame_count; i++) n += j->frames[i].is_included != 0;
+    for(i = 0; i < (int)j->frame_count; i++) n += j->frames[i].is_included != 0;
     printf("per-frame focus adds ~%d crops (~%d min) to scan --job\n",
            n * FOCUS_N, (n * FOCUS_N * CROP_S + 59) / 60);
   }
@@ -2786,7 +2895,7 @@ static void warn_job(const ft_job* j, const char* path) {
   if(ft_validate_job(j, &g_lens, &all) == 0) return;
   printf("WARNING: scan --job will refuse %s as written (fix it there):\n",
          path);
-  for(i = 0; i < j->frame_count; i++) {
+  for(i = 0; i < (int)j->frame_count; i++) {
     if(!j->frames[i].is_included) continue;
     one = *j;
     one.frame_count = 1;
@@ -2814,7 +2923,8 @@ static int plan_share(ft_job* j, const ft_holder* h, double share, int hf,
   static ft_share_estimate c[6];
   ft_share_options o;
   ft_err e;
-  int n, nc, k, i, w;
+  uint32_t n;
+  int nc, k, i, w;
 
   ft_init_share_options(&o, h->scan_length_mm);
   o.target_pixels = share;
@@ -2842,7 +2952,7 @@ static int plan_share(ft_job* j, const ft_holder* h, double share, int hf,
            c[i].scan_seconds / 60, c[i].focus_seconds / 60, c[i].seconds / 60, c[i].relative_light,
            c[i].dmax);
   printf(" * chosen (most light); windows (job key group):\n");
-  for(w = 0; w < c[k].window_count; w++) {
+  for(w = 0; w < (int)c[k].window_count; w++) {
     const ft_share_window* x = &c[k].windows[w];
     printf("   %d: frame %d", w + 1, sel[x->first_frame].index);
     if(x->last_frame > x->first_frame)
@@ -3170,8 +3280,8 @@ static int save_job(const char* path, const ft_job* j) {
     rc = ft_write_job(j, f) != 0;
     rc |= fclose(f) != 0;
   }
-  if(!rc && io_replace(tmp, path)) {
-    fprintf(stderr, "cannot replace %s (%s)\n", path, io_syserr());
+  if(!rc && replace_file(tmp, path)) {
+    fprintf(stderr, "cannot replace %s (%s)\n", path, os_error_text());
     rc = 1;
   }
   if(rc) {
@@ -3347,7 +3457,7 @@ static int detail_window(const ft_job* j, int pass, const ft_holder* h,
   double y0 = 1e9, y1 = -1e9, lo, hi, ppi = 0;
   long flo = LONG_MAX, fhi = LONG_MIN;
   int i, n = 0;
-  for(i = 0; i < j->frame_count; i++) {
+  for(i = 0; i < (int)j->frame_count; i++) {
     const ft_job_frame* f = &j->frames[i];
     if(!f->is_included || f->pass != pass) continue;
     if(f->along_start_mm < y0) y0 = f->along_start_mm;
@@ -3387,7 +3497,7 @@ static double detail_bytes(const ft_job* j, int pass, const ft_detail_scan* ds) 
   ft_tiff_kind k = ft_get_detail_kind(j->detail, j->detail_format, j->detail_bw);
   double sum = 0;
   int i, r[4];
-  for(i = 0; i < j->frame_count; i++) {
+  for(i = 0; i < (int)j->frame_count; i++) {
     const ft_job_frame* f = &j->frames[i];
     if(!f->is_included || f->pass != pass) continue;
     if(ft_find_scan_ranges(ds, f->along_start_mm - FT_DETAIL_MARGIN_MM,
@@ -3411,7 +3521,7 @@ static int detail_plan(const float* t, int lines, int px, const ft_axes* ax,
   double total_s = 0, total_b = 0;
   ft_err e;
 
-  for(i = 0; i < j->frame_count; i++) {
+  for(i = 0; i < (int)j->frame_count; i++) {
     ft_job_frame* f = &j->frames[i];
     int sel = f->type != FT_FRAME_PARTIAL;
     if(select && (sel = ft_is_frame_selected(select, f->index, &e)) < 0) {
@@ -3475,12 +3585,12 @@ static int detail_plan(const float* t, int lines, int px, const ft_axes* ax,
   j->focus_mode = FT_FOCUS_PER_FRAME;
   j->focus_offset_steps = 0;
   printf("\ndetailed scan: %d pass(es)\n", plan.pass_count);
-  for(p = 0; p < plan.pass_count; p++) {
+  for(p = 0; p < (int)plan.pass_count; p++) {
     const ft_detail_pass* ps = &plan.passes[p];
     struct crop_req q;
     ft_detail_scan ds;
     double b;
-    for(k = ps->first_frame; k <= ps->last_frame; k++) {
+    for(k = (int)ps->first_frame; k <= (int)ps->last_frame; k++) {
       j->frames[idx[k]].pass = p + 1;
       j->frames[idx[k]].focus_offset_steps = df[k].focus_offset_steps;
     }
@@ -3511,7 +3621,7 @@ static int scan_detail(ft_job* j, const char* path, const char* jobbase,
   double freeb;
   char dir[260];
 
-  for(i = 0; i < j->frame_count; i++)
+  for(i = 0; i < (int)j->frame_count; i++)
     if(j->frames[i].is_included && !j->frames[i].is_done && j->frames[i].pass > maxp)
       maxp = j->frames[i].pass;
   for(p = 1; p <= maxp; p++) {
@@ -3536,7 +3646,7 @@ static int scan_detail(ft_job* j, const char* path, const char* jobbase,
   for(k = (int)strlen(dir); k > 0 && dir[k - 1] != '/' && dir[k - 1] != '\\';
       k--);
   dir[k] = 0;
-  if(io_free_bytes(k ? dir : NULL, &freeb) == 0) {
+  if(disk_free_bytes(k ? dir : NULL, &freeb) == 0) {
     printf("%s: %d pass(es), ~%.0f min, %.0f MB of files, %.0f MB free\n", path,
            npass, secs / 60, need / 1048576, freeb / 1048576);
     if(freeb < need * 1.05) {
@@ -3546,7 +3656,7 @@ static int scan_detail(ft_job* j, const char* path, const char* jobbase,
       return 1;
     }
   } else {
-    printf("WARNING: free space unknown (%s)\n", io_syserr());
+    printf("WARNING: free space unknown (%s)\n", os_error_text());
   }
 
   ft_init_image(&meta);
@@ -3577,7 +3687,7 @@ static int scan_detail(ft_job* j, const char* path, const char* jobbase,
     run.o.pass = p;
     run.o.focus_offset_steps = q.focus_offset;
     run.o.keep_raw = j->keep_raw;
-    for(i = 0; i < j->frame_count; i++) {
+    for(i = 0; i < (int)j->frame_count; i++) {
       const ft_job_frame* f = &j->frames[i];
       if(!f->is_included || f->pass != p) continue;
       run.o.frames[n].index = f->index;
@@ -3648,7 +3758,7 @@ static int scan_detail(ft_job* j, const char* path, const char* jobbase,
     rc = ft_close_detail(run.d, &res, &e);
     ring_close(run.r);
     free(run.cal);
-    for(i = 0; i < res.frame_count; i++) {
+    for(i = 0; i < (int)res.frame_count; i++) {
       const ft_detail_frame_result* f = &res.frames[i];
       printf("  %s: frame %d at %d,%d %dx%d px, shift %+.2f mm%s%s\n", f->path,
              f->index, f->box[0], f->box[1], f->box[2], f->box[3], f->shift_mm,
@@ -3662,10 +3772,10 @@ static int scan_detail(ft_job* j, const char* path, const char* jobbase,
       save_job(path, j);
       return 1;
     }
-    for(i = 0; i < j->frame_count; i++)
+    for(i = 0; i < (int)j->frame_count; i++)
       if(j->frames[i].is_included && j->frames[i].pass == p) j->frames[i].is_done = 1;
     if(save_job(path, j)) return 1;
-    for(i = 0; i < res.frame_count; i++) pg_file(res.frames[i].path);
+    for(i = 0; i < (int)res.frame_count; i++) pg_file(res.frames[i].path);
   }
   if(g_abort) {
     save_job(path, j);
@@ -3687,7 +3797,7 @@ static int share_request(const ft_job* j, const ft_holder* h, int g,
   ft_share_options o;
   double y0, len, scale, lo, hi;
   int i;
-  for(i = 0; i < j->frame_count && !fr; i++)
+  for(i = 0; i < (int)j->frame_count && !fr; i++)
     if(j->frames[i].is_included && j->frames[i].group == g) fr = &j->frames[i];
   ft_init_share_options(&o, h->scan_length_mm);
   if(!fr || ft_get_share_group_window(j, g, &o, &y0, &len)) return -1;
@@ -3738,7 +3848,7 @@ static int share_focus(const ft_job* j, int g, const struct crop_req* q,
   long step = share_focus_step(q->ppi * q->bin, q->bin);
   int i, tried = 0, rc = FB_NO_PEAK, keep = g_focus_bin;
   g_focus_bin = q->bin;
-  for(i = 0; i < j->frame_count && tried < SHARE_FOCUS_TRIES; i++) {
+  for(i = 0; i < (int)j->frame_count && tried < SHARE_FOCUS_TRIES; i++) {
     const ft_job_frame* fr = &j->frames[i];
     double lo, hi;
     if(!fr->is_included || fr->group != g) continue;
@@ -3765,7 +3875,7 @@ static int share_focus(const ft_job* j, int g, const struct crop_req* q,
 
 static int group_todo(const ft_job* j, int g) {
   int i;
-  for(i = 0; i < j->frame_count; i++)
+  for(i = 0; i < (int)j->frame_count; i++)
     if(j->frames[i].is_included && j->frames[i].group == g && !j->frames[i].is_done) return 1;
   return 0;
 }
@@ -3787,7 +3897,7 @@ static int scan_share(ft_job* j, const char* path, const char* jobbase,
   long centre = j->focus_offset_steps; /* the next bracket's centre */
   double mscale = 0;             /* scale measured at; 0: none yet */
 
-  for(i = 0; i < j->frame_count; i++)
+  for(i = 0; i < (int)j->frame_count; i++)
     if(j->frames[i].is_included && j->frames[i].group > ng) ng = j->frames[i].group;
   memset(ref, 0, sizeof ref);
   for(g = 1; g <= ng; g++) {
@@ -3803,7 +3913,7 @@ static int scan_share(ft_job* j, const char* path, const char* jobbase,
       ntodo++;
     }
   }
-  for(i = 0; i < j->frame_count; i++) /* an offset a stopped run kept */
+  for(i = 0; i < (int)j->frame_count; i++) /* an offset a stopped run kept */
     if(j->frames[i].is_included && j->frames[i].focus_offset_steps) centre = j->frames[i].focus_offset_steps;
   printf("%s: share job, %d window(s) to scan\n", path, ntodo);
   pg_begin(FT_PROGRESS_WINDOW, ntodo);
@@ -3869,7 +3979,7 @@ static int scan_share(ft_job* j, const char* path, const char* jobbase,
       }
       centre = off;
       if(how != FT_PROGRESS_NONE)
-        for(i = 0; i < j->frame_count; i++)
+        for(i = 0; i < (int)j->frame_count; i++)
           if(j->frames[i].is_included && j->frames[i].group == g) j->frames[i].focus_offset_steps = off;
       pg_focused(off, how);
       q.focus_offset = off;
@@ -3909,7 +4019,7 @@ static int scan_share(ft_job* j, const char* path, const char* jobbase,
               "warning: cannot append the share keys to %s; "
               "ftdev cut will refuse it\n",
               meta);
-    for(i = 0; i < j->frame_count; i++)
+    for(i = 0; i < (int)j->frame_count; i++)
       if(j->frames[i].is_included && j->frames[i].group == g) j->frames[i].is_done = 1;
     if(save_job(path, j)) return 1;
     if(m) /* the window, its share keys too */
@@ -4001,7 +4111,7 @@ static int cmd_scanjob(int argc, char** argv) {
   if(j.share_pixels > 0) return scan_share(&j, path, jobbase, h);
   /* every window through crop_scan's checks before any scanner action */
   memset(ref, 0, sizeof ref);
-  for(i = 0; i < j.frame_count; i++) {
+  for(i = 0; i < (int)j.frame_count; i++) {
     const ft_job_frame* fr = &j.frames[i];
     struct crop_req q;
     long ccd, optic;
@@ -4022,12 +4132,12 @@ static int cmd_scanjob(int argc, char** argv) {
   }
   pg_begin(FT_PROGRESS_FRAME, ntodo);
   printf("%s: %d frame(s) to scan%s", path, ntodo, nref ? ", refused:" : "\n");
-  for(i = 0; nref && i < j.frame_count; i++)
+  for(i = 0; nref && i < (int)j.frame_count; i++)
     if(ref[i]) printf(" %d", j.frames[i].index);
   if(nref) printf("\n");
 
   g_lamp = 255; /* the lamp level persists: set it */
-  for(i = 0; i < j.frame_count && !g_abort; i++) {
+  for(i = 0; i < (int)j.frame_count && !g_abort; i++) {
     ft_job_frame* fr = &j.frames[i];
     struct crop_req q;
     char out[300];
@@ -4105,7 +4215,7 @@ static int cmd_scanjob(int argc, char** argv) {
     if(save_job(path, &j)) return 1;
     pg_file(out);
   }
-  for(i = left = 0; i < j.frame_count; i++)
+  for(i = left = 0; i < (int)j.frame_count; i++)
     left += j.frames[i].is_included && !j.frames[i].is_done && !ref[i];
   if(g_abort && left) {
     save_job(path, &j);
@@ -4114,7 +4224,7 @@ static int cmd_scanjob(int argc, char** argv) {
   }
   if(nref) {
     printf("\n%d frame(s) scanned; REFUSED:", nscan);
-    for(i = 0; i < j.frame_count; i++)
+    for(i = 0; i < (int)j.frame_count; i++)
       if(ref[i]) printf(" %d", j.frames[i].index);
     printf(" (fix them in %s and run again)\n", path);
     return 1;
@@ -4425,7 +4535,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "ftpoc: --device needs a path\n");
         return 2;
       }
-      io_set_device(argv[++i]);
+      scanner_set_path(argv[++i]);
     } else
       argv[k++] = argv[i];
   argc = k;
@@ -4519,6 +4629,11 @@ int main(int argc, char** argv) {
       "                     one whitelisted microcode maintenance write or\n"
       "                     memory read, idle only; everything else is\n"
       "                     refused (README: Maintenance writes)\n"
+      "  live poke <hexoff> <hexbytes> [settle_ms]   (1..4 bytes)\n"
+      "                     live-mode write to 4000:<hexoff> + read back\n"
+      "                     (test H10); only 7557+1/2, 8ed4/8edc/8ee4/\n"
+      "                     8eee+4; scan state 36 or 8 only; settle\n"
+      "                     default 10 ms\n"
       "  upload [file]      MICROCOD.3XX upload (loader mode only!); file:\n"
       "                     as --microcode\n"
       "  --progress         (frames, scan) machine-readable progress lines\n"
@@ -4531,7 +4646,7 @@ int main(int argc, char** argv) {
       "  --microcode PATH   the MICROCOD.3XX to upload (default: beside\n"
       "                     ftpoc.exe, then the current directory)\n"
       "  --device PATH      probe only this device (Linux: e.g. /dev/sg1;\n"
-      "                     default: every " IO_DEV_NAME
+      "                     default: every " SCANNER_DEVICE_NAME
       " whose vendor is\n"
       "                     Imacon)\n"
       "\n"
@@ -4554,14 +4669,14 @@ int main(int argc, char** argv) {
   }
   cmd = argv[1];
 
-  io_init();
+  os_layer_init();
 
   if(strcmp(cmd, "inquiry") == 0 || strcmp(cmd, "devices") == 0) {
-    g_dev = open_scanner();
+    g_scanner = open_scanner();
     rc = cmd_inquiry();
   } else {
     /* every other command needs a live device */
-    g_dev = open_scanner();
+    g_scanner = open_scanner();
     /* commands that scan or move: Ctrl+C stops at the next safe point
      * (end handshake sent, no new scan or move) instead of killing
      * the process mid-scan */
@@ -4571,8 +4686,9 @@ int main(int argc, char** argv) {
        strcmp(cmd, "calibrate-focus") == 0 ||
        strcmp(cmd, "park") == 0 ||
        strcmp(cmd, "goto") == 0 ||
-       strcmp(cmd, "move") == 0)
-      io_catch_interrupt(&g_abort);
+       strcmp(cmd, "move") == 0 ||
+       strcmp(cmd, "live") == 0)
+      catch_ctrl_c(&g_abort);
 
     if(0) {
     } else if(strcmp(cmd, "upload") != 0 &&
@@ -4593,7 +4709,7 @@ int main(int argc, char** argv) {
     } else if(strcmp(cmd, "goto") == 0 && argc > 2) {
       rc = cmd_goto(atol(argv[2]));
     } else if(strcmp(cmd, "busreset") == 0) {
-      rc = io_busreset();
+      rc = scsi_bus_reset();
     } else if(strcmp(cmd, "scanstop") == 0) {
       rc = cmd_scanstop();
     } else if(strcmp(cmd, "stop") == 0) {
@@ -4613,6 +4729,8 @@ int main(int argc, char** argv) {
       rc = scan_args(argc - 2, argv + 2);
     } else if(strcmp(cmd, "maint") == 0) {
       rc = cmd_maint(argc - 2, argv + 2);
+    } else if(strcmp(cmd, "live") == 0) {
+      rc = cmd_live(argc - 2, argv + 2);
     } else if(strcmp(cmd, "upload") == 0) {
       rc = cmd_upload(argc > 2 ? argv[2] : g_microcode);
     } else {
@@ -4629,6 +4747,6 @@ int main(int argc, char** argv) {
            : g_abort      ? FT_PROGRESS_STOPPED
            : g_pg_refused ? FT_PROGRESS_REFUSED
                           : FT_PROGRESS_FAILED);
-  if(g_dev != IO_NONE) io_close(g_dev);
+  if(g_scanner != NO_SCANNER) scanner_close(g_scanner);
   return rc;
 }

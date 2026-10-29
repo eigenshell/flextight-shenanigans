@@ -78,3 +78,8 @@ tools/ftweb/*.wasm
 tools/ftweb/wasm/
 tools/ftwebd/www/ftweb.wasm
 tools/detail/test_ring
+
+# sancho build output
+sancho/*.o
+sancho/libsancho.a
+ftio/test/test_sgio
