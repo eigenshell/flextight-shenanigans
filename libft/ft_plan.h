@@ -4,7 +4,7 @@
  * Any bin dividing 12 whose optical scale ppi x bin is in focus range
  * (FT_SCALE_MIN..FT_SCALE_MAX) gives the same output ppi. A larger bin
  * is faster: the stock firmware costs ~FT_OUT_PX_RATE output px/s for the
- * full line (FT_CCD_PIXELS / bin px) whatever the window. A smaller bin is
+ * full line (FT_CCD_PIXEL_COUNT / bin px) whatever the window. A smaller bin is
  * a lower magnification m and puts ~(1+m)^-2 more light on every sample
  * (and keeps more of the CCD's pixels: the firmware keeps one per bin).
  * Measured 2026-10-13: line rate x 7992/bin = 84k px/s at bin 12, 2, 1;

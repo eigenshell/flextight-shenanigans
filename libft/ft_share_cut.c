@@ -213,9 +213,12 @@ int ft_share_cut(const unsigned short* raw, int lines,
   ax.y_mm0 = (m->y + k + (f - 1) / 2.0) * 25.4 / m->ppi;
   {
     double half = (f * m->bin - 1) / 2.0;
-    ax.x_mm0 = ft_ccd_to_mm(ft_out_to_ccd(m->x, 0, m->bin) + half, scale);
+    ax.x_mm0 = ft_get_mm_from_ccd_pixel(
+      ft_get_ccd_pixel_from_output(m->x, 0, m->bin) + half, scale);
     ax.x_mm_per_px =
-      ft_ccd_to_mm(ft_out_to_ccd(m->x, f, m->bin) + half, scale) - ax.x_mm0;
+      ft_get_mm_from_ccd_pixel(
+        ft_get_ccd_pixel_from_output(m->x, f, m->bin) + half, scale) -
+      ax.x_mm0;
   }
   r->detect_ok = 0;
   if(nl / f >= 8 &&
@@ -273,14 +276,22 @@ int ft_share_cut(const unsigned short* raw, int lines,
      * same mapping as ftpoc's write_crop */
     fa = round_l(y0[i] / 25.4 * m->ppi) - m->y - k;
     fb = round_l(y1[i] / 25.4 * m->ppi) - m->y - k;
-    ga = round_l((ft_mm_to_ccd(x0[i], scale) - FT_CCD_FIRST) / m->bin) - m->x;
-    gb = round_l((ft_mm_to_ccd(x1[i], scale) - FT_CCD_FIRST) / m->bin) - m->x;
+    ga = round_l((ft_get_ccd_pixel_from_mm(x0[i], scale) - FT_CCD_FIRST_PIXEL) /
+                 m->bin) -
+         m->x;
+    gb = round_l((ft_get_ccd_pixel_from_mm(x1[i], scale) - FT_CCD_FIRST_PIXEL) /
+                 m->bin) -
+         m->x;
     ra = round_l((y0[i] - bl) / 25.4 * m->ppi) - m->y - k;
     rb = round_l((y1[i] + bl) / 25.4 * m->ppi) - m->y - k;
-    ca =
-      round_l((ft_mm_to_ccd(x0[i] - bl, scale) - FT_CCD_FIRST) / m->bin) - m->x;
-    cb =
-      round_l((ft_mm_to_ccd(x1[i] + bl, scale) - FT_CCD_FIRST) / m->bin) - m->x;
+    ca = round_l(
+           (ft_get_ccd_pixel_from_mm(x0[i] - bl, scale) - FT_CCD_FIRST_PIXEL) /
+           m->bin) -
+         m->x;
+    cb = round_l(
+           (ft_get_ccd_pixel_from_mm(x1[i] + bl, scale) - FT_CCD_FIRST_PIXEL) /
+           m->bin) -
+         m->x;
     if(ra < 0) ra = 0;
     if(ca < 0) ca = 0;
     if(rb > nl) rb = nl;

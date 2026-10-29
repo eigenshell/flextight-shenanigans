@@ -35,7 +35,7 @@ double ft_dmax_est(double light) {
 }
 
 double ft_line_seconds(double lines, int bin) {
-  return lines * (FT_CCD_PIXELS / (double)bin) / FT_OUT_PX_RATE;
+  return lines * (FT_CCD_PIXEL_COUNT / (double)bin) / FT_OUT_PX_RATE;
 }
 
 double ft_scan_seconds(double ppi, int bin, double len_mm) {

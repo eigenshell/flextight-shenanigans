@@ -128,15 +128,18 @@ void ft_dscan_for(double ppi, int bin, double x0, double w, double y0,
   double scale = ppi * bin;
   s->ppi = ppi;
   s->bin = bin;
-  s->x_out = (long)((ft_mm_to_ccd(x0, scale) - FT_CCD_FIRST) / bin + 0.5);
+  s->x_out =
+    (long)((ft_get_ccd_pixel_from_mm(x0, scale) - FT_CCD_FIRST_PIXEL) / bin +
+           0.5);
   s->y_line = (long)(y0 / 25.4 * ppi + 0.5);
   s->px = (long)(w / 25.4 * ppi + 0.5);
   s->lines = (long)(len / 25.4 * ppi + 0.5);
 }
 
 void ft_dscan_reach(double ppi, int bin, double* lo, double* hi) {
-  *lo = ft_ccd_to_mm(FT_CCD_FIRST, ppi * bin);
-  *hi = ft_ccd_to_mm(FT_CCD_FIRST + FT_CCD_PIXELS, ppi * bin);
+  *lo = ft_get_mm_from_ccd_pixel(FT_CCD_FIRST_PIXEL, ppi * bin);
+  *hi = ft_get_mm_from_ccd_pixel(FT_CCD_FIRST_PIXEL + FT_CCD_PIXEL_COUNT,
+                                 ppi * bin);
 }
 
 static long round_l(double v) { return (long)floor(v + 0.5); }
@@ -147,7 +150,8 @@ long ft_dscan_line(const ft_dscan* s, double y_mm) {
 }
 
 long ft_dscan_px(const ft_dscan* s, double x_mm) {
-  return round_l((ft_mm_to_ccd(x_mm, s->ppi * s->bin) - FT_CCD_FIRST) /
+  return round_l((ft_get_ccd_pixel_from_mm(x_mm, s->ppi * s->bin) -
+                  FT_CCD_FIRST_PIXEL) /
                  s->bin) -
          s->x_out;
 }
@@ -179,7 +183,10 @@ void ft_dscan_axes(const ft_dscan* s, int f, ft_axes* ax) {
   double half = (f * s->bin - 1) / 2.0; /* centre of a box, CCD px */
   ax->y_mm_per_line = 25.4 / s->ppi * f;
   ax->y_mm0 = (s->y_line + 12 / s->bin + (f - 1) / 2.0) * 25.4 / s->ppi;
-  ax->x_mm0 = ft_ccd_to_mm(ft_out_to_ccd(s->x_out, 0, s->bin) + half, scale);
+  ax->x_mm0 = ft_get_mm_from_ccd_pixel(
+    ft_get_ccd_pixel_from_output(s->x_out, 0, s->bin) + half, scale);
   ax->x_mm_per_px =
-    ft_ccd_to_mm(ft_out_to_ccd(s->x_out, f, s->bin) + half, scale) - ax->x_mm0;
+    ft_get_mm_from_ccd_pixel(
+      ft_get_ccd_pixel_from_output(s->x_out, f, s->bin) + half, scale) -
+    ax->x_mm0;
 }

@@ -164,7 +164,7 @@ int ft_faul_fix(float* t, int lines, int px, int pix[3][FT_FAUL_MAX],
   for(ch = 0; ch < 3; ch++) {
     memset(bad, 0, px);
     for(i = 0; i < count[ch]; i++) {
-      long d = pix[ch][i] - (long)FT_CCD_FIRST;
+      long d = pix[ch][i] - (long)FT_CCD_FIRST_PIXEL;
       long q = (d >= 0 ? d / bin : -((-d + bin - 1) / bin)) - x;
       if(q >= 0 && q < px) bad[q] = 1;
     }

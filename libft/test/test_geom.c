@@ -9,18 +9,23 @@ int main(void) {
   const ft_holder* h;
 
   /* at the 6000 scale, mm map straight onto CCD pixels from 144 */
-  CHECK_NEAR(ft_mm_to_ccd(10.0, 6000), 10.0 / 25.4 * 6000 + 144, 1e-9);
-  /* the optical axis is the fixed point of every scale */
-  CHECK_NEAR(ft_mm_to_ccd(ft_ccd_to_mm(FT_CCD_AXIS, 6000), 3800), FT_CCD_AXIS,
+  CHECK_NEAR(ft_get_ccd_pixel_from_mm(10.0, 6000), 10.0 / 25.4 * 6000 + 144,
              1e-9);
-  CHECK_NEAR(ft_ccd_to_mm(ft_mm_to_ccd(13.0, 4800), 4800), 13.0, 1e-9);
+  /* the optical axis is the fixed point of every scale */
+  CHECK_NEAR(ft_get_ccd_pixel_from_mm(
+               ft_get_mm_from_ccd_pixel(FT_CCD_AXIS_PIXEL, 6000), 3800),
+             FT_CCD_AXIS_PIXEL, 1e-9);
+  CHECK_NEAR(
+    ft_get_mm_from_ccd_pixel(ft_get_ccd_pixel_from_mm(13.0, 4800), 4800), 13.0,
+    1e-9);
   /* the hardware run: 2400 ppi (bin 2) crop at 13 mm started at x=1626 */
-  CHECK_NEAR((ft_mm_to_ccd(13.0, 4800) - FT_CCD_FIRST) / 2, 1626, 0.6);
-  CHECK_NEAR(ft_out_to_ccd(98, 0, 6), 732, 1e-9);
-  CHECK_NEAR(ft_out_to_ccd(2, 3, 12), 204, 1e-9);
-  CHECK_NEAR(ft_out_to_ccd(5, 0, 1), 149, 1e-9);
-  CHECK_NEAR(ft_ccd_to_mm(144, 6000), 0, 1e-9);
-  CHECK_NEAR(ft_ccd_to_mm(4118, 6000), 16.8233, 1e-4);
+  CHECK_NEAR((ft_get_ccd_pixel_from_mm(13.0, 4800) - FT_CCD_FIRST_PIXEL) / 2,
+             1626, 0.6);
+  CHECK_NEAR(ft_get_ccd_pixel_from_output(98, 0, 6), 732, 1e-9);
+  CHECK_NEAR(ft_get_ccd_pixel_from_output(2, 3, 12), 204, 1e-9);
+  CHECK_NEAR(ft_get_ccd_pixel_from_output(5, 0, 1), 149, 1e-9);
+  CHECK_NEAR(ft_get_mm_from_ccd_pixel(144, 6000), 0, 1e-9);
+  CHECK_NEAR(ft_get_mm_from_ccd_pixel(4118, 6000), 16.8233, 1e-4);
 
   /* below 3150: the measured correction for the curve's optics. Edges at
    * the strip start as CCD pixels at scale 2000 and 1500, each scanned
@@ -33,19 +38,23 @@ int main(void) {
     const double nm[5] = {28.637, 1.248, 2.481, 27.431, 28.663};
     int i;
     for(i = 0; i < 5; i++) {
-      CHECK_NEAR(ft_ccd_to_mm(hc[i], 2000), hm[i], 0.01);
-      CHECK_NEAR(ft_ccd_to_mm(nc[i], 1500), nm[i], 0.01);
-      CHECK_NEAR(ft_mm_to_ccd(ft_ccd_to_mm(hc[i], 2000), 2000), hc[i], 1e-6);
+      CHECK_NEAR(ft_get_mm_from_ccd_pixel(hc[i], 2000), hm[i], 0.01);
+      CHECK_NEAR(ft_get_mm_from_ccd_pixel(nc[i], 1500), nm[i], 0.01);
+      CHECK_NEAR(
+        ft_get_ccd_pixel_from_mm(ft_get_mm_from_ccd_pixel(hc[i], 2000), 2000),
+        hc[i], 1e-6);
     }
   }
   /* unchanged at 3150 and above (the 2026-10-12 model) */
-  CHECK_NEAR(ft_mm_to_ccd(5.0, 3150),
+  CHECK_NEAR(ft_get_ccd_pixel_from_mm(5.0, 3150),
              4118 + (5.0 / 25.4 * 6000 + 144 - 4118) * 3150 / 6000, 1e-9);
-  CHECK_NEAR(ft_ccd_to_mm(2000, 6300),
+  CHECK_NEAR(ft_get_mm_from_ccd_pixel(2000, 6300),
              ((2000 - 4118) * 6000 / 6300.0 + 4118 - 144) * 25.4 / 6000, 1e-9);
   /* continuous across the blend (no jump at 2000 / 3150) */
-  CHECK_NEAR(ft_ccd_to_mm(3000, 3149.999), ft_ccd_to_mm(3000, 3150), 1e-4);
-  CHECK_NEAR(ft_ccd_to_mm(3000, 1999.999), ft_ccd_to_mm(3000, 2000.001), 1e-4);
+  CHECK_NEAR(ft_get_mm_from_ccd_pixel(3000, 3149.999),
+             ft_get_mm_from_ccd_pixel(3000, 3150), 1e-4);
+  CHECK_NEAR(ft_get_mm_from_ccd_pixel(3000, 1999.999),
+             ft_get_mm_from_ccd_pixel(3000, 2000.001), 1e-4);
 
   h = ft_find_holder("24x217");
   CHECK(h != NULL);

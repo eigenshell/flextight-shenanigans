@@ -2149,9 +2149,9 @@ static int crop_check(const struct crop_req* r, long* ccd_out,
   if(!pos_ok(ccd, optic)) return CROP_REFUSED;
   /* mm across are measured at the 6000 scale; other scales magnify
    * about the optical axis */
-  cx = ft_mm_to_ccd(r->x, scale);
-  if(!(cx >= FT_CCD_FIRST &&
-       cx + r->w / 25.4 * scale <= FT_CCD_FIRST + FT_CCD_PIXELS)) {
+  cx = ft_get_ccd_pixel_from_mm(r->x, scale);
+  if(!(cx >= FT_CCD_FIRST_PIXEL &&
+       cx + r->w / 25.4 * scale <= FT_CCD_FIRST_PIXEL + FT_CCD_PIXEL_COUNT)) {
     fprintf(stderr, "crop: window runs off the CCD at this scale\n");
     return CROP_REFUSED;
   }
@@ -2204,10 +2204,10 @@ static int crop_scan(const struct crop_req* r) {
   if(crop_check(r, &ccd, &optic)) return CROP_REFUSED;
   bin = crop_bin(r); /* crop_check: valid */
   scale = r->ppi * bin;
-  cx = ft_mm_to_ccd(r->x, scale);
+  cx = ft_get_ccd_pixel_from_mm(r->x, scale);
   return synth_scan(
     "crop", "synthesized crop", r->ppi, bin,
-    (long)((cx - FT_CCD_FIRST) / bin + 0.5), (long)(r->y / 25.4 * r->ppi + 0.5),
+    (long)((cx - FT_CCD_FIRST_PIXEL) / bin + 0.5), (long)(r->y / 25.4 * r->ppi + 0.5),
     (long)(r->w / 25.4 * r->ppi + 0.5), (long)(r->h / 25.4 * r->ppi + 0.5), ccd,
     optic, r->keep, r->hold, r->out);
 }
@@ -2249,9 +2249,9 @@ static int preview_scan(const ft_preview* m, long keep, DWORD hold,
   }
   if(!pos_ok(ccd, optic)) return CROP_REFUSED;
   ft_preview_window(&x0, &w, &len);
-  x_out = (long)((ft_mm_to_ccd(x0, scale) - FT_CCD_FIRST) / m->bin + 0.5);
+  x_out = (long)((ft_get_ccd_pixel_from_mm(x0, scale) - FT_CCD_FIRST_PIXEL) / m->bin + 0.5);
   px = (long)(w / 25.4 * m->ppi + 0.5);
-  if(x_out < 0 || (x_out + px) * m->bin > FT_CCD_PIXELS || px * 6 > 60000) {
+  if(x_out < 0 || (x_out + px) * m->bin > FT_CCD_PIXEL_COUNT || px * 6 > 60000) {
     fprintf(stderr, "preview %s: window runs off the CCD\n", m->name);
     return CROP_REFUSED;
   }
@@ -2647,8 +2647,8 @@ static int crop_reach(double ppi, double* lo, double* hi) {
   double scale;
   if(!(ppi >= 525 && ppi <= 6300) || (bin = ft_bin_for_ppi(ppi)) < 1) return -1;
   scale = ppi * bin;
-  *lo = ft_ccd_to_mm(FT_CCD_FIRST, scale);
-  *hi = ft_ccd_to_mm(FT_CCD_FIRST + FT_CCD_PIXELS, scale);
+  *lo = ft_get_mm_from_ccd_pixel(FT_CCD_FIRST_PIXEL, scale);
+  *hi = ft_get_mm_from_ccd_pixel(FT_CCD_FIRST_PIXEL + FT_CCD_PIXEL_COUNT, scale);
   if(!(*lo > 0)) *lo = 0;
   if(!(*hi < CROP_X_MAX)) *hi = CROP_X_MAX;
   return 0;
@@ -3251,8 +3251,8 @@ static void write_crop(const char* out, const ft_job* j, const ft_job_frame* fr,
             meta);
     return;
   }
-  /* output pixel j covers CCD pixels (x + j) * bin + FT_CCD_FIRST ... */
-  cx = round_l((ft_mm_to_ccd(fr->x0, fr->ppi * bin) - FT_CCD_FIRST) / bin) - xs;
+  /* output pixel j covers CCD pixels (x + j) * bin + FT_CCD_FIRST_PIXEL ... */
+  cx = round_l((ft_get_ccd_pixel_from_mm(fr->x0, fr->ppi * bin) - FT_CCD_FIRST_PIXEL) / bin) - xs;
   cy = round_l(fr->y0 * px_mm) - ys - k;
   cw = round_l(fr->width * px_mm);
   ch = round_l(fr->len * px_mm);
@@ -3692,8 +3692,8 @@ static int share_request(const ft_job* j, const ft_holder* h, int g,
   ft_share_opts_default(&o, h->scan_length_mm);
   if(!fr || ft_share_group_window(j, g, &o, &y0, &len)) return -1;
   scale = fr->ppi * ft_job_bin(fr);
-  lo = ft_ccd_to_mm(FT_CCD_FIRST, scale);
-  hi = ft_ccd_to_mm(FT_CCD_FIRST + FT_CCD_PIXELS, scale);
+  lo = ft_get_mm_from_ccd_pixel(FT_CCD_FIRST_PIXEL, scale);
+  hi = ft_get_mm_from_ccd_pixel(FT_CCD_FIRST_PIXEL + FT_CCD_PIXEL_COUNT, scale);
   if(!(lo > 0)) lo = 0;
   if(!(hi < CROP_X_MAX)) hi = CROP_X_MAX;
   if(hi > h->scan_width_mm) hi = h->scan_width_mm;

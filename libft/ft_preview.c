@@ -22,9 +22,10 @@ const ft_preview* ft_preview_find(const char* name) {
 }
 
 void ft_preview_window(double* x0, double* w, double* len) {
-  double a = ft_ccd_to_mm(ft_out_to_ccd(FT_PREVIEW_X_OUT, 0, 12), 6300);
-  double b =
-    ft_ccd_to_mm(ft_out_to_ccd(FT_PREVIEW_X_OUT, FT_PREVIEW_PX, 12), 6300);
+  double a = ft_get_mm_from_ccd_pixel(
+    ft_get_ccd_pixel_from_output(FT_PREVIEW_X_OUT, 0, 12), 6300);
+  double b = ft_get_mm_from_ccd_pixel(
+    ft_get_ccd_pixel_from_output(FT_PREVIEW_X_OUT, FT_PREVIEW_PX, 12), 6300);
   *x0 = a;
   *w = b - a;
   *len = FT_PREVIEW_LINES_525 * 25.4 / 525;
@@ -44,9 +45,12 @@ void ft_preview_axes(const ft_preview* m, long x_out, ft_axes* ax) {
   double half = (f * m->bin - 1) / 2.0;
   ax->y_mm_per_line = 25.4 / m->ppi * f;
   ax->y_mm0 = (ft_preview_rgb_k(m) / f) * ax->y_mm_per_line;
-  ax->x_mm0 = ft_ccd_to_mm(ft_out_to_ccd(x_out, 0, m->bin) + half, scale);
+  ax->x_mm0 = ft_get_mm_from_ccd_pixel(
+    ft_get_ccd_pixel_from_output(x_out, 0, m->bin) + half, scale);
   ax->x_mm_per_px =
-    ft_ccd_to_mm(ft_out_to_ccd(x_out, f, m->bin) + half, scale) - ax->x_mm0;
+    ft_get_mm_from_ccd_pixel(
+      ft_get_ccd_pixel_from_output(x_out, f, m->bin) + half, scale) -
+    ax->x_mm0;
 }
 
 static void put_be32(unsigned char* d, int off, long v) {

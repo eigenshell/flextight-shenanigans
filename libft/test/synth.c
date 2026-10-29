@@ -227,10 +227,13 @@ void synth_window(const synth_win* w, synth_win_scan* s) {
 
   memset(s, 0, sizeof *s);
   s->y = (long)floor(w->y0_mm / 25.4 * w->ppi + 0.5);
-  s->x =
-    (long)floor((ft_mm_to_ccd(w->x0_mm, scale) - FT_CCD_FIRST) / w->bin + 0.5);
-  xm0 = ft_ccd_to_mm(ft_out_to_ccd(s->x, 0, w->bin) + half, scale);
-  xm1 = ft_ccd_to_mm(ft_out_to_ccd(s->x, 1, w->bin) + half, scale);
+  s->x = (long)floor(
+    (ft_get_ccd_pixel_from_mm(w->x0_mm, scale) - FT_CCD_FIRST_PIXEL) / w->bin +
+    0.5);
+  xm0 = ft_get_mm_from_ccd_pixel(
+    ft_get_ccd_pixel_from_output(s->x, 0, w->bin) + half, scale);
+  xm1 = ft_get_mm_from_ccd_pixel(
+    ft_get_ccd_pixel_from_output(s->x, 1, w->bin) + half, scale);
   s->px = (int)(w->w_mm / (xm1 - xm0));
   s->lines = (int)floor(w->len_mm / 25.4 * w->ppi + 0.5);
   tl = s->lines - 2 * k;

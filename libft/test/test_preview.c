@@ -56,24 +56,30 @@ int main(void) {
   ft_preview_axes(s, 2, &ax);
   CHECK_NEAR(ax.y_mm_per_line, 25.4 / 525, 1e-12);
   CHECK_NEAR(ax.y_mm0, 25.4 / 525, 1e-12);
-  CHECK_NEAR(ax.x_mm0, ft_ccd_to_mm(ft_out_to_ccd(2, 0, 12) + 5.5, 6300),
+  CHECK_NEAR(ax.x_mm0,
+             ft_get_mm_from_ccd_pixel(
+               ft_get_ccd_pixel_from_output(2, 0, 12) + 5.5, 6300),
              1e-12);
   CHECK_NEAR(ax.x_mm_per_px,
-             ft_ccd_to_mm(ft_out_to_ccd(2, 1, 12) + 5.5, 6300) - ax.x_mm0,
+             ft_get_mm_from_ccd_pixel(
+               ft_get_ccd_pixel_from_output(2, 1, 12) + 5.5, 6300) -
+               ax.x_mm0,
              1e-12);
 
   /* 1500: 3x3 boxes of 1500 ppi pixels = 500 ppi; the window's 0.898 mm
    * lands at output pixel 53 (CCD pixel 356 at scale 6000) */
-  CHECK(lround((ft_mm_to_ccd(x0, 6000) - FT_CCD_FIRST) / n->bin) == 53);
-  CHECK((53 + 1903) * n->bin <= FT_CCD_PIXELS);
+  CHECK(lround((ft_get_ccd_pixel_from_mm(x0, 6000) - FT_CCD_FIRST_PIXEL) /
+               n->bin) == 53);
+  CHECK((53 + 1903) * n->bin <= FT_CCD_PIXEL_COUNT);
   ft_preview_axes(n, 53, &ax);
   CHECK_NEAR(ax.y_mm_per_line, 25.4 / 500, 1e-12);
   CHECK_NEAR(ax.y_mm0, 25.4 / 500, 1e-12);
   CHECK_NEAR(ax.x_mm_per_px, 25.4 / 500, 1e-9);
   CHECK_NEAR(ax.x_mm0, x0 + 5.5 / 6000 * 25.4, 0.01); /* centre of 12 */
   /* 1000: 2x2 boxes of 1000 ppi pixels = 500 ppi */
-  CHECK(lround((ft_mm_to_ccd(x0, 6000) - FT_CCD_FIRST) / h->bin) == 35);
-  CHECK((35 + 1269) * h->bin <= FT_CCD_PIXELS);
+  CHECK(lround((ft_get_ccd_pixel_from_mm(x0, 6000) - FT_CCD_FIRST_PIXEL) /
+               h->bin) == 35);
+  CHECK((35 + 1269) * h->bin <= FT_CCD_PIXEL_COUNT);
   ft_preview_axes(h, 35, &ax);
   CHECK_NEAR(ax.y_mm_per_line, 25.4 / 500, 1e-12);
   CHECK_NEAR(ax.y_mm0, 25.4 / 500, 1e-12);

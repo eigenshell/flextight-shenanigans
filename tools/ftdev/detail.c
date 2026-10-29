@@ -470,7 +470,7 @@ int ftdev_bench(int argc, char** argv) {
   }
   /* the scanner: FT_OUT_PX_RATE output px/s over the full CCD line,
    * bin 1: lines per second */
-  rate = FT_OUT_PX_RATE / FT_CCD_PIXELS;
+  rate = FT_OUT_PX_RATE / FT_CCD_PIXEL_COUNT;
   if(pace) pace = 1000.0 / rate;
   printf("bench: %g ppi, %ld px x %ld lines (%.1f Mpx), %s%s, ring %d MB%s\n",
          ppi, o.scan.px, o.scan.lines, o.scan.px * o.scan.lines / 1e6,
