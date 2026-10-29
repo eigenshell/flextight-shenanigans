@@ -8,15 +8,15 @@ static ft_print_file pf, pf2;
 static char buf[8192], buf2[8192];
 
 static int parse(const char* t, ft_err* e) {
-  return ft_print_file_parse(t, strlen(t), &pf, e);
+  return ft_parse_print_file(t, strlen(t), &pf, e);
 }
 
 static void fails(const char* t, const char* msg) {
   ft_err e;
   CHECK(parse(t, &e) == -1);
-  if(strcmp(e.msg, msg) != 0)
-    fprintf(stderr, "got: %s\nwant: %s\n", e.msg, msg);
-  CHECK(strcmp(e.msg, msg) == 0);
+  if(strcmp(e.message, msg) != 0)
+    fprintf(stderr, "got: %s\nwant: %s\n", e.message, msg);
+  CHECK(strcmp(e.message, msg) == 0);
 }
 
 int main(void) {
@@ -43,47 +43,49 @@ int main(void) {
   /* parse, sorted, canonical text; byte-stable after that */
   CHECK(parse(TEXT, &e) == 0);
   CHECK(strcmp(pf.emulsion, "generic-neg") == 0);
-  CHECK(pf.nframes == 2 && pf.f[0].index == 3 && pf.f[1].index == 7);
-  k = ft_print_file_clicks(&pf, 7);
-  CHECK(k.c == -1 && k.m == 0 && k.y == 0 && k.d == 3);
-  k = ft_print_file_clicks(&pf, 5);
-  CHECK(k.c == 0 && k.m == 0 && k.y == 0 && k.d == 0);
-  n = ft_print_file_write(&pf, buf, sizeof buf);
+  CHECK(
+    pf.frame_count == 2 && pf.frames[0].index == 3 && pf.frames[1].index == 7);
+  k = ft_get_print_clicks(&pf, 7);
+  CHECK(k.cyan == -1 && k.magenta == 0 && k.yellow == 0 && k.density == 3);
+  k = ft_get_print_clicks(&pf, 5);
+  CHECK(k.cyan == 0 && k.magenta == 0 && k.yellow == 0 && k.density == 0);
+  n = ft_format_print_file(&pf, buf, sizeof buf);
   CHECK(n == strlen(CANON) && strcmp(buf, CANON) == 0);
-  CHECK(ft_print_file_parse(buf, n, &pf2, &e) == 0);
-  CHECK(ft_print_file_write(&pf2, buf2, sizeof buf2) == n);
+  CHECK(ft_parse_print_file(buf, n, &pf2, &e) == 0);
+  CHECK(ft_format_print_file(&pf2, buf2, sizeof buf2) == n);
   CHECK(strcmp(buf, buf2) == 0);
   /* truncation: the length still comes back, the text is cut */
-  CHECK(ft_print_file_write(&pf, buf, 10) == n);
+  CHECK(ft_format_print_file(&pf, buf, 10) == n);
   CHECK(strlen(buf) == 9);
   /* no frames */
   CHECK(parse("emulsion = generic-bw\n", &e) == 0);
-  CHECK(ft_print_file_write(&pf, buf, sizeof buf) == 22);
+  CHECK(ft_format_print_file(&pf, buf, sizeof buf) == 22);
   CHECK(strcmp(buf, "emulsion = generic-bw\n") == 0);
 
   /* edits */
-  ft_print_file_init(&pf, "generic-neg");
-  CHECK(pf.nframes == 0);
-  CHECK(ft_print_file_set(&pf, 9, (ft_cmyd){0, 0, 1, 0}, &e) == 0);
-  CHECK(ft_print_file_set(&pf, 2, (ft_cmyd){1, 0, 0, -2}, &e) == 0);
-  CHECK(pf.nframes == 2 && pf.f[0].index == 2 && pf.f[1].index == 9);
-  CHECK(ft_print_file_set(&pf, 2, (ft_cmyd){0, 0, 0, 5}, &e) == 0);
-  CHECK(ft_print_file_clicks(&pf, 2).d == 5 &&
-        ft_print_file_clicks(&pf, 2).c == 0);
-  CHECK(ft_print_file_set(&pf, 9, (ft_cmyd){0, 0, 0, 0}, &e) == 0);
-  CHECK(pf.nframes == 1 && pf.f[0].index == 2); /* auto: no section */
-  CHECK(ft_print_file_set(&pf, 4, (ft_cmyd){0, 0, 0, 100}, &e) == -1);
-  CHECK(strcmp(e.msg, "cmyd: D 100 is out of range (-99..99)") == 0);
-  CHECK(ft_print_file_set(&pf, 10000, (ft_cmyd){0, 0, 0, 1}, &e) == -1);
-  CHECK(strcmp(e.msg, "frame 10000 (0..9999)") == 0);
-  ft_print_file_init(&pf, "generic-bw");
-  CHECK(ft_print_file_set(&pf, 1, (ft_cmyd){0, 1, 0, 0}, &e) == -1);
-  CHECK(strcmp(e.msg,
+  ft_init_print_file(&pf, "generic-neg");
+  CHECK(pf.frame_count == 0);
+  CHECK(ft_set_print_clicks(&pf, 9, (ft_cmyd){0, 0, 1, 0}, &e) == 0);
+  CHECK(ft_set_print_clicks(&pf, 2, (ft_cmyd){1, 0, 0, -2}, &e) == 0);
+  CHECK(
+    pf.frame_count == 2 && pf.frames[0].index == 2 && pf.frames[1].index == 9);
+  CHECK(ft_set_print_clicks(&pf, 2, (ft_cmyd){0, 0, 0, 5}, &e) == 0);
+  CHECK(ft_get_print_clicks(&pf, 2).density == 5 &&
+        ft_get_print_clicks(&pf, 2).cyan == 0);
+  CHECK(ft_set_print_clicks(&pf, 9, (ft_cmyd){0, 0, 0, 0}, &e) == 0);
+  CHECK(pf.frame_count == 1 && pf.frames[0].index == 2); /* auto: no section */
+  CHECK(ft_set_print_clicks(&pf, 4, (ft_cmyd){0, 0, 0, 100}, &e) == -1);
+  CHECK(strcmp(e.message, "cmyd: D 100 is out of range (-99..99)") == 0);
+  CHECK(ft_set_print_clicks(&pf, 10000, (ft_cmyd){0, 0, 0, 1}, &e) == -1);
+  CHECK(strcmp(e.message, "frame 10000 (0..9999)") == 0);
+  ft_init_print_file(&pf, "generic-bw");
+  CHECK(ft_set_print_clicks(&pf, 1, (ft_cmyd){0, 1, 0, 0}, &e) == -1);
+  CHECK(strcmp(e.message,
                "cmyd: generic-bw is black and white: C, M and Y "
                "must be 0") == 0);
-  ft_print_file_init(&pf, "nope");
-  CHECK(ft_print_file_set(&pf, 1, (ft_cmyd){0, 0, 0, 1}, &e) == -1);
-  CHECK(strcmp(e.msg, "emulsion: 'nope' is not an emulsion") == 0);
+  ft_init_print_file(&pf, "nope");
+  CHECK(ft_set_print_clicks(&pf, 1, (ft_cmyd){0, 0, 0, 1}, &e) == -1);
+  CHECK(strcmp(e.message, "emulsion: 'nope' is not an emulsion") == 0);
 
   /* [frame N] not in the job: a warning, never an error */
   {
@@ -91,23 +93,23 @@ int main(void) {
     CHECK(parse("emulsion = generic-neg\n[frame 3]\ncmyd = 1 0 0 0\n"
                 "[frame 7]\ncmyd = 0 0 0 1\n[frame 9]\ncmyd = 0 0 0 1\n",
                 &e) == 0);
-    CHECK(ft_print_file_unknown(&pf, JOB, 3, &e) == 2);
-    CHECK(strcmp(e.msg,
+    CHECK(ft_count_unknown_print_frames(&pf, JOB, 3, &e) == 2);
+    CHECK(strcmp(e.message,
                  "[frame 7] and 1 more are not in the job: "
                  "ignored") == 0);
-    CHECK(ft_print_file_set(&pf, 9, (ft_cmyd){0, 0, 0, 0}, &e) == 0);
-    CHECK(ft_print_file_unknown(&pf, JOB, 3, &e) == 1);
-    CHECK(strcmp(e.msg, "[frame 7] is not in the job: ignored") == 0);
-    CHECK(ft_print_file_unknown(&pf, JOB, 2, &e) == 2);
+    CHECK(ft_set_print_clicks(&pf, 9, (ft_cmyd){0, 0, 0, 0}, &e) == 0);
+    CHECK(ft_count_unknown_print_frames(&pf, JOB, 3, &e) == 1);
+    CHECK(strcmp(e.message, "[frame 7] is not in the job: ignored") == 0);
+    CHECK(ft_count_unknown_print_frames(&pf, JOB, 2, &e) == 2);
     /* the section survives a round trip */
-    n = ft_print_file_write(&pf, buf, sizeof buf);
+    n = ft_format_print_file(&pf, buf, sizeof buf);
     CHECK(strstr(buf, "[frame 7]\ncmyd = 0 0 0 1\n") != NULL);
-    strcpy(e.msg, "untouched");
-    CHECK(ft_print_file_unknown(&pf, JOB, 0, &e) == 2);
+    strcpy(e.message, "untouched");
+    CHECK(ft_count_unknown_print_frames(&pf, JOB, 0, &e) == 2);
     CHECK(parse("emulsion = generic-neg\n", &e) == 0);
-    strcpy(e.msg, "untouched");
-    CHECK(ft_print_file_unknown(&pf, JOB, 3, &e) == 0);
-    CHECK(strcmp(e.msg, "untouched") == 0);
+    strcpy(e.message, "untouched");
+    CHECK(ft_count_unknown_print_frames(&pf, JOB, 3, &e) == 0);
+    CHECK(strcmp(e.message, "untouched") == 0);
   }
 
   /* rotate: its own line, no cmyd = 0 0 0 0 beside it; a section
@@ -126,33 +128,33 @@ int main(void) {
                 "cmyd = 1 0 0 0\n[frame 2]\ncmyd = 0 0 0 0\n"
                 "rotate = 90\n",
                 &e) == 0);
-    CHECK(ft_print_file_rotation(&pf, 2) == 90 &&
-          ft_print_file_rotation(&pf, 5) == 270 &&
-          ft_print_file_rotation(&pf, 3) == 0);
-    n = ft_print_file_write(&pf, buf, sizeof buf);
+    CHECK(ft_get_print_rotation(&pf, 2) == 90 &&
+          ft_get_print_rotation(&pf, 5) == 270 &&
+          ft_get_print_rotation(&pf, 3) == 0);
+    n = ft_format_print_file(&pf, buf, sizeof buf);
     CHECK(strcmp(buf, ROT) == 0);
-    CHECK(ft_print_file_parse(buf, n, &pf2, &e) == 0);
-    CHECK(ft_print_file_write(&pf2, buf2, sizeof buf2) == n &&
+    CHECK(ft_parse_print_file(buf, n, &pf2, &e) == 0);
+    CHECK(ft_format_print_file(&pf2, buf2, sizeof buf2) == n &&
           strcmp(buf, buf2) == 0);
     /* clicks back to auto keep a turned frame's section */
-    CHECK(ft_print_file_set(&pf, 5, (ft_cmyd){0, 0, 0, 0}, &e) == 0);
-    CHECK(pf.nframes == 2 && ft_print_file_rotation(&pf, 5) == 270);
+    CHECK(ft_set_print_clicks(&pf, 5, (ft_cmyd){0, 0, 0, 0}, &e) == 0);
+    CHECK(pf.frame_count == 2 && ft_get_print_rotation(&pf, 5) == 270);
     /* and the turn back to 0 drops it */
-    CHECK(ft_print_file_set_rotation(&pf, 5, 0, &e) == 0);
-    CHECK(pf.nframes == 1 && pf.f[0].index == 2);
-    CHECK(ft_print_file_set_rotation(&pf, 8, 0, &e) == 0);
-    CHECK(pf.nframes == 1); /* nothing to say: none */
-    CHECK(ft_print_file_set_rotation(&pf, 8, 180, &e) == 0);
-    CHECK(pf.nframes == 2 &&
-          pf.f[1].index == 8 &&
-          ft_print_file_clicks(&pf, 8).d == 0);
-    CHECK(ft_print_file_set_rotation(&pf, 8, 45, &e) == -1);
-    CHECK(strcmp(e.msg, "rotate: 45 is not 0, 90, 180 or 270") == 0);
-    CHECK(ft_print_file_set_rotation(&pf, -1, 90, &e) == -1);
-    CHECK(strcmp(e.msg, "frame -1 (0..9999)") == 0);
+    CHECK(ft_set_print_rotation(&pf, 5, 0, &e) == 0);
+    CHECK(pf.frame_count == 1 && pf.frames[0].index == 2);
+    CHECK(ft_set_print_rotation(&pf, 8, 0, &e) == 0);
+    CHECK(pf.frame_count == 1); /* nothing to say: none */
+    CHECK(ft_set_print_rotation(&pf, 8, 180, &e) == 0);
+    CHECK(pf.frame_count == 2 &&
+          pf.frames[1].index == 8 &&
+          ft_get_print_clicks(&pf, 8).density == 0);
+    CHECK(ft_set_print_rotation(&pf, 8, 45, &e) == -1);
+    CHECK(strcmp(e.message, "rotate: 45 is not 0, 90, 180 or 270") == 0);
+    CHECK(ft_set_print_rotation(&pf, -1, 90, &e) == -1);
+    CHECK(strcmp(e.message, "frame -1 (0..9999)") == 0);
     /* rotate = 0 is never written */
     CHECK(parse("emulsion = generic-neg\n[frame 1]\nrotate = 0\n", &e) == 0);
-    ft_print_file_write(&pf, buf, sizeof buf);
+    ft_format_print_file(&pf, buf, sizeof buf);
     CHECK(strcmp(buf,
                  "emulsion = generic-neg\n\n[frame 1]\n"
                  "cmyd = 0 0 0 0\n") == 0);
@@ -226,23 +228,23 @@ int main(void) {
       "\n[frame 4]\nname = dog\ncmyd = 1 0 0 0\nrotate = 90\n";
     ft_err e;
     CHECK(parse(NAMED, &e) == 0);
-    CHECK(strcmp(ft_print_file_name(&pf, 2), "beach_01") == 0);
-    CHECK(strcmp(ft_print_file_name(&pf, 3), "") == 0);
-    CHECK(ft_print_file_write(&pf, buf, sizeof buf) == strlen(NAMED));
+    CHECK(strcmp(ft_get_print_name(&pf, 2), "beach_01") == 0);
+    CHECK(strcmp(ft_get_print_name(&pf, 3), "") == 0);
+    CHECK(ft_format_print_file(&pf, buf, sizeof buf) == strlen(NAMED));
     CHECK(strcmp(buf, NAMED) == 0);
-    CHECK(ft_print_file_set_name(&pf, 2, "", &e) == 0);
-    CHECK(pf.nframes == 1); /* frame 2 said nothing */
-    CHECK(ft_print_file_set_name(&pf, 7, "x-7.a", &e) == 0);
-    CHECK(ft_print_file_set_rotation(&pf, 4, 0, &e) == 0);
-    ft_print_file_write(&pf, buf, sizeof buf);
+    CHECK(ft_set_print_name(&pf, 2, "", &e) == 0);
+    CHECK(pf.frame_count == 1); /* frame 2 said nothing */
+    CHECK(ft_set_print_name(&pf, 7, "x-7.a", &e) == 0);
+    CHECK(ft_set_print_rotation(&pf, 4, 0, &e) == 0);
+    ft_format_print_file(&pf, buf, sizeof buf);
     CHECK(strcmp(buf,
                  "emulsion = generic-neg\n\n[frame 4]\nname = dog\n"
                  "cmyd = 1 0 0 0\n\n[frame 7]\nname = x-7.a\n") == 0);
-    CHECK(ft_print_file_set_name(&pf, 7, "a b", &e) == -1);
-    CHECK(strcmp(e.msg,
+    CHECK(ft_set_print_name(&pf, 7, "a b", &e) == -1);
+    CHECK(strcmp(e.message,
                  "name: 'a b' is not 1..64 of A-Z a-z 0-9 . _ - "
                  "(not starting with .)") == 0);
-    CHECK(ft_print_file_set_name(&pf, 7, ".x", &e) == -1);
+    CHECK(ft_set_print_name(&pf, 7, ".x", &e) == -1);
   }
   fails("emulsion = generic-neg\n[frame 2]\nname = a/b\n",
         "line 3: name: 'a/b' is not 1..64 of A-Z a-z 0-9 . _ - (not "

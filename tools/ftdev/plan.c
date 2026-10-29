@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-/* ftdev plan: a size per frame for a share scan (ft_share_plan_sizes), the
+/* ftdev plan: a size per frame for a share scan (ft_plan_share_sizes), the
  * web page's planner from a terminal. Rewrites the job (or writes -o). */
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,8 +25,8 @@ static double size_of(const char* s, size_t n) {
   if(n >= sizeof buf) return 0;
   memcpy(buf, s, n);
   buf[n] = 0;
-  if(strcmp(buf, "4mp") == 0) return FT_SHARE_4MP;
-  if(strcmp(buf, "6mp") == 0) return FT_SHARE_6MP;
+  if(strcmp(buf, "4mp") == 0) return FT_SHARE_4MP_PIXELS;
+  if(strcmp(buf, "6mp") == 0) return FT_SHARE_6MP_PIXELS;
   v = strtod(buf, &end);
   return end != buf && !*end && v > 0 ? v : 0;
 }
@@ -37,7 +37,8 @@ int ftdev_plan(int argc, char** argv) {
   double tg[FT_MAX_FRAMES];
   const char *path = NULL, *out = NULL;
   const ft_holder* h;
-  int i, k, n, hf = 0, nsize = 0, ng, g;
+  int i, k, hf = 0, nsize = 0, ng, g;
+  uint32_t n;
   ft_err e;
   FILE* f;
 
@@ -69,13 +70,13 @@ int ftdev_plan(int argc, char** argv) {
     fprintf(stderr, "plan: cannot open %s\n", path);
     return 1;
   }
-  k = ft_job_read(&j, f, &e);
+  k = ft_read_job(&j, f, &e);
   fclose(f);
   if(k) {
-    fprintf(stderr, "plan: %s: %s\n", path, e.msg);
+    fprintf(stderr, "plan: %s: %s\n", path, e.message);
     return 1;
   }
-  h = ft_holder_find(j.holder);
+  h = ft_find_holder(j.holder);
   if(!h) {
     fprintf(stderr, "plan: unknown holder '%s'\n", j.holder);
     return 1;
@@ -102,13 +103,13 @@ int ftdev_plan(int argc, char** argv) {
               (int)(colon - a), a);
       return 2;
     }
-    if(ft_share_select(&j, colon + 1, sel, &n, &e)) {
-      fprintf(stderr, "plan: %s\n", e.msg);
+    if(ft_select_share_frames(&j, colon + 1, sel, &n, &e)) {
+      fprintf(stderr, "plan: %s\n", e.message);
       return 1;
     }
-    for(k = 0; k < n; k++)
-      for(g = 0; g < j.nframes; g++)
-        if(j.f[g].index == sel[k].index) {
+    for(k = 0; k < (int)n; k++)
+      for(g = 0; g < (int)j.frame_count; g++)
+        if(j.frames[g].index == sel[k].index) {
           if(tg[g] != 0) {
             fprintf(stderr, "plan: frame %d has two sizes\n", sel[k].index);
             return 1;
@@ -121,30 +122,30 @@ int ftdev_plan(int argc, char** argv) {
     fprintf(stderr, "plan: no --size\n");
     return 2;
   }
-  ng = ft_share_plan_sizes(&j, tg, hf, &ft_lens_default, h->scan_len_mm, &e);
-  if(ng < 0 || ft_job_validate(&j, &ft_lens_default, &e)) {
-    fprintf(stderr, "plan: %s\n", e.msg);
+  ng = ft_plan_share_sizes(&j, tg, hf, &ft_lens_default, h->scan_length_mm, &e);
+  if(ng < 0 || ft_validate_job(&j, &ft_lens_default, &e)) {
+    fprintf(stderr, "plan: %s\n", e.message);
     return 1;
   }
   if(!out) out = path;
   f = fopen(out, "w");
-  if(!f || ft_job_write(&j, f) || fclose(f)) {
+  if(!f || ft_write_job(&j, f) || fclose(f)) {
     fprintf(stderr, "plan: cannot write %s\n", out);
     return 1;
   }
   for(g = 1; g <= ng; g++) {
     const ft_job_frame* first = NULL;
     int nf = 0;
-    for(i = 0; i < j.nframes; i++)
-      if(j.f[i].include && j.f[i].group == g) nf++;
+    for(i = 0; i < (int)j.frame_count; i++)
+      if(j.frames[i].is_included && j.frames[i].group == g) nf++;
     printf("window %d: frame%s", g, nf > 1 ? "s" : "");
-    for(i = 0, k = 0; i < j.nframes; i++)
-      if(j.f[i].include && j.f[i].group == g) {
-        printf("%s %d", k++ ? "," : "", j.f[i].index);
-        if(!first) first = &j.f[i];
+    for(i = 0, k = 0; i < (int)j.frame_count; i++)
+      if(j.frames[i].is_included && j.frames[i].group == g) {
+        printf("%s %d", k++ ? "," : "", j.frames[i].index);
+        if(!first) first = &j.frames[i];
       }
-    printf(", %g px, %g ppi, bin %d\n", ft_job_share_px(&j, first), first->ppi,
-           first->bin);
+    printf(", %g px, %g ppi, bin %d\n", ft_get_frame_share_pixels(&j, first),
+           first->ppi, first->bin);
   }
   printf("%d window(s); next: ftpoc scan --job %s\n", ng, out);
   return 0;

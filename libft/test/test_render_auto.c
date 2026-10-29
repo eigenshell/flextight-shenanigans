@@ -68,7 +68,7 @@ static void negative_scaled(ft_image* im, double scale) {
       for(c = 0; c < 3; c++) {
         double d = BASE[c] + GAMMA[c] * log10(ex[c] / 0.002);
         double t = pow(10, -d), sig = sqrt(0.0005 * 0.0005 + t / 6000);
-        im->rgb[3 * (y * W + x) + c] = (float)(t + sig * gauss());
+        im->pixels[3 * (y * W + x) + c] = (float)(t + sig * gauss());
       }
     }
 }
@@ -83,7 +83,7 @@ static void step_mean(const ft_image* im, int s, double out[3]) {
   out[0] = out[1] = out[2] = 0;
   for(y = 10; y < H - 10; y++)
     for(x = x0; x < x1; x++, n++)
-      for(c = 0; c < 3; c++) out[c] += im->rgb[3 * (y * W + x) + c];
+      for(c = 0; c < 3; c++) out[c] += im->pixels[3 * (y * W + x) + c];
   for(c = 0; c < 3; c++) out[c] /= n;
 }
 
@@ -94,36 +94,38 @@ int main(void) {
   ft_err e;
   int s, c;
 
-  ft_image_init(&im);
-  CHECK(ft_image_alloc(&im, W, H, &e) == 0);
+  ft_init_image(&im);
+  CHECK(ft_allocate_image(&im, W, H, &e) == 0);
   negative(&im);
   one[0] = &im;
 
   /* auto on a known base: ranges follow the dye gammas, greys neutral */
-  ft_recipe_default(&r, FT_RENDER_NEG);
-  ft_recipe_set_base(&r, BASE);
+  ft_init_recipe(&r, FT_RENDER_NEGATIVE);
+  ft_set_recipe_base(&r, BASE);
   r.tint[0] = 7; /* auto resets tint */
-  CHECK(ft_render_auto(one, 1, &r, &e) == 0);
+  CHECK(ft_estimate_recipe(one, 1, &r, &e) == 0);
   CHECK(r.tint[0] == 0);
   for(c = 0; c < 3; c++) /* 2.7 decades */
-    CHECK_NEAR(r.range[c], GAMMA[c] * log10(1 / 0.002), 0.06);
+    CHECK_NEAR(r.range_density[c], GAMMA[c] * log10(1 / 0.002), 0.06);
   CHECK(r.exposure > 0 && r.exposure < 6);
   /* default paper (0..2 D, grade 1.5): the highlight lands 0.03 D below
    * paper white, pinned independently of the implementation */
   CHECK_NEAR(r.exposure,
-             -(log(0.015 / 0.985) / 6 + 0.5) * r.range[1] / log10(2), 1e-5);
+             -(log(0.015 / 0.985) / 6 + 0.5) * r.range_density[1] / log10(2),
+             1e-5);
   /* the closed form on its own gives the same exposure, bit for bit,
    * and follows the paper's grade */
-  CHECK(ft_render_auto_exposure(&r) == r.exposure);
+  CHECK(ft_estimate_auto_exposure(&r) == r.exposure);
   {
     ft_recipe g = r;
     g.grade = 3;
-    CHECK_NEAR(ft_render_auto_exposure(&g),
-               -(log(0.015 / 0.985) / 12 + 0.5) * r.range[1] / log10(2), 1e-5);
+    CHECK_NEAR(ft_estimate_auto_exposure(&g),
+               -(log(0.015 / 0.985) / 12 + 0.5) * r.range_density[1] / log10(2),
+               1e-5);
     g.grade = 0;
-    CHECK(ft_render_auto_exposure(&g) == 0);
+    CHECK(ft_estimate_auto_exposure(&g) == 0);
   }
-  CHECK(ft_render_compile(&r, &cr, &e) == 0);
+  CHECK(ft_compile_render(&r, &cr, &e) == 0);
   ft_render_image(&cr, &im);
   {
     double prev = -1;
@@ -146,8 +148,8 @@ int main(void) {
     for(y = 0; y < H; y++)
       for(x = 0; x < W / 50 + 8; x++)
         for(c = 0; c < 3; c++)
-          im.rgb[3 * (y * W + x) + c] = (float)pow(10, -BASE[c]);
-    CHECK(ft_render_base_from_frames(one, 1, FT_RENDER_NEG, d, &e) == 0);
+          im.pixels[3 * (y * W + x) + c] = (float)pow(10, -BASE[c]);
+    CHECK(ft_estimate_base_from_frames(one, 1, FT_RENDER_NEGATIVE, d, &e) == 0);
     for(c = 0; c < 3; c++) CHECK_NEAR(d[c], BASE[c], 0.002);
   }
 
@@ -155,32 +157,33 @@ int main(void) {
   {
     int i;
     float d[3];
-    for(i = 0; i < W * H * 3; i++) im.rgb[i] = 0.3f;
+    for(i = 0; i < W * H * 3; i++) im.pixels[i] = 0.3f;
     for(i = 0; i < W * 20 * 3; i++) /* 20 black rows */
-      im.rgb[W * 3 * 90 + i] = 0.001f;
-    CHECK(ft_render_base_from_frames(one, 1, FT_RENDER_SLIDE, d, &e) == 0);
+      im.pixels[W * 3 * 90 + i] = 0.001f;
+    CHECK(ft_estimate_base_from_frames(one, 1, FT_RENDER_SLIDE, d, &e) == 0);
     CHECK_NEAR(d[0], 3.0, 0.002);
     /* opaque metal (T at the floor) must not become the slide black */
     for(i = 0; i < H; i++)
-      memset(im.rgb + 3 * (i * W + 21), 0, 40 * 3 * sizeof(float));
-    CHECK(ft_render_base_from_frames(one, 1, FT_RENDER_SLIDE, d, &e) == 0);
+      memset(im.pixels + 3 * (i * W + 21), 0, 40 * 3 * sizeof(float));
+    CHECK(ft_estimate_base_from_frames(one, 1, FT_RENDER_SLIDE, d, &e) == 0);
     CHECK_NEAR(d[0], 3.0, 0.002);
-    ft_recipe_default(&r, FT_RENDER_SLIDE);
+    ft_init_recipe(&r, FT_RENDER_SLIDE);
     r.exposure = 2;
-    CHECK(ft_render_auto(one, 1, &r, &e) == 0 && r.exposure == 0);
+    CHECK(ft_estimate_recipe(one, 1, &r, &e) == 0 && r.exposure == 0);
   }
 
   /* b&w: one luminance range in all three slots */
   negative(&im);
-  ft_recipe_default(&r, FT_RENDER_BW);
-  ft_recipe_set_base(&r, BASE);
-  CHECK(ft_render_auto(one, 1, &r, &e) == 0);
-  CHECK(r.range[0] == r.range[1] && r.range[1] == r.range[2]);
+  ft_init_recipe(&r, FT_RENDER_BW);
+  ft_set_recipe_base(&r, BASE);
+  CHECK(ft_estimate_recipe(one, 1, &r, &e) == 0);
+  CHECK(r.range_density[0] == r.range_density[1] &&
+        r.range_density[1] == r.range_density[2]);
   { /* the white step's luminance density above the folded base */
     double y = 0;
     for(c = 0; c < 3; c++)
       y += r.bw_weights[c] * pow(10, -(BASE[c] + GAMMA[c] * log10(1 / 0.002)));
-    CHECK_NEAR(r.range[1], -log10(y) - r.base[0], 0.06);
+    CHECK_NEAR(r.range_density[1], -log10(y) - r.base_density[0], 0.06);
   }
 
   /* two frames pool: the same frame twice gives the same answer */
@@ -188,8 +191,8 @@ int main(void) {
     const ft_image* two[2];
     ft_recipe a = r;
     two[0] = two[1] = &im;
-    CHECK(ft_render_auto(two, 2, &a, &e) == 0);
-    CHECK_NEAR(a.range[1], r.range[1], 0.005);
+    CHECK(ft_estimate_recipe(two, 2, &a, &e) == 0);
+    CHECK_NEAR(a.range_density[1], r.range_density[1], 0.005);
   }
 
   /* noisy holder metal from x = 102 on, off the 4-px block grid (x0 = 4,
@@ -201,19 +204,19 @@ int main(void) {
     const ft_image* mp[1];
     ft_recipe t;
     int x, y;
-    ft_image_init(&mt);
-    CHECK(ft_image_alloc(&mt, 200, 100, &e) == 0);
+    ft_init_image(&mt);
+    CHECK(ft_allocate_image(&mt, 200, 100, &e) == 0);
     for(y = 0; y < 100; y++)
       for(x = 0; x < 200; x++)
         for(c = 0; c < 3; c++)
-          mt.rgb[3 * (y * 200 + x) + c] =
+          mt.pixels[3 * (y * 200 + x) + c] =
             x >= 102 ? metal() : (float)pow(10, -(BASE[c] + 1.0));
     mp[0] = &mt;
-    ft_recipe_default(&t, FT_RENDER_NEG);
-    ft_recipe_set_base(&t, BASE);
-    CHECK(ft_render_auto(mp, 1, &t, &e) == 0);
-    for(c = 0; c < 3; c++) CHECK_NEAR(t.range[c], 1.0, 0.01);
-    ft_image_free(&mt);
+    ft_init_recipe(&t, FT_RENDER_NEGATIVE);
+    ft_set_recipe_base(&t, BASE);
+    CHECK(ft_estimate_recipe(mp, 1, &t, &e) == 0);
+    for(c = 0; c < 3; c++) CHECK_NEAR(t.range_density[c], 1.0, 0.01);
+    ft_free_image(&mt);
   }
 
   /* a thin highlight with no usable right neighbour (1.0 D lighter): the
@@ -224,19 +227,19 @@ int main(void) {
     const ft_image* sp[1];
     ft_recipe t;
     int x, y;
-    ft_image_init(&st);
-    CHECK(ft_image_alloc(&st, 200, 100, &e) == 0);
+    ft_init_image(&st);
+    CHECK(ft_allocate_image(&st, 200, 100, &e) == 0);
     for(y = 0; y < 100; y++)
       for(x = 0; x < 200; x++)
         for(c = 0; c < 3; c++)
-          st.rgb[3 * (y * 200 + x) + c] =
+          st.pixels[3 * (y * 200 + x) + c] =
             (float)pow(10, -(BASE[c] + (x >= 100 && x < 104 ? 2.0 : 1.0)));
     sp[0] = &st;
-    ft_recipe_default(&t, FT_RENDER_NEG);
-    ft_recipe_set_base(&t, BASE);
-    CHECK(ft_render_auto(sp, 1, &t, &e) == 0);
-    for(c = 0; c < 3; c++) CHECK_NEAR(t.range[c], 2.0, 0.01);
-    ft_image_free(&st);
+    ft_init_recipe(&t, FT_RENDER_NEGATIVE);
+    ft_set_recipe_base(&t, BASE);
+    CHECK(ft_estimate_recipe(sp, 1, &t, &e) == 0);
+    for(c = 0; c < 3; c++) CHECK_NEAR(t.range_density[c], 2.0, 0.01);
+    ft_free_image(&st);
   }
 
   /* different frames pool: B is a dim frame (exposures x 0.1, so its
@@ -248,31 +251,31 @@ int main(void) {
     const ft_image *pair[2], *withnul[2], *dp[1];
     ft_recipe ra, rb, rp, rn;
     negative(&im);
-    ft_image_init(&dim);
-    CHECK(ft_image_alloc(&dim, W, H, &e) == 0);
+    ft_init_image(&dim);
+    CHECK(ft_allocate_image(&dim, W, H, &e) == 0);
     negative_scaled(&dim, 0.1);
-    ft_image_init(&nul);
-    nul.w = W;
-    nul.h = H; /* rgb stays NULL */
-    ft_recipe_default(&ra, FT_RENDER_NEG);
-    ft_recipe_set_base(&ra, BASE);
+    ft_init_image(&nul);
+    nul.width = W;
+    nul.height = H; /* rgb stays NULL */
+    ft_init_recipe(&ra, FT_RENDER_NEGATIVE);
+    ft_set_recipe_base(&ra, BASE);
     rb = rp = rn = ra;
     pair[0] = &im;
     pair[1] = &dim;
     withnul[0] = &im;
     withnul[1] = &nul;
     dp[0] = &dim;
-    CHECK(ft_render_auto(dp, 1, &rb, &e) == 0);
-    CHECK(ft_render_auto(one, 1, &ra, &e) == 0);
-    CHECK(ft_render_auto(pair, 2, &rp, &e) == 0);
-    CHECK(ft_render_auto(withnul, 2, &rn, &e) == 0);
+    CHECK(ft_estimate_recipe(dp, 1, &rb, &e) == 0);
+    CHECK(ft_estimate_recipe(one, 1, &ra, &e) == 0);
+    CHECK(ft_estimate_recipe(pair, 2, &rp, &e) == 0);
+    CHECK(ft_estimate_recipe(withnul, 2, &rn, &e) == 0);
     for(c = 0; c < 3; c++) {
-      CHECK(rb.range[c] < ra.range[c] - 0.3);
-      CHECK_NEAR(rp.range[c], ra.range[c], 0.02);
-      CHECK(rn.range[c] == ra.range[c]);
+      CHECK(rb.range_density[c] < ra.range_density[c] - 0.3);
+      CHECK_NEAR(rp.range_density[c], ra.range_density[c], 0.02);
+      CHECK(rn.range_density[c] == ra.range_density[c]);
     }
     CHECK(rn.exposure == ra.exposure);
-    ft_image_free(&dim);
+    ft_free_image(&dim);
   }
 
   /* a noisy holder band (6 % of the width, T ~ 0.001) must not drive
@@ -282,13 +285,13 @@ int main(void) {
     int x, y;
     for(y = 0; y < H; y++)
       for(x = 0; x < 62; x++)
-        for(c = 0; c < 3; c++) im.rgb[3 * (y * W + x) + c] = metal();
-    ft_recipe_default(&r, FT_RENDER_NEG);
-    ft_recipe_set_base(&r, BASE);
-    CHECK(ft_render_auto(one, 1, &r, &e) == 0);
+        for(c = 0; c < 3; c++) im.pixels[3 * (y * W + x) + c] = metal();
+    ft_init_recipe(&r, FT_RENDER_NEGATIVE);
+    ft_set_recipe_base(&r, BASE);
+    CHECK(ft_estimate_recipe(one, 1, &r, &e) == 0);
     for(c = 0; c < 3; c++)
-      CHECK_NEAR(r.range[c], GAMMA[c] * log10(1 / 0.002), 0.06);
-    CHECK(ft_render_compile(&r, &cr, &e) == 0);
+      CHECK_NEAR(r.range_density[c], GAMMA[c] * log10(1 / 0.002), 0.06);
+    CHECK(ft_compile_render(&r, &cr, &e) == 0);
   }
 
   /* a clear band (T = 1.02: a sprocket hole, the open beam) is not the
@@ -301,11 +304,11 @@ int main(void) {
     for(y = 0; y < H; y++) {
       for(x = 0; x < W / 50 + 8; x++)
         for(c = 0; c < 3; c++)
-          im.rgb[3 * (y * W + x) + c] = (float)pow(10, -BASE[c]);
+          im.pixels[3 * (y * W + x) + c] = (float)pow(10, -BASE[c]);
       for(x = 805; x < 862; x++)
-        for(c = 0; c < 3; c++) im.rgb[3 * (y * W + x) + c] = 1.02f;
+        for(c = 0; c < 3; c++) im.pixels[3 * (y * W + x) + c] = 1.02f;
     }
-    CHECK(ft_render_base_from_frames(one, 1, FT_RENDER_NEG, d, &e) == 0);
+    CHECK(ft_estimate_base_from_frames(one, 1, FT_RENDER_NEGATIVE, d, &e) == 0);
     for(c = 0; c < 3; c++) {
       CHECK_NEAR(d[c], BASE[c], 0.002);
       CHECK(d[c] >= 0);
@@ -314,16 +317,16 @@ int main(void) {
 
   /* thin paper (black - white < 0.03 D) and grade 0: a finite exposure */
   negative(&im);
-  ft_recipe_default(&r, FT_RENDER_NEG);
-  ft_recipe_set_base(&r, BASE);
+  ft_init_recipe(&r, FT_RENDER_NEGATIVE);
+  ft_set_recipe_base(&r, BASE);
   r.paper_black = 0.02f;
   r.paper_white = 0;
-  CHECK(ft_render_auto(one, 1, &r, &e) == 0);
+  CHECK(ft_estimate_recipe(one, 1, &r, &e) == 0);
   CHECK(isfinite(r.exposure) && r.exposure >= -6 && r.exposure <= 6);
-  ft_recipe_default(&r, FT_RENDER_NEG);
-  ft_recipe_set_base(&r, BASE);
+  ft_init_recipe(&r, FT_RENDER_NEGATIVE);
+  ft_set_recipe_base(&r, BASE);
   r.grade = 0;
-  CHECK(ft_render_auto(one, 1, &r, &e) == 0 && r.exposure == 0);
+  CHECK(ft_estimate_recipe(one, 1, &r, &e) == 0 && r.exposure == 0);
 
   /* b&w with a dense highlight: grey film at 1.0 D with a 2.55 D area
    * (12 % of the frame), scanner noise (dark 0.0005 + shot t / 6000).
@@ -335,12 +338,12 @@ int main(void) {
         double t = x >= 400 && x < 515 ? pow(10, -2.55) : 0.1;
         double sig = sqrt(0.0005 * 0.0005 + t / 6000);
         for(c = 0; c < 3; c++)
-          im.rgb[3 * (y * W + x) + c] = (float)(t + sig * gauss());
+          im.pixels[3 * (y * W + x) + c] = (float)(t + sig * gauss());
       }
-    ft_recipe_default(&r, FT_RENDER_BW);
-    r.base[0] = r.base[1] = r.base[2] = 0.2f;
-    CHECK(ft_render_auto(one, 1, &r, &e) == 0);
-    CHECK_NEAR(r.range[1], 2.55 - 0.2, 0.06);
+    ft_init_recipe(&r, FT_RENDER_BW);
+    r.base_density[0] = r.base_density[1] = r.base_density[2] = 0.2f;
+    CHECK(ft_estimate_recipe(one, 1, &r, &e) == 0);
+    CHECK_NEAR(r.range_density[1], 2.55 - 0.2, 0.06);
   }
 
   /* slide with a noisy 3.5 D black (rows 92..107, the rest T = 0.3) */
@@ -350,9 +353,9 @@ int main(void) {
     for(y = 0; y < H; y++)
       for(x = 0; x < W; x++)
         for(c = 0; c < 3; c++)
-          im.rgb[3 * (y * W + x) + c] =
+          im.pixels[3 * (y * W + x) + c] =
             y >= 92 && y < 108 ? (float)(pow(10, -3.5) + 4e-5 * gauss()) : 0.3f;
-    CHECK(ft_render_base_from_frames(one, 1, FT_RENDER_SLIDE, d, &e) == 0);
+    CHECK(ft_estimate_base_from_frames(one, 1, FT_RENDER_SLIDE, d, &e) == 0);
     for(c = 0; c < 3; c++) CHECK_NEAR(d[c], 3.5, 0.05);
   }
 
@@ -364,10 +367,10 @@ int main(void) {
     for(y = 0; y < H; y++) {
       for(x = 0; x < W / 50 + 8; x++)
         for(c = 0; c < 3; c++)
-          im.rgb[3 * (y * W + x) + c] = (float)pow(10, -BASE[c]);
-      for(x = 100; x < 160; x++) im.rgb[3 * (y * W + x)] = INFINITY;
+          im.pixels[3 * (y * W + x) + c] = (float)pow(10, -BASE[c]);
+      for(x = 100; x < 160; x++) im.pixels[3 * (y * W + x)] = INFINITY;
     }
-    CHECK(ft_render_base_from_frames(one, 1, FT_RENDER_NEG, d, &e) == 0);
+    CHECK(ft_estimate_base_from_frames(one, 1, FT_RENDER_NEGATIVE, d, &e) == 0);
     for(c = 0; c < 3; c++) CHECK_NEAR(d[c], BASE[c], 0.002);
   }
 
@@ -376,11 +379,11 @@ int main(void) {
     ft_image empty;
     const ft_image* z[1];
     float d[3];
-    ft_image_init(&empty);
+    ft_init_image(&empty);
     z[0] = &empty;
-    CHECK(ft_render_base_from_frames(z, 1, FT_RENDER_NEG, d, &e) == -1);
-    CHECK(ft_render_auto(z, 1, &r, &e) == -1);
+    CHECK(ft_estimate_base_from_frames(z, 1, FT_RENDER_NEGATIVE, d, &e) == -1);
+    CHECK(ft_estimate_recipe(z, 1, &r, &e) == -1);
   }
-  ft_image_free(&im);
+  ft_free_image(&im);
   return TEST_DONE();
 }

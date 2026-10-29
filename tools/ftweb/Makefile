@@ -33,7 +33,7 @@ WEB_UNITS = ft ft_curve ft_render ft_render_auto ft_density ft_dplan \
 	ft_pm_stock ft_pm_frontier ft_pm_lut3d ft_emulsion ft_print_file \
 	ft_image ft_job ft_focus ft_holder ft_jpeg ft_zip ft_share_cut \
 	ft_dng ft_calib ft_develop ft_detect ft_preview ft_share_print \
-	ft_stream_detect
+	ft_stream_detect ft_endian
 WEB_OBJ = $(addprefix wasm/,$(addsuffix .o,$(WEB_UNITS)))
 EXPORTS = ftw_new ftw_free ftw_error ftw_out ftw_out_len ftw_text \
 	ftw_emulsions ftw_resolutions ftw_holders ftw_lens ftw_dof95 ftw_job_load ftw_plan_load ftw_job_json \

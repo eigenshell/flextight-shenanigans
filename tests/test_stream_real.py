@@ -25,7 +25,7 @@ STRIPS = sorted(p for p in DATA.glob("*")
                 if (p / "strip.raw").exists() and
                 (p / "strip.preview.job").exists()) if DATA.is_dir() else []
 # the stream box's edges against the box's: no tilt correction, the box
-# padded by FT_SDET_PAD_MM (0.3) each side; never inside the box's frame
+# padded by FT_STREAM_DETECT_PAD_MM (0.3) each side; never inside the box's frame
 # by more than INSIDE (nothing cropped away), nor outside it by more than
 # MARGIN (2026-10-18: 0.25..0.45 mm on 31 of 32 edges of three strips;
 # 1.17 mm where a leader with faint content runs into frame 1)
@@ -76,7 +76,7 @@ def test_stream_finds_the_box_frames(strip):
             assert -INSIDE <= d <= MARGIN, (strip.name, g, w, out)
         assert not g[5], out              # gaps found: no grid frame
     # each frame shows while the preview is still coming: sealed by the
-    # lines of the gap after it (FT_SDET_GAP_MM, 0.4 mm) or the film's end
+    # lines of the gap after it (FT_STREAM_DETECT_GAP_MM, 0.4 mm) or the film's end
     # just after it, within 1 mm of lines; never by the strip's end
     for g in got:
         assert g[6] != "end", out

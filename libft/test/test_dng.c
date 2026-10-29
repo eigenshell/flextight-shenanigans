@@ -23,7 +23,7 @@ static unsigned char* slurp(const char* path, size_t* n) {
   return b;
 }
 
-/* offset of tag's 12-byte IFD entry in a buffer from ft_dng_write */
+/* offset of tag's 12-byte IFD entry in a buffer from ft_write_dng */
 static size_t entry_of(const unsigned char* b, unsigned tag) {
   size_t ifd = b[4] | b[5] << 8 | (size_t)b[6] << 16 | (size_t)b[7] << 24;
   unsigned cnt = b[ifd] | b[ifd + 1] << 8, i;
@@ -98,80 +98,81 @@ int main(void) {
   int i;
 
   /* 300 x 400: several strips (262144 B each) */
-  ft_image_init(&a);
-  CHECK(ft_image_alloc(&a, 300, 400, &e) == 0);
+  ft_init_image(&a);
+  CHECK(ft_allocate_image(&a, 300, 400, &e) == 0);
   for(k = 0; k < (size_t)300 * 400 * 3; k++)
-    a.rgb[k] = (float)((k * 7919) % 70001) / 70000.0f;
-  a.rgb[0] = -0.5f; /* clamps to 0 */
-  a.rgb[1] = 1.7f;  /* clamps to 1 */
+    a.pixels[k] = (float)((k * 7919) % 70001) / 70000.0f;
+  a.pixels[0] = -0.5f; /* clamps to 0 */
+  a.pixels[1] = 1.7f;  /* clamps to 1 */
   a.ppi = 1500;
   a.xyz_to_rgb[4] = 1.8760108;
-  strcpy(a.desc, "share frame 4, 1500 ppi, bin 1");
-  CHECK(ft_dng_write(path, &a, &e) == 0);
+  strcpy(a.description, "share frame 4, 1500 ppi, bin 1");
+  CHECK(ft_write_dng(path, &a, &e) == 0);
 
-  ft_image_init(&b);
+  ft_init_image(&b);
   strcpy(b.make, "x");
-  CHECK(ft_dng_read(path, &b, &e) == 0);
-  CHECK(b.w == 300 && b.h == 400);
+  CHECK(ft_read_dng(path, &b, &e) == 0);
+  CHECK(b.width == 300 && b.height == 400);
   /* the same 16-bit code back (codes, not floats: x87 excess precision) */
   for(k = 0; k < (size_t)300 * 400 * 3; k++) {
-    float v = a.rgb[k];
+    float v = a.pixels[k];
     long want = v <= 0 ? 0 : v >= 1 ? 65535 : (long)(v * 65535.0f + 0.5f);
-    long got = (long)floor(b.rgb[k] * 65535.0 + 0.5);
+    long got = (long)floor(b.pixels[k] * 65535.0 + 0.5);
     if(got != want) CHECK(got == want);
   }
-  CHECK(b.rgb[0] == 0 && b.rgb[1] == 1);
+  CHECK(b.pixels[0] == 0 && b.pixels[1] == 1);
   CHECK_NEAR(b.ppi, 1500, 1e-9);
   CHECK_NEAR(b.xyz_to_rgb[4], 1.8760108, 1e-7);
   CHECK_NEAR(b.xyz_to_rgb[0], a.xyz_to_rgb[0], 1e-7);
-  CHECK(strcmp(b.desc, a.desc) == 0);
+  CHECK(strcmp(b.description, a.description) == 0);
   CHECK(strcmp(b.make, "Imacon") == 0);
   CHECK(strcmp(b.model, "Flextight Precision II") == 0);
   /* write -> read -> write is byte-identical in the pixels */
   {
     ft_image c;
-    ft_dng_write("test/dng_test_out2.dng", &b, &e);
-    ft_image_init(&c);
-    CHECK(ft_dng_read("test/dng_test_out2.dng", &c, &e) == 0);
-    CHECK(memcmp(b.rgb, c.rgb, (size_t)300 * 400 * 3 * sizeof *b.rgb) == 0);
-    ft_image_free(&c);
+    ft_write_dng("test/dng_test_out2.dng", &b, &e);
+    ft_init_image(&c);
+    CHECK(ft_read_dng("test/dng_test_out2.dng", &c, &e) == 0);
+    CHECK(memcmp(b.pixels, c.pixels,
+                 (size_t)300 * 400 * 3 * sizeof *b.pixels) == 0);
+    ft_free_image(&c);
     remove("test/dng_test_out2.dng");
   }
-  ft_image_free(&b);
+  ft_free_image(&b);
 
   /* refusals: each with the reason, never a crash */
   buf = slurp(path, &n);
   bad = malloc(n);
   CHECK(bad != NULL);
-  CHECK(ft_dng_parse(buf, n, &b, &e) == 0);
-  ft_image_free(&b);
-  CHECK(ft_dng_parse(buf, 7, &b, &e) == -1);
-  CHECK(ft_dng_parse(buf, n - 1, &b, &e) == -1); /* last strip short */
-  CHECK(strstr(e.msg, "strip") != NULL);
-  CHECK(b.rgb == NULL);
-  CHECK(ft_dng_parse(buf, n / 2, &b, &e) == -1);
+  CHECK(ft_parse_dng(buf, n, &b, &e) == 0);
+  ft_free_image(&b);
+  CHECK(ft_parse_dng(buf, 7, &b, &e) == -1);
+  CHECK(ft_parse_dng(buf, n - 1, &b, &e) == -1); /* last strip short */
+  CHECK(strstr(e.message, "strip") != NULL);
+  CHECK(b.pixels == NULL);
+  CHECK(ft_parse_dng(buf, n / 2, &b, &e) == -1);
   memcpy(bad, buf, n);
   bad[0] = 'M'; /* big-endian */
-  CHECK(ft_dng_parse(bad, n, &b, &e) == -1);
-  CHECK(strstr(e.msg, "little-endian") != NULL);
+  CHECK(ft_parse_dng(bad, n, &b, &e) == -1);
+  CHECK(strstr(e.message, "little-endian") != NULL);
   memcpy(bad, buf, n);
   p = entry_of(bad, 259);
   CHECK(p);
   bad[p + 8] = 7; /* JPEG compressed */
-  CHECK(ft_dng_parse(bad, n, &b, &e) == -1);
-  CHECK(strstr(e.msg, "compressed") != NULL);
+  CHECK(ft_parse_dng(bad, n, &b, &e) == -1);
+  CHECK(strstr(e.message, "compressed") != NULL);
   memcpy(bad, buf, n);
   p = entry_of(bad, 262);
   bad[p + 8] = 0x23; /* 32803: CFA */
   bad[p + 9] = 0x80;
-  CHECK(ft_dng_parse(bad, n, &b, &e) == -1);
-  CHECK(strstr(e.msg, "LinearRaw") != NULL);
+  CHECK(ft_parse_dng(bad, n, &b, &e) == -1);
+  CHECK(strstr(e.message, "LinearRaw") != NULL);
   memcpy(bad, buf, n);
   p = entry_of(bad, 50706);
   bad[p] = 0x13;     /* tag 50707 + ... */
   bad[p + 1] = 0x00; /* -> tag 19 */
-  CHECK(ft_dng_parse(bad, n, &b, &e) == -1);
-  CHECK(strstr(e.msg, "not a DNG") != NULL);
+  CHECK(ft_parse_dng(bad, n, &b, &e) == -1);
+  CHECK(strstr(e.message, "not a DNG") != NULL);
   /* random corruption of the header and IFD: no crash, no leak of a
    * half-filled image */
   srand(5);
@@ -181,35 +182,35 @@ int main(void) {
     memcpy(bad, buf, n);
     for(j = 0; j < 1 + i % 4; j++)
       bad[(size_t)rand() % hdr] = (unsigned char)rand();
-    ft_image_init(&b);
-    if(ft_dng_parse(bad, n, &b, &e) == 0) {
-      CHECK(b.rgb != NULL && b.w >= 1 && b.h >= 1);
-      ft_image_free(&b);
+    ft_init_image(&b);
+    if(ft_parse_dng(bad, n, &b, &e) == 0) {
+      CHECK(b.pixels != NULL && b.width >= 1 && b.height >= 1);
+      ft_free_image(&b);
     } else {
-      CHECK(b.rgb == NULL);
+      CHECK(b.pixels == NULL);
     }
   }
   /* overlapping strips: w x h x 6 wraps a 32-bit size_t */
   {
     unsigned char* ov = overlap_file(34179, 41887, &k);
-    ft_image_init(&b);
-    CHECK(ft_dng_parse(ov, k, &b, &e) == -1);
-    CHECK(strstr(e.msg, "do not fit") != NULL);
-    CHECK(b.rgb == NULL);
+    ft_init_image(&b);
+    CHECK(ft_parse_dng(ov, k, &b, &e) == -1);
+    CHECK(strstr(e.message, "do not fit") != NULL);
+    CHECK(b.pixels == NULL);
     free(ov);
   }
   /* IFD offset near 2^32: ifd + 2 wraps a 32-bit unsigned long */
   memcpy(bad, buf, n);
   put32(bad + 4, 0xfffffffeUL);
-  ft_image_init(&b);
-  CHECK(ft_dng_parse(bad, n, &b, &e) == -1);
-  CHECK(b.rgb == NULL);
+  ft_init_image(&b);
+  CHECK(ft_parse_dng(bad, n, &b, &e) == -1);
+  CHECK(b.pixels == NULL);
   /* a size no platform can hold in floats */
-  ft_image_init(&b);
-  CHECK(ft_image_alloc(&b, 2000000000, 2000000000, &e) == -1);
-  CHECK(strstr(e.msg, "too large") != NULL);
-  CHECK(b.rgb == NULL);
-  CHECK(ft_dng_read("test/no_such_file.dng", &b, &e) == -1);
+  ft_init_image(&b);
+  CHECK(ft_allocate_image(&b, 2000000000, 2000000000, &e) == -1);
+  CHECK(strstr(e.message, "too large") != NULL);
+  CHECK(b.pixels == NULL);
+  CHECK(ft_read_dng("test/no_such_file.dng", &b, &e) == -1);
 
   /* NoiseProfile (51041, 6 doubles): none without a profile, an exact
    * round trip with one, and a bad value reads as none */
@@ -220,19 +221,19 @@ int main(void) {
     unsigned char* nb;
     double neg = -1;
     uint64_t u;
-    a.has_noise = 1;
-    memcpy(a.noise, np, sizeof np);
-    CHECK(ft_dng_write(path, &a, &e) == 0);
+    a.has_noise_profile = 1;
+    memcpy(a.noise_profile, np, sizeof np);
+    CHECK(ft_write_dng(path, &a, &e) == 0);
     nb = slurp(path, &m);
     k = entry_of(nb, 51041);
     CHECK(k != 0);
     CHECK((nb[k + 2] | nb[k + 3] << 8) == 12); /* DOUBLE */
     CHECK(nb[k + 4] == 6 && nb[k + 5] == 0);
-    ft_image_init(&b);
-    CHECK(ft_dng_parse(nb, m, &b, &e) == 0);
-    CHECK(b.has_noise);
-    for(i = 0; i < 6; i++) CHECK(b.noise[i] == np[i]);
-    ft_image_free(&b);
+    ft_init_image(&b);
+    CHECK(ft_parse_dng(nb, m, &b, &e) == 0);
+    CHECK(b.has_noise_profile);
+    for(i = 0; i < 6; i++) CHECK(b.noise_profile[i] == np[i]);
+    ft_free_image(&b);
     /* S_r = -1 */
     at = nb[k + 8] |
          nb[k + 9] << 8 |
@@ -240,56 +241,57 @@ int main(void) {
          (size_t)nb[k + 11] << 24;
     memcpy(&u, &neg, 8);
     for(i = 0; i < 8; i++) nb[at + i] = (unsigned char)(u >> 8 * i);
-    ft_image_init(&b);
-    CHECK(ft_dng_parse(nb, m, &b, &e) == 0);
-    CHECK(!b.has_noise);
-    ft_image_free(&b);
+    ft_init_image(&b);
+    CHECK(ft_parse_dng(nb, m, &b, &e) == 0);
+    CHECK(!b.has_noise_profile);
+    ft_free_image(&b);
     free(nb);
     /* the writer drops an unusable profile */
-    a.noise[1] = 0;
-    CHECK(ft_dng_write(path, &a, &e) == 0);
+    a.noise_profile[1] = 0;
+    CHECK(ft_write_dng(path, &a, &e) == 0);
     nb = slurp(path, &m);
     CHECK(entry_of(nb, 51041) == 0);
     free(nb);
-    a.has_noise = 0;
+    a.has_noise_profile = 0;
   }
-  CHECK(strstr(e.msg, "no_such_file") != NULL);
-  /* ft_dng_as_stored is the write + read round trip, exactly: pixels
+  CHECK(strstr(e.message, "no_such_file") != NULL);
+  /* ft_simulate_dng_storage is the write + read round trip, exactly: pixels
    * (edges, out of range), ppi over 1000, a usable noise profile */
   {
     ft_image s, r;
     int x;
-    ft_image_init(&s);
-    ft_image_init(&r);
-    CHECK(ft_image_alloc(&s, 37, 23, &e) == 0);
+    ft_init_image(&s);
+    ft_init_image(&r);
+    CHECK(ft_allocate_image(&s, 37, 23, &e) == 0);
     for(x = 0; x < 37 * 23 * 3; x++)
-      s.rgb[x] = (float)((x * 7919 % 10007) / 9000.0 - 0.05);
-    s.rgb[0] = 0.5f / 65535.0f;
-    s.rgb[1] = 1.0f - 0.4f / 65535.0f;
+      s.pixels[x] = (float)((x * 7919 % 10007) / 9000.0 - 0.05);
+    s.pixels[0] = 0.5f / 65535.0f;
+    s.pixels[1] = 1.0f - 0.4f / 65535.0f;
     s.ppi = 2449.87654321;
-    s.has_noise = 1;
-    for(x = 0; x < 6; x++) s.noise[x] = 1.234567891e-5 * (x + 1);
-    CHECK(ft_dng_write(path, &s, &e) == 0);
-    CHECK(ft_dng_read(path, &r, &e) == 0);
-    ft_dng_as_stored(&s);
-    CHECK(memcmp(s.rgb, r.rgb, sizeof(float) * 37 * 23 * 3) == 0);
+    s.has_noise_profile = 1;
+    for(x = 0; x < 6; x++) s.noise_profile[x] = 1.234567891e-5 * (x + 1);
+    CHECK(ft_write_dng(path, &s, &e) == 0);
+    CHECK(ft_read_dng(path, &r, &e) == 0);
+    ft_simulate_dng_storage(&s);
+    CHECK(memcmp(s.pixels, r.pixels, sizeof(float) * 37 * 23 * 3) == 0);
     CHECK(s.ppi == r.ppi && s.ppi != 2449.87654321);
-    CHECK(s.has_noise &&
-          r.has_noise &&
-          memcmp(s.noise, r.noise, sizeof s.noise) == 0);
-    s.noise[3] = 0; /* unusable: dropped by both */
-    CHECK(ft_dng_write(path, &s, &e) == 0);
-    ft_image_free(&r);
-    ft_image_init(&r);
-    CHECK(ft_dng_read(path, &r, &e) == 0);
-    ft_dng_as_stored(&s);
-    CHECK(!s.has_noise && !r.has_noise);
-    ft_image_free(&s);
-    ft_image_free(&r);
+    CHECK(s.has_noise_profile &&
+          r.has_noise_profile &&
+          memcmp(s.noise_profile, r.noise_profile, sizeof s.noise_profile) ==
+            0);
+    s.noise_profile[3] = 0; /* unusable: dropped by both */
+    CHECK(ft_write_dng(path, &s, &e) == 0);
+    ft_free_image(&r);
+    ft_init_image(&r);
+    CHECK(ft_read_dng(path, &r, &e) == 0);
+    ft_simulate_dng_storage(&s);
+    CHECK(!s.has_noise_profile && !r.has_noise_profile);
+    ft_free_image(&s);
+    ft_free_image(&r);
   }
   free(buf);
   free(bad);
-  ft_image_free(&a);
+  ft_free_image(&a);
   remove(path);
   return TEST_DONE();
 }

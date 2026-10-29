@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-/* ft_jpeg_encode against libjpeg-turbo: with ftdev's settings (defaults,
+/* ft_encode_jpeg against libjpeg-turbo: with ftdev's settings (defaults,
  * jpeg_set_quality(q, TRUE), optimised Huffman tables, 4:4:4, the
  * integer DCT) both write the same bytes. libjpeg is the oracle here
  * only; libft never links it. */
@@ -13,11 +13,12 @@
 /* clang-format off */
 #include <jpeglib.h>
 /* clang-format on */
+
 #include "ft_icc.h"
 #include "ft_jpeg.h"
 #include "test/ftest.h"
 
-/* libjpeg-turbo with the settings the old ft_jpeg_write used */
+/* libjpeg-turbo with the settings the old ft_write_jpeg used */
 static unsigned char* ref_encode(const unsigned char* rgb, int w, int h,
                                  int quality, double ppi,
                                  const unsigned char* icc, size_t icc_n,
@@ -90,8 +91,8 @@ static int same(const unsigned char* rgb, int w, int h, int q, double ppi,
   size_t mn = 0;
   ft_err e;
   int ok;
-  if(ft_jpeg_encode(rgb, w, h, q, ppi, icc, icc_n, com, &mine, &mn, &e)) {
-    fprintf(stderr, "ft_jpeg_encode: %s\n", e.msg);
+  if(ft_encode_jpeg(rgb, w, h, q, ppi, icc, icc_n, com, &mine, &mn, &e)) {
+    fprintf(stderr, "ft_encode_jpeg: %s\n", e.message);
     free(ref);
     return 0;
   }
@@ -111,8 +112,8 @@ int main(void) {
   static const int SZ[][2] = {{1, 1},   {8, 8},   {7, 9},
                               {17, 33}, {64, 48}, {257, 131}};
   static const int Q[] = {1, 10, 50, 75, 90, 95, 100};
-  unsigned char icc[FT_ICC_MAX], *big, *rgb;
-  size_t icc_n = ft_icc_build(FT_SPACE_SRGB, icc, sizeof icc);
+  unsigned char icc[FT_ICC_MAX_BYTES], *big, *rgb;
+  size_t icc_n = ft_build_icc_profile(FT_SPACE_SRGB, icc, sizeof icc);
   size_t s, q;
   int kind;
   ft_err e;
@@ -142,10 +143,10 @@ int main(void) {
   free(big);
 
   /* refusals */
-  CHECK(ft_jpeg_encode(rgb, 0, 5, 90, 0, NULL, 0, NULL, &out, &on, &e) == -1);
-  CHECK(strcmp(e.msg, "jpeg: bad size 0x5") == 0);
-  CHECK(ft_jpeg_encode(rgb, 5, 5, 101, 0, NULL, 0, NULL, &out, &on, &e) == -1);
-  CHECK(strcmp(e.msg, "jpeg: quality 101 (1..100)") == 0);
+  CHECK(ft_encode_jpeg(rgb, 0, 5, 90, 0, NULL, 0, NULL, &out, &on, &e) == -1);
+  CHECK(strcmp(e.message, "jpeg: bad size 0x5") == 0);
+  CHECK(ft_encode_jpeg(rgb, 5, 5, 101, 0, NULL, 0, NULL, &out, &on, &e) == -1);
+  CHECK(strcmp(e.message, "jpeg: quality 101 (1..100)") == 0);
   CHECK(out == NULL && on == 0);
   free(rgb);
   return TEST_DONE();

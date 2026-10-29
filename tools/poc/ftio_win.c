@@ -318,7 +318,8 @@ void io_catch_interrupt(volatile int* flag) {
   SetConsoleCtrlHandler(on_ctrl, TRUE);
 }
 
-DWORD io_ms(void) { return GetTickCount(); }
+DWORD
+io_ms(void) { return GetTickCount(); }
 
 void io_sleep(DWORD ms) { Sleep(ms); }
 

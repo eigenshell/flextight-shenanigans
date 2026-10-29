@@ -2,6 +2,8 @@
 #include "ft_out.h"
 
 #include <math.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -9,70 +11,92 @@
 #include "ft_output.h"
 #include "ft_png.h"
 
+/* the quick-look PNG's gamma */
+#define PREVIEW_GAMMA 2.2
+
 static const ft_writer WRITERS[] = {
-  {"dng", ".dng", "linear 16-bit DNG (darktable, RawTherapee, Lightroom)",
-   ft_dng_write},
-  {"png", ".png", "8-bit preview, gamma 2.2, not inverted",
-   ft_png_write_preview},
-  {"positive", "_positive.png",
-   "rendered positive, 16-bit sRGB PNG, soft gamut (needs --film)",
-   ft_png_write_positive},
-  {NULL, NULL, NULL, NULL},
+  {.name = "dng",
+   .extension = ".dng",
+   .description = "linear 16-bit DNG (darktable, RawTherapee, Lightroom)",
+   .write = ft_write_dng},
+  {.name = "png",
+   .extension = ".png",
+   .description = "8-bit preview, gamma 2.2, not inverted",
+   .write = ft_write_preview_png},
+  {.name = "positive",
+   .extension = "_positive.png",
+   .description =
+     "rendered positive, 16-bit sRGB PNG, soft gamut (needs --film)",
+   .write = ft_write_positive_png},
+  /* the end of the table */
+  {.name = NULL, .extension = NULL, .description = NULL, .write = NULL},
 };
 
-const ft_writer* ft_writers(void) { return WRITERS; }
+const ft_writer* ft_get_writers(void) { return WRITERS; }
 
-const ft_writer* ft_writer_find(const char* name) {
-  const ft_writer* w;
-  for(w = WRITERS; w->name; w++)
-    if(strcmp(w->name, name) == 0) return w;
+const ft_writer* ft_find_writer(const char* name) {
+  for(const ft_writer* writer = WRITERS; writer->name != NULL; writer++) {
+    if(strcmp(writer->name, name) == 0) return writer;
+  }
   return NULL;
 }
 
-int ft_png_write_preview(const char* path, const ft_image* im, ft_err* e) {
-  size_t n, i;
-  unsigned char* rgb;
-  int rc;
-  if(!im->rgb || im->w < 1 || im->h < 1) return ft_fail(e, "png: empty image");
-  n = (size_t)im->w * im->h * 3;
-  rgb = malloc(n);
-  if(!rgb) return ft_fail(e, "png: out of memory");
-  for(i = 0; i < n; i++) {
-    float v = im->rgb[i];
-    v = v <= 0 ? 0 : v >= 1 ? 1 : (float)pow(v, 1 / 2.2);
-    rgb[i] = (unsigned char)(v * 255 + 0.5f);
+int32_t ft_write_preview_png(const char* path, const ft_image* image,
+                             ft_err* error) {
+  if(image->pixels == NULL || image->width < 1 || image->height < 1) {
+    return ft_fail(error, "png: empty image");
   }
-  rc = ft_png_write_rgb8(path, rgb, im->w, im->h, e);
-  free(rgb);
-  return rc;
+  size_t value_count = (size_t)image->width * image->height * 3;
+  uint8_t* bytes = malloc(value_count);
+  if(bytes == NULL) return ft_fail(error, "png: out of memory");
+  for(size_t index = 0; index < value_count; index++) {
+    float value = image->pixels[index];
+    if(value <= 0) {
+      value = 0;
+    } else if(value >= 1) {
+      value = 1;
+    } else {
+      value = (float)pow(value, 1 / PREVIEW_GAMMA);
+    }
+    /* + 0.5 rounds to the nearest of 0..255 */
+    bytes[index] = (uint8_t)(value * 255 + 0.5f);
+  }
+  int32_t result =
+    ft_write_png_rgb8(path, bytes, image->width, image->height, error);
+  free(bytes);
+  return result;
 }
 
-int ft_png_write_positive(const char* path, const ft_image* im, ft_err* e) {
-  size_t n, i, row;
-  unsigned short* o = NULL;
-  float* enc = NULL;
-  ft_output* out;
-  int rc = -1;
-  if(!im->rgb || im->w < 1 || im->h < 1)
-    return ft_fail(e, "positive: empty image");
-  n = (size_t)im->w * im->h;
-  row = (size_t)im->w;
-  out = malloc(sizeof *out); /* ~330 KB of tables */
-  if(out) o = malloc(n * 3 * sizeof *o);
-  if(o) enc = malloc(row * 3 * sizeof *enc);
-  if(!enc) {
-    ft_fail(e, "positive: out of memory");
-    goto done;
+int32_t ft_write_positive_png(const char* path, const ft_image* image,
+                              ft_err* error) {
+  if(image->pixels == NULL || image->width < 1 || image->height < 1) {
+    return ft_fail(error, "positive: empty image");
   }
-  if(ft_output_compile(FT_SPACE_SRGB, FT_GAMUT_SOFT, out, e)) goto done;
-  for(i = 0; i < n; i += row) {
-    ft_output_apply(out, im->rgb + 3 * i, enc, row);
-    ft_output_quantise16(enc, o + 3 * i, row);
+  size_t pixel_count = (size_t)image->width * image->height;
+  size_t row_pixels = image->width;
+  int32_t result = -1;
+  /* ~330 KB of tables: too big for the stack */
+  ft_output* output = malloc(sizeof *output);
+  uint16_t* quantised = malloc(pixel_count * 3 * sizeof *quantised);
+  float* encoded = malloc(row_pixels * 3 * sizeof *encoded);
+  if(output == NULL || quantised == NULL || encoded == NULL) {
+    ft_fail(error, "positive: out of memory");
+    goto cleanup;
   }
-  rc = ft_png_write_rgb16(path, o, im->w, im->h, e);
-done:
-  free(enc);
-  free(o);
-  free(out);
-  return rc;
+  if(ft_compile_output(FT_SPACE_SRGB, FT_GAMUT_SOFT, output, error) != 0) {
+    goto cleanup;
+  }
+  /* one row at a time through the output stage */
+  for(size_t start = 0; start < pixel_count; start += row_pixels) {
+    ft_apply_output(output, image->pixels + 3 * start, encoded, row_pixels);
+    ft_quantise_output16(encoded, quantised + 3 * start, row_pixels);
+  }
+  result =
+    ft_write_png_rgb16(path, quantised, image->width, image->height, error);
+
+cleanup:
+  free(encoded);
+  free(quantised);
+  free(output);
+  return result;
 }

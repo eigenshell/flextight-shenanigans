@@ -12,6 +12,7 @@
  * becomes the roll's. The ratio is the stock's dye-layer balance: one frame's
  * estimate follows its scene, the median over frames (and rolls) does not.
  */
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,8 +46,8 @@ static int measure(const char* dng, double ratio[3]) {
   ft_err e;
   int rc = 1, c;
 
-  ft_image_init(&im);
-  ft_image_init(&cut);
+  ft_init_image(&im);
+  ft_init_image(&cut);
   if(snprintf(path, sizeof path, "%s.txt", dng) >= (int)sizeof path) {
     fprintf(stderr, "ftdev: path too long: %.60s...\n", dng);
     return 2;
@@ -59,8 +60,8 @@ static int measure(const char* dng, double ratio[3]) {
             dng, path);
     return 2;
   }
-  if(ft_share_sidecar_parse(side, (size_t)n, &sc, &e)) {
-    fprintf(stderr, "ftdev: %s: %s\n", path, e.msg);
+  if(ft_parse_share_sidecar(side, (size_t)n, &sc, &e)) {
+    fprintf(stderr, "ftdev: %s: %s\n", path, e.message);
     free(side);
     return 2;
   }
@@ -72,37 +73,37 @@ static int measure(const char* dng, double ratio[3]) {
             dng);
     return 2;
   }
-  if(ft_dng_read(dng, &im, &e) || ft_image_crop(&im, sc.box, &cut, &e)) {
-    fprintf(stderr, "ftdev: %s: %s\n", dng, e.msg);
+  if(ft_read_dng(dng, &im, &e) || ft_crop_image(&im, sc.box, &cut, &e)) {
+    fprintf(stderr, "ftdev: %s: %s\n", dng, e.message);
     goto out;
   }
   /* measured as export estimates: after the frame's noise reduction */
   {
     ft_taste t;
     ft_look_detail d;
-    ft_edit_taste(&g_roll, sc.frame, &t, NULL);
-    ft_look_detail_of(&t, &d);
+    ft_get_frame_taste(&g_roll, sc.frame, &t, NULL);
+    ft_get_look_detail(&t, &d);
     if(ftdev_denoise(&im, &sc, &cut, &d)) goto out;
   }
-  for(c = 0; c < 3; c++) base[c] = (float)sc.film_base[c];
+  for(c = 0; c < 3; c++) base[c] = (float)sc.film_base_density[c];
   if(!sc.has_film_base)
     fprintf(stderr,
             "ftdev: note: %s: no film_base; estimated from the "
             "frame itself\n",
             dng);
   one[0] = &cut;
-  if(ft_look_recipe(NULL, NULL, FT_RENDER_NEG, sc.has_film_base ? base : NULL,
-                    one, 1, &r, &e)) {
-    fprintf(stderr, "ftdev: %s: %s\n", dng, e.msg);
+  if(ft_resolve_recipe(NULL, NULL, FT_RENDER_NEGATIVE,
+                       sc.has_film_base ? base : NULL, one, 1, &r, &e)) {
+    fprintf(stderr, "ftdev: %s: %s\n", dng, e.message);
     goto out;
   }
-  for(c = 0; c < 3; c++) ratio[c] = r.range[c] / r.range[1];
+  for(c = 0; c < 3; c++) ratio[c] = r.range_density[c] / r.range_density[1];
   printf("%s: frame %d: r/g %.3f, b/g %.3f\n", dng, sc.frame, ratio[0],
          ratio[2]);
   rc = 0;
 out:
-  ft_image_free(&im);
-  ft_image_free(&cut);
+  ft_free_image(&im);
+  ft_free_image(&cut);
   return rc;
 }
 
@@ -112,8 +113,8 @@ static int load(const char* path, ft_look_kind k, ft_edit* ed) {
   char* txt = ftdev_load(path, &n);
   ft_err e;
   if(!txt) return 1;
-  if(ft_edit_parse(txt, (size_t)n, k, ed, &e)) {
-    fprintf(stderr, "ftdev: %s: %s\n", path, e.msg);
+  if(ft_parse_edit(txt, (size_t)n, k, ed, &e)) {
+    fprintf(stderr, "ftdev: %s: %s\n", path, e.message);
     free(txt);
     return 2;
   }
@@ -166,30 +167,30 @@ int ftdev_stock(int argc, char** argv) {
   if(!replace) {
     r = load(outp, FT_LOOK_FILE, &g_look);
     if(r == 2) return 2;
-    if(r == 0 && g_look.stock.present) {
+    if(r == 0 && g_look.stock.is_present) {
       old = g_look.stock;
       has_old = 1;
     }
   }
-  if(!has_old && g_roll.stock.present) {
+  if(!has_old && g_roll.stock.is_present) {
     old = g_roll.stock;
     old.has_ratio = 0;
-    old.n_frames = 0;
+    old.frame_count = 0;
     has_old = 1;
   }
   for(i = 0; i < ndng; i++) {
     r = measure(dngs[i], ratio[i]);
     if(r) return r;
   }
-  if(ft_stock_learn((const double (*)[3])ratio, ndng, has_old ? &old : NULL,
+  if(ft_learn_stock((const double (*)[3])ratio, ndng, has_old ? &old : NULL,
                     &learned, &spread, &e)) {
-    fprintf(stderr, "ftdev: %s\n", e.msg);
+    fprintf(stderr, "ftdev: %s\n", e.message);
     return 1;
   }
-  ft_edit_init(&g_look);
+  ft_init_edit(&g_look);
   g_look.stock = learned;
   g_look.taste = g_roll.taste;
-  len = ft_edit_write(&g_look, FT_LOOK_FILE, g_text, sizeof g_text);
+  len = ft_format_edit(&g_look, FT_LOOK_FILE, g_text, sizeof g_text);
   if(len >= sizeof g_text) {
     fprintf(stderr, "ftdev: look text too long\n");
     return 1;
@@ -204,11 +205,11 @@ int ftdev_stock(int argc, char** argv) {
     fprintf(stderr, "ftdev: cannot write %s\n", outp);
     return 1;
   }
-  printf(
-    "%s: range_ratio %.3f 1 %.3f from %ld frames (this roll: %d, "
-    "spread %.3f)\n",
-    outp, learned.range_ratio[0], learned.range_ratio[2], learned.n_frames,
-    ndng, spread);
+  printf("%s: range_ratio %.3f 1 %.3f from %" PRId64
+         " frames (this roll: %d, "
+         "spread %.3f)\n",
+         outp, learned.range_ratio[0], learned.range_ratio[2],
+         learned.frame_count, ndng, spread);
   if(spread > SPREAD_WARN)
     fprintf(stderr,
             "ftdev: warning: the frames disagree (spread %.3f > "

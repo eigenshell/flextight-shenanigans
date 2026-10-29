@@ -21,7 +21,7 @@ static void lab_d50(const double xyz65[3], cmsCIELab* lab) {
   double a[9], v[3];
   cmsCIEXYZ x;
   int i;
-  ft_icc_bradford(a);
+  ft_get_bradford_matrix(a);
   for(i = 0; i < 3; i++)
     v[i] =
       a[3 * i] * xyz65[0] + a[3 * i + 1] * xyz65[1] + a[3 * i + 2] * xyz65[2];
@@ -34,13 +34,13 @@ static void lab_d50(const double xyz65[3], cmsCIELab* lab) {
 int main(void) {
   static const size_t SIZES[4] = {2524, 2532, 492, 2540};
   static ft_output o;
-  unsigned char p[FT_ICC_MAX], q[FT_ICC_MAX];
+  unsigned char p[FT_ICC_MAX_BYTES], q[FT_ICC_MAX_BYTES];
   double a[9];
   ft_err e;
   int sp, i, k;
 
   /* Bradford D65 -> D50 maps the white to D50 (ICC's 0.9642 1 0.8249) */
-  ft_icc_bradford(a);
+  ft_get_bradford_matrix(a);
   {
     double w[3] = {0.3127 / 0.3290, 1, (1 - 0.3127 - 0.3290) / 0.3290};
     double d[3] = {0.9642, 1.0, 0.8249};
@@ -48,16 +48,16 @@ int main(void) {
       CHECK_NEAR(a[3 * i] * w[0] + a[3 * i + 1] * w[1] + a[3 * i + 2] * w[2],
                  d[i], 1e-9);
   }
-  CHECK(ft_icc_build(FT_SPACE_SRGB, p, 100) == 0); /* too small */
-  CHECK(ft_icc_build((ft_space)9, p, sizeof p) == 0);
+  CHECK(ft_build_icc_profile(FT_SPACE_SRGB, p, 100) == 0); /* too small */
+  CHECK(ft_build_icc_profile((ft_space)9, p, sizeof p) == 0);
 
   for(sp = 0; sp < 4; sp++) {
-    size_t n = ft_icc_build((ft_space)sp, p, sizeof p);
+    size_t n = ft_build_icc_profile((ft_space)sp, p, sizeof p);
     cmsHPROFILE prof, lab;
     cmsHTRANSFORM tr;
     char name[100];
     double worst = 0;
-    CHECK(n > 128 && n <= FT_ICC_MAX && n % 4 == 0);
+    CHECK(n > 128 && n <= FT_ICC_MAX_BYTES && n % 4 == 0);
     /* header: size, v2.1, mntr RGB -> XYZ, acsp, D50 */
     CHECK(rd32(p) == n && rd32(p + 8) == 0x02100000UL);
     CHECK(memcmp(p + 12, "mntrRGB XYZ ", 12) == 0);
@@ -67,7 +67,8 @@ int main(void) {
           rd32(p + 76) == 0xD32D);
     CHECK(rd32(p + 128) == 9);
     /* the same bytes every time */
-    CHECK(ft_icc_build((ft_space)sp, q, sizeof q) == n && memcmp(p, q, n) == 0);
+    CHECK(ft_build_icc_profile((ft_space)sp, q, sizeof q) == n &&
+          memcmp(p, q, n) == 0);
     /* 240 (header, tag table) + desc + cprt 36 + 4 XYZ 80 + curv:
      * sRGB 108 + 2060 = 2524; Adobe RGB 120 + 16 = 492 */
     CHECK(n == SIZES[sp]);
@@ -79,12 +80,12 @@ int main(void) {
     CHECK(cmsIsMatrixShaper(prof));
     cmsGetProfileInfoASCII(prof, cmsInfoDescription, "en", "US", name,
                            sizeof name);
-    CHECK(strstr(name, ft_space_what((ft_space)sp)) != NULL);
+    CHECK(strstr(name, ft_describe_space((ft_space)sp)) != NULL);
     CHECK(strstr(name, "(flextight)") != NULL);
 
     /* our encoding, decoded by lcms through our profile, lands where
      * the colour is: dE2000 < 0.1 on in-gamut colours */
-    CHECK(ft_output_compile((ft_space)sp, FT_GAMUT_CLIP, &o, &e) == 0);
+    CHECK(ft_compile_output((ft_space)sp, FT_GAMUT_CLIP, &o, &e) == 0);
     lab = cmsCreateLab4Profile(NULL);
     tr = cmsCreateTransform(prof, TYPE_RGB_16, lab, TYPE_Lab_DBL,
                             INTENT_RELATIVE_COLORIMETRIC, 0);
@@ -99,15 +100,15 @@ int main(void) {
       for(k = 0; k < 3; k++) t[k] = (float)(rand() / (RAND_MAX + 1.0));
       {
         double inv[9], m[9];
-        for(k = 0; k < 9; k++) m[k] = o.m[k];
-        ft_mat3_inv(m, inv);
+        for(k = 0; k < 9; k++) m[k] = o.rec2020_to_target[k];
+        ft_invert_matrix3(m, inv);
         for(k = 0; k < 3; k++)
           in[k] = (float)(inv[3 * k] * t[0] +
                           inv[3 * k + 1] * t[1] +
                           inv[3 * k + 2] * t[2]);
       }
-      ft_output_apply(&o, in, enc, 1);
-      ft_output_quantise16(enc, px, 1);
+      ft_apply_output(&o, in, enc, 1);
+      ft_quantise_output16(enc, px, 1);
       cmsDoTransform(tr, px, &got, 1);
       for(k = 0; k < 3; k++)
         xyz[k] = o.to_xyz[3 * k] * t[0] +
@@ -125,7 +126,7 @@ int main(void) {
 
   /* our sRGB agrees with lcms's own sRGB */
   {
-    size_t n = ft_icc_build(FT_SPACE_SRGB, p, sizeof p);
+    size_t n = ft_build_icc_profile(FT_SPACE_SRGB, p, sizeof p);
     cmsHPROFILE ours = cmsOpenProfileFromMem(p, (cmsUInt32Number)n);
     cmsHPROFILE theirs = cmsCreate_sRGBProfile();
     cmsHPROFILE lab = cmsCreateLab4Profile(NULL);

@@ -2,7 +2,7 @@
 """MICROCOD.3XX upload: wire bytes and flow, no hardware.
 
 Every CDB/header literal below was produced by compiling and running the C
-reference (libft ft_upload_chunk / ft_upload_trailer, hardware-proven and
+reference (libft ft_build_upload_chunk / ft_build_upload_trailer, hardware-proven and
 matching the FlexColor session 2/3 SRBs), not by the Python under test:
 
     chunk  i len 4106 cdb 3b010000000000100a00 hdr 01 3i 0000000000000000

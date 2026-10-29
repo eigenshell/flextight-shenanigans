@@ -13,7 +13,7 @@ static void run(void* arg) {
       continue;
     }
     t0 = ring_ms();
-    if(!w->failed && ft_detail_line(w->d, line, &w->e)) {
+    if(!w->failed && ft_add_detail_line(w->d, line, &w->e)) {
       w->failed = 1;
       ring_fail(w->r); /* the reader stops the scan */
     }

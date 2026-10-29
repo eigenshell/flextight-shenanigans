@@ -2,45 +2,61 @@
 /* The classic modules: today's render core (ft_render, ft_render_auto) as
  * print modules. An all-classic chain gives exactly ftdev export's recipe
  * without overrides. */
+#include <stddef.h>
 #include <string.h>
 
 #include "ft_pm.h"
 #include "ft_render_auto.h"
 
-static void film_range(const void* par, const ft_print_roll* roll,
-                       const ft_print_frame* fr, ft_recipe* r) {
-  (void)par;
+/* the frame's own auto range */
+static void set_frame_range(const void* parameters, const ft_print_roll* roll,
+                            const ft_print_frame* frame, ft_recipe* recipe) {
+  (void)parameters;
   (void)roll;
-  memcpy(r->range, fr->range, sizeof r->range);
+  memcpy(recipe->range_density, frame->range_density,
+         sizeof recipe->range_density);
 }
 
-const ft_pm_film ft_pm_film_classic = {"classic", NULL, film_range};
+const ft_film_module ft_film_module_classic = {
+  .name = "classic", .measure_roll = NULL, .set_range = set_frame_range};
 
-static void balance_frame(const void* par, const ft_print_roll* roll,
-                          const ft_print_frame* fr, const ft_recipe* r,
-                          ft_print_auto* a) {
-  (void)par;
+/* the auto exposure (highlight at paper white), no tint */
+static void set_classic_balance(const void* parameters,
+                                const ft_print_roll* roll,
+                                const ft_print_frame* frame,
+                                const ft_recipe* recipe,
+                                ft_print_auto* automatic) {
+  (void)parameters;
   (void)roll;
-  (void)fr;
-  memset(a, 0, sizeof *a);
-  if(r->mode != FT_RENDER_SLIDE) a->exposure = ft_render_auto_exposure(r);
+  (void)frame;
+  memset(automatic, 0, sizeof *automatic);
+  if(recipe->mode != FT_RENDER_SLIDE) {
+    automatic->exposure = ft_estimate_auto_exposure(recipe);
+  }
 }
 
-const ft_pm_balance ft_pm_balance_classic = {"classic", NULL, NULL,
-                                             balance_frame};
+const ft_balance_module ft_balance_module_classic = {
+  .name = "classic",
+  .measure = NULL,
+  .measure_roll = NULL,
+  .set_frame = set_classic_balance};
 
-static void paper(const void* par, ft_recipe* r) {
-  const ft_pm_paper_par* p = par;
-  if(!p) return;
-  r->grade = p->grade;
-  r->paper_black = p->black;
-  r->paper_white = p->white;
+static void set_paper(const void* parameters, ft_recipe* recipe) {
+  const ft_paper_parameters* paper = parameters;
+  if(paper == NULL) return;
+  recipe->grade = paper->grade;
+  recipe->paper_black = paper->black;
+  recipe->paper_white = paper->white;
 }
 
-const ft_pm_print ft_pm_print_classic = {"classic", paper, NULL};
+const ft_print_module ft_print_module_classic = {
+  .name = "classic", .set_recipe = set_paper, .compile = NULL};
 
-static void output(const void* par, ft_recipe* r) {
-  if(par) memcpy(r->matrix, par, sizeof r->matrix);
+static void set_matrix(const void* parameters, ft_recipe* recipe) {
+  if(parameters != NULL) {
+    memcpy(recipe->matrix, parameters, sizeof recipe->matrix);
+  }
 }
 
-const ft_pm_output ft_pm_output_classic = {"classic", output};
+const ft_output_module ft_output_module_classic = {.name = "classic",
+                                                   .set_recipe = set_matrix};

@@ -79,7 +79,7 @@ int main(void) {
   for(lvl = 0; lvl < 8; lvl++) {
     double t = 0.001 * pow(1000, lvl / 7.0), m = 0, m2 = 0;
     for(i = 0; i < NZ; i++) z[i] = (float)pg(t);
-    ft_nr_vst(z, NZ, S, O, zi);
+    ft_stabilise_variance(z, NZ, S, O, zi);
     for(i = 0; i < NZ; i++) {
       m += zi[i];
       m2 += (double)zi[i] * zi[i];
@@ -100,10 +100,10 @@ int main(void) {
       my += z[i];
     }
     my /= NZ; /* the sample's own mean T */
-    ft_nr_vst(z, NZ, S, O, zi);
+    ft_stabilise_variance(z, NZ, S, O, zi);
     for(i = 0; i < NZ; i++) m += zi[i];
     mz = (float)(m / NZ);
-    ft_nr_vst_inv(&mz, 1, S, O, &back);
+    ft_unstabilise_variance(&mz, 1, S, O, &back);
     CHECK_NEAR(back, my, 0.002 * my);
     if(lvl == 0) {
       double alg = (S * mz / 2) * (S * mz / 2) / S - 0.375 * S - O / S;
@@ -123,7 +123,7 @@ int main(void) {
       }
     }
   memcpy(out, noisy, sizeof out);
-  ft_nr_sensor(out, W, H, prof, 1, 2, scratch);
+  ft_reduce_sensor_noise(out, W, H, prof, 1, 2, scratch);
   {
     double en = 0, ed = 0;
     for(i = 0; i < W * H * 3; i++) {
@@ -147,7 +147,7 @@ int main(void) {
     CHECK((rd[1] + rd[2]) / (rn[1] + rn[2]) < 0.8 * rd[0] / rn[0]);
   }
   memcpy(out, noisy, sizeof out);
-  ft_nr_sensor(out, W, H, prof, 0, 0, scratch);
+  ft_reduce_sensor_noise(out, W, H, prof, 0, 0, scratch);
   CHECK(memcmp(out, noisy, sizeof out) == 0);
 
   /* a dense flat patch (T 0.002, 10 counts) keeps its mean within 0.2 %
@@ -156,7 +156,7 @@ int main(void) {
     double mn = 0, mo = 0;
     for(i = 0; i < W * H * 3; i++) noisy[i] = (float)pg(0.002);
     memcpy(out, noisy, sizeof out);
-    ft_nr_sensor(out, W, H, prof, 1, 2, scratch);
+    ft_reduce_sensor_noise(out, W, H, prof, 1, 2, scratch);
     for(i = 0; i < W * H * 3; i++) {
       mn += noisy[i];
       mo += out[i];
@@ -171,7 +171,7 @@ int main(void) {
       for(c = 0; c < 3; c++)
         noisy[3 * (y * W + x) + c] =
           (float)((x < W / 2 ? 0.2 : 0.6) + 0.01 * gauss());
-  ft_nr_estimate(noisy, W, H, prof, scratch);
+  ft_estimate_noise_profile(noisy, W, H, prof, scratch);
   for(c = 0; c < 3; c++) {
     CHECK(prof[2 * c] == 0);
     CHECK_NEAR(prof[2 * c + 1], 1e-4, 1e-5);
@@ -189,12 +189,12 @@ int main(void) {
           double d = 0.5 + 0.3 * x / W + (x > W / 2 ? 0.8 : 0) + sg * gauss();
           noisy[3 * (y * W + x) + c] = (float)pow(10, -(d + base[c]));
         }
-    CHECK_NEAR(ft_nr_grain_sigma(noisy, W, H, scratch), sg, 0.1 * sg);
+    CHECK_NEAR(ft_measure_grain_sigma(noisy, W, H, scratch), sg, 0.1 * sg);
     memcpy(out, noisy, sizeof out);
-    ft_nr_grain(out, W, H, 0, scratch);
+    ft_reduce_grain(out, W, H, 0, scratch);
     CHECK(memcmp(out, noisy, sizeof out) == 0);
     memcpy(out, noisy, sizeof out);
-    ft_nr_grain(out, W, H, 2, scratch);
+    ft_reduce_grain(out, W, H, 2, scratch);
     for(y = 20; y < 100; y++)
       for(x = 20; x < 100; x++) {
         size_t at = 3 * (size_t)(y * W + x) + 1;

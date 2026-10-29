@@ -27,7 +27,7 @@ static void grey(float* im, int x, int y, double v) {
 int main(void) {
   int i, x, y;
 
-  CHECK(ft_sharpen_scratch_bytes(W, H) <= sizeof scratch);
+  CHECK(ft_get_sharpen_scratch_bytes(W, H) <= sizeof scratch);
 
   /* amount 0: untouched */
   for(i = 0; i < W * H * 3; i++) in[i] = (float)(0.1 + 0.05 * urand());

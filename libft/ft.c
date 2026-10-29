@@ -2,14 +2,17 @@
 #include "ft.h"
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 
-int ft_fail(ft_err* e, const char* fmt, ...) {
-  va_list ap;
-  if(e) {
-    va_start(ap, fmt);
-    vsnprintf(e->msg, sizeof e->msg, fmt, ap);
-    va_end(ap);
+int32_t ft_fail(ft_err* error, const char* format, ...) {
+  if(error != NULL) {
+    /* va_list walks the "..." values; vsnprintf formats them like
+     * snprintf and never writes past the end of message */
+    va_list values;
+    va_start(values, format);
+    vsnprintf(error->message, sizeof error->message, format, values);
+    va_end(values);
   }
   return -1;
 }

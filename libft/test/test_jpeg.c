@@ -10,6 +10,7 @@
 /* clang-format off */
 #include <jpeglib.h>
 /* clang-format on */
+
 #include "ft_icc.h"
 #include "ft_jpeg.h"
 #include "test/ftest.h"
@@ -18,7 +19,7 @@ enum { W = 320, H = 200 };
 
 int main(void) {
   static unsigned char rgb[W * H * 3], back[W * H * 3];
-  unsigned char icc[FT_ICC_MAX];
+  unsigned char icc[FT_ICC_MAX_BYTES];
   const char* path = "test/jpeg_test_out.jpg";
   size_t n;
   ft_err e;
@@ -40,9 +41,9 @@ int main(void) {
         p[2] = 40;
       }
     }
-  n = ft_icc_build(FT_SPACE_DISPLAY_P3, icc, sizeof icc);
+  n = ft_build_icc_profile(FT_SPACE_DISPLAY_P3, icc, sizeof icc);
   CHECK(n > 0);
-  CHECK(ft_jpeg_write(path, rgb, W, H, FT_JPEG_QUALITY, 1411.2, icc, n,
+  CHECK(ft_write_jpeg(path, rgb, W, H, FT_JPEG_QUALITY, 1411.2, icc, n,
                       "look=hp5\ngrade=2\n", &e) == 0);
 
   {
@@ -106,7 +107,7 @@ int main(void) {
     }
 
   /* no profile, no density */
-  CHECK(ft_jpeg_write(path, rgb, W, H, 75, 0, NULL, 0, NULL, &e) == 0);
+  CHECK(ft_write_jpeg(path, rgb, W, H, 75, 0, NULL, 0, NULL, &e) == 0);
   {
     /* no comment: no COM marker */
     long fn = 0;
@@ -123,11 +124,11 @@ int main(void) {
     free(all);
   }
   /* refusals */
-  CHECK(ft_jpeg_write(path, rgb, W, H, 0, 0, NULL, 0, NULL, &e) == -1);
-  CHECK(ft_jpeg_write(path, rgb, 0, H, 90, 0, NULL, 0, NULL, &e) == -1);
-  CHECK(ft_jpeg_write("test/no_such_dir/x.jpg", rgb, W, H, 90, 0, NULL, 0, NULL,
+  CHECK(ft_write_jpeg(path, rgb, W, H, 0, 0, NULL, 0, NULL, &e) == -1);
+  CHECK(ft_write_jpeg(path, rgb, 0, H, 90, 0, NULL, 0, NULL, &e) == -1);
+  CHECK(ft_write_jpeg("test/no_such_dir/x.jpg", rgb, W, H, 90, 0, NULL, 0, NULL,
                       &e) == -1);
-  CHECK(strstr(e.msg, "no_such_dir") != NULL);
+  CHECK(strstr(e.message, "no_such_dir") != NULL);
   remove(path);
   return TEST_DONE();
 }

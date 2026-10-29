@@ -18,18 +18,50 @@
  * coefficients: memory stays one block row. */
 #include "ft_jpeg.h"
 
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+/* the largest image side baseline JPEG allows here */
+#define MAX_SIDE 65500
+/* the most profile bytes one APP2 marker carries, and the most markers */
+#define ICC_CHUNK_BYTES 65519
+#define ICC_MAX_CHUNKS 255
+/* the output buffer starts this big and doubles when full */
+#define FIRST_CAPACITY_BYTES 4096
+
+/* the JPEG markers we write */
+enum {
+  MARKER_SOI = 0xD8,
+  MARKER_EOI = 0xD9,
+  MARKER_APP0 = 0xE0,
+  MARKER_APP2 = 0xE2,
+  MARKER_COM = 0xFE,
+  MARKER_DQT = 0xDB,
+  MARKER_SOF0 = 0xC0,
+  MARKER_DHT = 0xC4,
+  MARKER_SOS = 0xDA
+};
+
+/* the colour components, in the order they are coded */
+enum { COMPONENT_Y, COMPONENT_CB, COMPONENT_CR };
+/* the two kinds of Huffman table */
+enum { TABLE_DC, TABLE_AC };
+/* the AC symbols for "16 zeros" and "the rest of the block is zero" */
+#define SYMBOL_ZERO_RUN 0xF0
+#define SYMBOL_END_OF_BLOCK 0x00
+
 /* zigzag position -> natural (row-major) index */
-static const unsigned char ZZ[64] = {
+static const uint8_t ZIGZAG[64] = {
   0,  1,  8,  16, 9,  2,  3,  10, 17, 24, 32, 25, 18, 11, 4,  5,
   12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6,  7,  14, 21, 28,
   35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
   58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63};
 
-/* T.81 Annex K tables, natural order */
-static const unsigned char QBASE[2][64] = {
+/* T.81 Annex K quantisation tables, natural order: luminance, then
+ * chrominance */
+static const uint8_t BASE_QUANTISATION[2][64] = {
   {16, 11, 10, 16, 24,  40,  51,  61,  12, 12, 14, 19, 26,  58,  60,  55,
    14, 13, 16, 24, 40,  57,  69,  56,  14, 17, 22, 29, 51,  87,  80,  62,
    18, 22, 37, 56, 68,  109, 103, 77,  24, 35, 55, 64, 81,  104, 113, 92,
@@ -39,430 +71,610 @@ static const unsigned char QBASE[2][64] = {
    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99}};
 
-typedef struct {
-  unsigned char* b;
-  size_t n, cap;
-  int oom;
-  unsigned long acc; /* pending bits, low nacc bits */
-  int nacc;
-} wbuf;
+/* The JPEG being written, and its bit writer. */
+typedef struct output_buffer {
+  uint8_t* bytes;
+  size_t length;
+  size_t capacity;
+  /* a realloc failed: everything after is dropped */
+  bool is_out_of_memory;
+  /* bits not yet written out: the low pending_bit_count bits */
+  uint32_t pending_bits;
+  uint32_t pending_bit_count;
+} output_buffer;
 
-/* one Huffman table: lengths and values as written, codes derived */
-typedef struct {
-  unsigned char bits[17]; /* bits[1..16]: codes per length */
-  unsigned char val[256];
-  unsigned short code[256];
-  unsigned char size[256]; /* 0: no code */
-} htab;
+/* One Huffman table: the lengths and values as written, and the codes
+ * derived from them. */
+typedef struct huffman_table {
+  /* counts[1..16]: how many codes have that many bits */
+  uint8_t counts[17];
+  /* the symbols, shortest code first */
+  uint8_t values[256];
+  /* each symbol's code and its length in bits; length 0 = no code */
+  uint16_t codes[256];
+  uint8_t code_lengths[256];
+} huffman_table;
 
-typedef struct {
-  int q[2][64];         /* natural order, table values */
-  long freq[2][2][257]; /* [dc/ac][table][symbol] */
-  htab h[2][2];
-} enc;
+/* The encoder's state. */
+typedef struct encoder {
+  /* the quantisation tables, natural order: luminance, chrominance */
+  int32_t quantisation[2][64];
+  /* symbol counts from the first pass: [DC or AC][table][symbol] */
+  int64_t frequencies[2][2][257];
+  /* the tables built from them: [DC or AC][table] */
+  huffman_table tables[2][2];
+} encoder;
 
-static void put(wbuf* w, const void* p, size_t n) {
-  if(w->oom) return;
-  if(w->n + n > w->cap) {
-    size_t c = w->cap ? w->cap : 4096;
-    unsigned char* nb;
-    while(c < w->n + n) c *= 2;
-    nb = realloc(w->b, c);
-    if(!nb) {
-      w->oom = 1;
+static void append_bytes(output_buffer* out, const void* bytes, size_t length) {
+  if(out->is_out_of_memory) return;
+  if(out->length + length > out->capacity) {
+    size_t capacity = out->capacity > 0 ? out->capacity : FIRST_CAPACITY_BYTES;
+    while(capacity < out->length + length) capacity *= 2;
+    uint8_t* bigger = realloc(out->bytes, capacity);
+    if(bigger == NULL) {
+      out->is_out_of_memory = true;
       return;
     }
-    w->b = nb;
-    w->cap = c;
+    out->bytes = bigger;
+    out->capacity = capacity;
   }
-  memcpy(w->b + w->n, p, n);
-  w->n += n;
+  memcpy(out->bytes + out->length, bytes, length);
+  out->length += length;
 }
 
-static void byte(wbuf* w, int v) {
-  unsigned char c = (unsigned char)v;
-  put(w, &c, 1);
+static void append_byte(output_buffer* out, uint32_t value) {
+  uint8_t byte = (uint8_t)value;
+  append_bytes(out, &byte, 1);
 }
 
-static void word(wbuf* w, int v) {
-  byte(w, v >> 8);
-  byte(w, v & 255);
+/* a 16-bit number, big endian */
+static void append_word(output_buffer* out, uint32_t value) {
+  append_byte(out, value >> 8);
+  append_byte(out, value & 255);
 }
 
-/* entropy-coded bits, MSB first, a 0 after every 0xFF byte */
-static void bits(wbuf* w, unsigned v, int n) {
-  w->acc = (w->acc << n) | (v & ((1UL << n) - 1));
-  w->nacc += n;
-  while(w->nacc >= 8) {
-    int c = (int)((w->acc >> (w->nacc - 8)) & 255);
-    w->nacc -= 8;
-    byte(w, c);
-    if(c == 255) byte(w, 0);
+/* Append bit_count bits of value to the entropy-coded data, most
+ * significant first. A 0 byte follows every 0xFF byte (byte stuffing),
+ * so the data never looks like a marker. */
+static void append_bits(output_buffer* out, uint32_t value,
+                        uint32_t bit_count) {
+  /* keep only bit_count bits of value, then add them below the pending
+   * ones */
+  out->pending_bits =
+    (out->pending_bits << bit_count) | (value & ((1u << bit_count) - 1));
+  out->pending_bit_count += bit_count;
+  while(out->pending_bit_count >= 8) {
+    uint32_t byte = (out->pending_bits >> (out->pending_bit_count - 8)) & 255;
+    out->pending_bit_count -= 8;
+    append_byte(out, byte);
+    if(byte == 255) append_byte(out, 0);
   }
-  w->acc &= (1UL << w->nacc) - 1;
+  out->pending_bits &= (1u << out->pending_bit_count) - 1;
 }
 
-/* the 8-bit quantisation tables for quality q */
-static void quant_tables(enc* s, int q) {
-  int scale = q < 50 ? 5000 / q : 200 - q * 2, t, i;
-  for(t = 0; t < 2; t++)
-    for(i = 0; i < 64; i++) {
-      long v = ((long)QBASE[t][i] * scale + 50) / 100;
-      s->q[t][i] = (int)(v < 1 ? 1 : v > 255 ? 255 : v);
+/* the 8-bit quantisation tables for a quality, as jpeg_set_quality */
+static void build_quantisation_tables(encoder* state, int32_t quality) {
+  int32_t scale = quality < 50 ? 5000 / quality : 200 - quality * 2;
+  for(uint32_t table = 0; table < 2; table++) {
+    for(uint32_t index = 0; index < 64; index++) {
+      int64_t value =
+        ((int64_t)BASE_QUANTISATION[table][index] * scale + 50) / 100;
+      if(value < 1) value = 1;
+      if(value > 255) value = 255;
+      state->quantisation[table][index] = (int32_t)value;
     }
+  }
 }
 
-/* the forward DCT, in place, input level-shifted samples */
-#define CB 13 /* constant bits */
-#define P1 2  /* pass-1 bits */
-#define DESC(x, n) (((x) + (1L << ((n) - 1))) >> (n))
-static void fdct(long* d) {
-  long t0, t1, t2, t3, t4, t5, t6, t7, t10, t11, t12, t13;
-  long z1, z2, z3, z4, z5;
-  int i, pass;
-  for(pass = 0; pass < 2; pass++)
-    for(i = 0; i < 8; i++) {
-      long* p = pass ? d + i : d + i * 8;
-      int st = pass ? 8 : 1;
-      int sh = pass ? CB + P1 : CB - P1;
-      t0 = p[0] + p[7 * st];
-      t7 = p[0] - p[7 * st];
-      t1 = p[st] + p[6 * st];
-      t6 = p[st] - p[6 * st];
-      t2 = p[2 * st] + p[5 * st];
-      t5 = p[2 * st] - p[5 * st];
-      t3 = p[3 * st] + p[4 * st];
-      t4 = p[3 * st] - p[4 * st];
-      t10 = t0 + t3;
-      t13 = t0 - t3;
-      t11 = t1 + t2;
-      t12 = t1 - t2;
-      if(pass) {
-        p[0] = DESC(t10 + t11, P1);
-        p[4 * st] = DESC(t10 - t11, P1);
+/* The forward DCT (Loeffler-Ligtenberg-Moschytz, as libjpeg-turbo's
+ * jfdctint), in place, on level-shifted samples. The constants are
+ * fixed point with CONSTANT_BITS fraction bits; pass 1 keeps
+ * PASS1_BITS extra bits. */
+#define CONSTANT_BITS 13
+#define PASS1_BITS 2
+/* divide by 2^bits, rounding: add half, then shift right */
+#define DESCALE(value, bits) \
+  (((value) + (INT64_C(1) << ((bits) - 1))) >> (bits))
+static void transform_block(int64_t* data) {
+  /* pass 0 works on rows, pass 1 on columns */
+  for(uint32_t pass = 0; pass < 2; pass++) {
+    for(uint32_t line = 0; line < 8; line++) {
+      int64_t* p = pass == 1 ? data + line : data + line * 8;
+      /* the distance between neighbours: 1 in a row, 8 in a column */
+      uint32_t stride = pass == 1 ? 8 : 1;
+      uint32_t shift =
+        pass == 1 ? CONSTANT_BITS + PASS1_BITS : CONSTANT_BITS - PASS1_BITS;
+      int64_t t0 = p[0] + p[7 * stride];
+      int64_t t7 = p[0] - p[7 * stride];
+      int64_t t1 = p[stride] + p[6 * stride];
+      int64_t t6 = p[stride] - p[6 * stride];
+      int64_t t2 = p[2 * stride] + p[5 * stride];
+      int64_t t5 = p[2 * stride] - p[5 * stride];
+      int64_t t3 = p[3 * stride] + p[4 * stride];
+      int64_t t4 = p[3 * stride] - p[4 * stride];
+      int64_t t10 = t0 + t3;
+      int64_t t13 = t0 - t3;
+      int64_t t11 = t1 + t2;
+      int64_t t12 = t1 - t2;
+      if(pass == 1) {
+        p[0] = DESCALE(t10 + t11, PASS1_BITS);
+        p[4 * stride] = DESCALE(t10 - t11, PASS1_BITS);
       } else {
-        p[0] = (t10 + t11) * (1 << P1);
-        p[4 * st] = (t10 - t11) * (1 << P1);
+        p[0] = (t10 + t11) * (1 << PASS1_BITS);
+        p[4 * stride] = (t10 - t11) * (1 << PASS1_BITS);
       }
-      z1 = (t12 + t13) * 4433;                /* 0.541196100 */
-      p[2 * st] = DESC(z1 + t13 * 6270, sh);  /* 0.765366865 */
-      p[6 * st] = DESC(z1 - t12 * 15137, sh); /* 1.847759065 */
+      /* the even part; each constant is its value x 2^13 */
+      /* 0.541196100 */
+      int64_t z1 = (t12 + t13) * 4433;
+      /* 0.765366865 */
+      p[2 * stride] = DESCALE(z1 + t13 * 6270, shift);
+      /* 1.847759065 */
+      p[6 * stride] = DESCALE(z1 - t12 * 15137, shift);
+      /* the odd part */
       z1 = t4 + t7;
-      z2 = t5 + t6;
-      z3 = t4 + t6;
-      z4 = t5 + t7;
-      z5 = (z3 + z4) * 9633; /* 1.175875602 */
-      t4 *= 2446;            /* 0.298631336 */
-      t5 *= 16819;           /* 2.053119869 */
-      t6 *= 25172;           /* 3.072711026 */
-      t7 *= 12299;           /* 1.501321110 */
-      z1 *= -7373;           /* 0.899976223 */
-      z2 *= -20995;          /* 2.562915447 */
-      z3 *= -16069;          /* 1.961570560 */
-      z4 *= -3196;           /* 0.390180644 */
+      int64_t z2 = t5 + t6;
+      int64_t z3 = t4 + t6;
+      int64_t z4 = t5 + t7;
+      /* 1.175875602 */
+      int64_t z5 = (z3 + z4) * 9633;
+      /* 0.298631336, 2.053119869, 3.072711026, 1.501321110 */
+      t4 *= 2446;
+      t5 *= 16819;
+      t6 *= 25172;
+      t7 *= 12299;
+      /* -0.899976223, -2.562915447, -1.961570560, -0.390180644 */
+      z1 *= -7373;
+      z2 *= -20995;
+      z3 *= -16069;
+      z4 *= -3196;
       z3 += z5;
       z4 += z5;
-      p[7 * st] = DESC(t4 + z1 + z3, sh);
-      p[5 * st] = DESC(t5 + z2 + z4, sh);
-      p[3 * st] = DESC(t6 + z2 + z3, sh);
-      p[st] = DESC(t7 + z1 + z4, sh);
+      p[7 * stride] = DESCALE(t4 + z1 + z3, shift);
+      p[5 * stride] = DESCALE(t5 + z2 + z4, shift);
+      p[3 * stride] = DESCALE(t6 + z2 + z3, shift);
+      p[stride] = DESCALE(t7 + z1 + z4, shift);
     }
-}
-
-/* one block of component c (0 Y, 1 Cb, 2 Cr) at block column bx of the
- * block row whose 8 rows (edge-repeated) are rows[] -> quantised
- * coefficients, natural order */
-static void block(const enc* s, const unsigned char* const rows[8], int w,
-                  int bx, int c, int out[64]) {
-  long d[64];
-  const int* q = s->q[c ? 1 : 0];
-  int x, y;
-  for(y = 0; y < 8; y++)
-    for(x = 0; x < 8; x++) {
-      int xx = bx * 8 + x;
-      const unsigned char* p = rows[y] + (xx < w ? xx : w - 1) * 3;
-      long r = p[0], g = p[1], b = p[2], v;
-      /* the JFIF matrix, 16 fraction bits: FIX(0.29900) = 19595 ..;
-       * Cb/Cr: + 128 and 0.5 - epsilon so 255 stays 255 */
-      if(c == 0)
-        v = (19595 * r + 38470 * g + 7471 * b + 32768) >> 16;
-      else if(c == 1)
-        v = (-11059 * r - 21709 * g + 32768 * b + (128L << 16) + 32767) >> 16;
-      else
-        v = (32768 * r - 27439 * g - 5329 * b + (128L << 16) + 32767) >> 16;
-      d[y * 8 + x] = v - 128;
-    }
-  fdct(d);
-  for(x = 0; x < 64; x++) {
-    long dv = (long)q[x] * 8;
-    out[x] = (int)(d[x] < 0 ? -((-d[x] + dv / 2) / dv) : (d[x] + dv / 2) / dv);
   }
 }
 
-static int nbits(int v) {
-  int n = 0;
-  if(v < 0) v = -v;
-  while(v) {
-    n++;
-    v >>= 1;
+/* One block of a component at block column block_x of the block row
+ * whose 8 rows (edge-repeated) are rows[]: colour conversion, DCT and
+ * quantisation. coefficients receives the result in natural order. */
+static void encode_block(const encoder* state, const uint8_t* const rows[8],
+                         uint32_t width, uint32_t block_x, uint32_t component,
+                         int32_t coefficients[64]) {
+  int64_t data[64];
+  const int32_t* quantisation =
+    state->quantisation[component == COMPONENT_Y ? 0 : 1];
+  for(uint32_t y = 0; y < 8; y++) {
+    for(uint32_t x = 0; x < 8; x++) {
+      /* past the right edge, repeat the last column */
+      uint32_t column = block_x * 8 + x;
+      if(column >= width) column = width - 1;
+      const uint8_t* pixel = rows[y] + column * 3;
+      int32_t red = pixel[0];
+      int32_t green = pixel[1];
+      int32_t blue = pixel[2];
+      /* The JFIF matrix with 16 fraction bits: FIX(0.29900) = 19595 ...
+       * Cb and Cr: + 128, and 0.5 - epsilon so 255 stays 255. */
+      int32_t value;
+      switch(component) {
+        case COMPONENT_Y:
+          value = (19595 * red + 38470 * green + 7471 * blue + 32768) >> 16;
+          break;
+        case COMPONENT_CB:
+          value = (-11059 * red -
+                   21709 * green +
+                   32768 * blue +
+                   (128 << 16) +
+                   32767) >>
+                  16;
+          break;
+        default:
+          value =
+            (32768 * red - 27439 * green - 5329 * blue + (128 << 16) + 32767) >>
+            16;
+          break;
+      }
+      /* level shift: 0..255 -> -128..127 */
+      data[y * 8 + x] = value - 128;
+    }
   }
-  return n;
+  transform_block(data);
+  for(uint32_t index = 0; index < 64; index++) {
+    /* the DCT's output is scaled by 8: divide by 8 x the table entry,
+     * rounding half away from zero */
+    int64_t divisor = (int64_t)quantisation[index] * 8;
+    int64_t value = data[index];
+    if(value < 0) {
+      coefficients[index] = (int32_t)(-((-value + divisor / 2) / divisor));
+    } else {
+      coefficients[index] = (int32_t)((value + divisor / 2) / divisor);
+    }
+  }
 }
 
-/* count (w NULL) or write one block's symbols */
-static void code_block(enc* s, wbuf* w, const int blk[64], int t, int* dc) {
-  int diff = blk[0] - *dc, r = 0, k, n;
-  htab *hd = &s->h[0][t], *ha = &s->h[1][t];
-  *dc = blk[0];
-  n = nbits(diff);
-  if(w) {
-    bits(w, hd->code[n], hd->size[n]);
-    if(n) bits(w, (unsigned)(diff < 0 ? diff - 1 : diff), n);
+/* the bits needed for |value|: 0 for 0, 1 for 1, 2 for 2..3, ... */
+static uint32_t count_bits(int32_t value) {
+  uint32_t bit_count = 0;
+  if(value < 0) value = -value;
+  while(value != 0) {
+    bit_count++;
+    value >>= 1;
+  }
+  return bit_count;
+}
+
+/* the bits written after a symbol: the value itself, or value - 1 for a
+ * negative one (its one's complement in bit_count bits) */
+static uint32_t get_extra_bits(int32_t value) {
+  return (uint32_t)(value < 0 ? value - 1 : value);
+}
+
+/* Code one block's symbols: count them (out NULL, first pass) or write
+ * them. previous_dc is the component's last DC value, updated. */
+static void code_block(encoder* state, output_buffer* out,
+                       const int32_t coefficients[64], uint32_t table,
+                       int32_t* previous_dc) {
+  const huffman_table* dc_table = &state->tables[TABLE_DC][table];
+  const huffman_table* ac_table = &state->tables[TABLE_AC][table];
+  bool is_counting = out == NULL;
+
+  /* the DC coefficient is coded as the difference from the last block */
+  int32_t difference = coefficients[0] - *previous_dc;
+  *previous_dc = coefficients[0];
+  uint32_t bit_count = count_bits(difference);
+  if(is_counting) {
+    state->frequencies[TABLE_DC][table][bit_count]++;
   } else {
-    s->freq[0][t][n]++;
+    append_bits(out, dc_table->codes[bit_count],
+                dc_table->code_lengths[bit_count]);
+    if(bit_count > 0) append_bits(out, get_extra_bits(difference), bit_count);
   }
-  for(k = 1; k < 64; k++) {
-    int v = blk[ZZ[k]], sym;
-    if(v == 0) {
-      r++;
+
+  /* the AC coefficients in zigzag order: runs of zeros and values */
+  uint32_t zero_run = 0;
+  for(uint32_t position = 1; position < 64; position++) {
+    int32_t value = coefficients[ZIGZAG[position]];
+    if(value == 0) {
+      zero_run++;
       continue;
     }
-    while(r > 15) {
-      if(w)
-        bits(w, ha->code[0xF0], ha->size[0xF0]);
-      else
-        s->freq[1][t][0xF0]++;
-      r -= 16;
+    while(zero_run > 15) {
+      if(is_counting) {
+        state->frequencies[TABLE_AC][table][SYMBOL_ZERO_RUN]++;
+      } else {
+        append_bits(out, ac_table->codes[SYMBOL_ZERO_RUN],
+                    ac_table->code_lengths[SYMBOL_ZERO_RUN]);
+      }
+      zero_run -= 16;
     }
-    n = nbits(v);
-    sym = (r << 4) + n;
-    if(w) {
-      bits(w, ha->code[sym], ha->size[sym]);
-      bits(w, (unsigned)(v < 0 ? v - 1 : v), n);
+    bit_count = count_bits(value);
+    /* the symbol: the zero run in the high 4 bits, the size below */
+    uint32_t symbol = (zero_run << 4) + bit_count;
+    if(is_counting) {
+      state->frequencies[TABLE_AC][table][symbol]++;
     } else {
-      s->freq[1][t][sym]++;
+      append_bits(out, ac_table->codes[symbol], ac_table->code_lengths[symbol]);
+      append_bits(out, get_extra_bits(value), bit_count);
     }
-    r = 0;
+    zero_run = 0;
   }
-  if(r > 0) {
-    if(w)
-      bits(w, ha->code[0], ha->size[0]);
-    else
-      s->freq[1][t][0]++;
+  if(zero_run > 0) {
+    if(is_counting) {
+      state->frequencies[TABLE_AC][table][SYMBOL_END_OF_BLOCK]++;
+    } else {
+      append_bits(out, ac_table->codes[SYMBOL_END_OF_BLOCK],
+                  ac_table->code_lengths[SYMBOL_END_OF_BLOCK]);
+    }
   }
 }
 
-/* T.81 K.2 code lengths from the frequencies, K.3 limit to 16 bits, then
- * the canonical codes (C.2) */
-static void optimal(const long* freq_in, htab* h) {
-  long freq[257];
-  int csize[257], others[257], cnt[33], i, j, c1, c2, p;
-  unsigned code;
-  memcpy(freq, freq_in, sizeof freq);
-  memset(csize, 0, sizeof csize);
-  memset(cnt, 0, sizeof cnt);
-  for(i = 0; i < 257; i++) others[i] = -1;
-  freq[256] = 1; /* no code is all ones */
-  for(;;) {
-    long v = 1000000000L;
-    c1 = c2 = -1;
-    for(i = 0; i <= 256; i++)
-      if(freq[i] && freq[i] <= v) {
-        v = freq[i];
-        c1 = i;
+/* Build an optimal Huffman table from symbol frequencies: T.81 K.2 code
+ * lengths, K.3 limit to 16 bits, then the canonical codes (C.2). */
+static void build_huffman_table(const int64_t* symbol_frequencies,
+                                huffman_table* table) {
+  /* the "never" frequency K.2 uses to find the smallest */
+  const int64_t NO_FREQUENCY = 1000000000;
+  int64_t frequencies[257];
+  /* code_size[i]: the code length of symbol i; others[i]: the next
+   * symbol in i's branch of the tree, -1 = none */
+  int32_t code_size[257];
+  int32_t others[257];
+  /* length_counts[n]: symbols with an n-bit code */
+  int32_t length_counts[33];
+  memcpy(frequencies, symbol_frequencies, sizeof frequencies);
+  memset(code_size, 0, sizeof code_size);
+  memset(length_counts, 0, sizeof length_counts);
+  for(uint32_t index = 0; index < 257; index++) others[index] = -1;
+  /* a reserved symbol, so no code is all ones */
+  frequencies[256] = 1;
+
+  /* K.2: join the two least frequent branches until one is left. Ties
+   * go to the higher symbol (the "<=" below). */
+  while(true) {
+    int32_t first = -1;
+    int32_t second = -1;
+    int64_t smallest = NO_FREQUENCY;
+    for(int32_t symbol = 0; symbol <= 256; symbol++) {
+      if(frequencies[symbol] != 0 && frequencies[symbol] <= smallest) {
+        smallest = frequencies[symbol];
+        first = symbol;
       }
-    v = 1000000000L;
-    for(i = 0; i <= 256; i++)
-      if(freq[i] && freq[i] <= v && i != c1) {
-        v = freq[i];
-        c2 = i;
-      }
-    if(c2 < 0) break;
-    freq[c1] += freq[c2];
-    freq[c2] = 0;
-    csize[c1]++;
-    while(others[c1] >= 0) {
-      c1 = others[c1];
-      csize[c1]++;
     }
-    others[c1] = c2;
-    csize[c2]++;
-    while(others[c2] >= 0) {
-      c2 = others[c2];
-      csize[c2]++;
+    smallest = NO_FREQUENCY;
+    for(int32_t symbol = 0; symbol <= 256; symbol++) {
+      if(frequencies[symbol] != 0 &&
+         frequencies[symbol] <= smallest &&
+         symbol != first) {
+        smallest = frequencies[symbol];
+        second = symbol;
+      }
+    }
+    if(second < 0) break;
+    frequencies[first] += frequencies[second];
+    frequencies[second] = 0;
+    /* every symbol in both branches gets one bit longer */
+    code_size[first]++;
+    while(others[first] >= 0) {
+      first = others[first];
+      code_size[first]++;
+    }
+    others[first] = second;
+    code_size[second]++;
+    while(others[second] >= 0) {
+      second = others[second];
+      code_size[second]++;
     }
   }
-  for(i = 0; i <= 256; i++)
-    if(csize[i]) cnt[csize[i] > 32 ? 32 : csize[i]]++;
-  for(i = 32; i > 16; i--)
-    while(cnt[i] > 0) {
-      j = i - 2;
-      while(cnt[j] == 0) j--;
-      cnt[i] -= 2;
-      cnt[i - 1]++;
-      cnt[j + 1] += 2;
-      cnt[j]--;
+  for(uint32_t symbol = 0; symbol <= 256; symbol++) {
+    if(code_size[symbol] != 0) {
+      length_counts[code_size[symbol] > 32 ? 32 : code_size[symbol]]++;
     }
-  while(cnt[i] == 0) i--;
-  cnt[i]--; /* drop the reserved code */
-  memset(h, 0, sizeof *h);
-  for(i = 1; i <= 16; i++) h->bits[i] = (unsigned char)cnt[i];
-  p = 0;
-  for(i = 1; i <= 32; i++)
-    for(j = 0; j <= 255; j++)
-      if(csize[j] == i) h->val[p++] = (unsigned char)j;
-  /* canonical codes in the order of val[] */
-  code = 0;
-  p = 0;
-  for(i = 1; i <= 16; i++) {
-    for(j = 0; j < h->bits[i]; j++) {
-      h->code[h->val[p]] = (unsigned short)code++;
-      h->size[h->val[p]] = (unsigned char)i;
-      p++;
+  }
+  /* K.3: fold lengths over 16 bits back into the allowed range */
+  int32_t length = 32;
+  for(; length > 16; length--) {
+    while(length_counts[length] > 0) {
+      int32_t shorter = length - 2;
+      while(length_counts[shorter] == 0) shorter--;
+      length_counts[length] -= 2;
+      length_counts[length - 1]++;
+      length_counts[shorter + 1] += 2;
+      length_counts[shorter]--;
+    }
+  }
+  /* drop the reserved symbol's code: the longest one */
+  while(length_counts[length] == 0) length--;
+  length_counts[length]--;
+
+  memset(table, 0, sizeof *table);
+  for(uint32_t bits = 1; bits <= 16; bits++) {
+    table->counts[bits] = (uint8_t)length_counts[bits];
+  }
+  uint32_t position = 0;
+  for(int32_t bits = 1; bits <= 32; bits++) {
+    for(uint32_t symbol = 0; symbol <= 255; symbol++) {
+      if(code_size[symbol] == bits) {
+        table->values[position] = (uint8_t)symbol;
+        position++;
+      }
+    }
+  }
+  /* canonical codes in the order of values[]: count up, and shift left
+   * when the length grows */
+  uint32_t code = 0;
+  position = 0;
+  for(uint32_t bits = 1; bits <= 16; bits++) {
+    for(uint32_t index = 0; index < table->counts[bits]; index++) {
+      uint8_t symbol = table->values[position];
+      table->codes[symbol] = (uint16_t)code;
+      table->code_lengths[symbol] = (uint8_t)bits;
+      code++;
+      position++;
     }
     code <<= 1;
   }
 }
 
-static void marker(wbuf* w, int m, int len) {
-  byte(w, 0xFF);
-  byte(w, m);
-  word(w, len);
+/* a marker and its segment length */
+static void append_marker(output_buffer* out, uint32_t marker,
+                          uint32_t length) {
+  append_byte(out, 0xFF);
+  append_byte(out, marker);
+  append_word(out, length);
 }
 
-static void headers(const enc* s, wbuf* w, int wd, int ht, double ppi,
-                    const unsigned char* icc, size_t icc_n,
-                    const char* comment) {
-  static const unsigned char JFIF[5] = {'J', 'F', 'I', 'F', 0};
-  static const unsigned char ICC[12] = "ICC_PROFILE";
-  int t, i, k;
-  byte(w, 0xFF);
-  byte(w, 0xD8);
-  marker(w, 0xE0, 16);
-  put(w, JFIF, 5);
-  byte(w, 1); /* JFIF 1.01 */
-  byte(w, 1);
+static void append_jfif(output_buffer* out, double ppi) {
+  static const uint8_t JFIF[5] = {'J', 'F', 'I', 'F', 0};
+  append_marker(out, MARKER_APP0, 16);
+  append_bytes(out, JFIF, 5);
+  /* JFIF 1.01 */
+  append_byte(out, 1);
+  append_byte(out, 1);
   if(ppi > 0) {
-    long d = (long)(ppi + 0.5);
-    d = d < 1 ? 1 : d > 65535 ? 65535 : d;
-    byte(w, 1); /* dots per inch */
-    word(w, (int)d);
-    word(w, (int)d);
+    int64_t density = (int64_t)(ppi + 0.5);
+    if(density < 1) density = 1;
+    if(density > 65535) density = 65535;
+    /* 1 = dots per inch */
+    append_byte(out, 1);
+    append_word(out, (uint32_t)density);
+    append_word(out, (uint32_t)density);
   } else {
-    byte(w, 0);
-    word(w, 1);
-    word(w, 1);
+    /* 0 = no unit: an aspect ratio of 1:1 */
+    append_byte(out, 0);
+    append_word(out, 1);
+    append_word(out, 1);
   }
-  byte(w, 0); /* no thumbnail */
-  byte(w, 0);
-  if(icc && icc_n) {
-    size_t nm = (icc_n + 65518) / 65519, off = 0;
-    for(k = 1; off < icc_n; k++) {
-      size_t len = icc_n - off > 65519 ? 65519 : icc_n - off;
-      marker(w, 0xE2, (int)(len + 16));
-      put(w, ICC, 12);
-      byte(w, k);
-      byte(w, (int)nm);
-      put(w, icc + off, len);
-      off += len;
-    }
-  }
-  if(comment && *comment) {
-    size_t len = strlen(comment);
-    marker(w, 0xFE, (int)(len + 2));
-    put(w, comment, len);
-  }
-  for(t = 0; t < 2; t++) {
-    marker(w, 0xDB, 67);
-    byte(w, t);
-    for(i = 0; i < 64; i++) byte(w, s->q[t][ZZ[i]]);
-  }
-  marker(w, 0xC0, 17);
-  byte(w, 8);
-  word(w, ht);
-  word(w, wd);
-  byte(w, 3);
-  for(i = 0; i < 3; i++) {
-    byte(w, i + 1);
-    byte(w, 0x11);
-    byte(w, i ? 1 : 0);
-  }
-  for(t = 0; t < 2; t++)
-    for(k = 0; k < 2; k++) { /* DC t, AC t */
-      const htab* h = &s->h[k][t];
-      int nv = 0;
-      for(i = 1; i <= 16; i++) nv += h->bits[i];
-      marker(w, 0xC4, 19 + nv);
-      byte(w, (k << 4) | t);
-      put(w, h->bits + 1, 16);
-      put(w, h->val, (size_t)nv);
-    }
-  marker(w, 0xDA, 12);
-  byte(w, 3);
-  for(i = 0; i < 3; i++) {
-    byte(w, i + 1);
-    byte(w, i ? 0x11 : 0x00);
-  }
-  byte(w, 0);
-  byte(w, 63);
-  byte(w, 0);
+  /* no thumbnail */
+  append_byte(out, 0);
+  append_byte(out, 0);
 }
 
-/* every MCU (Y, Cb, Cr blocks) in raster order: count or write */
-static void scan(enc* s, wbuf* w, const unsigned char* rgb, int wd, int ht) {
-  int bw = (wd + 7) / 8, bh = (ht + 7) / 8, by, bx, c, y;
-  int dc[3] = {0, 0, 0}, blk[64];
-  const unsigned char* rows[8];
-  for(by = 0; by < bh; by++) {
-    for(y = 0; y < 8; y++) {
-      int yy = by * 8 + y;
-      rows[y] = rgb + (size_t)(yy < ht ? yy : ht - 1) * wd * 3;
+/* the ICC profile in numbered APP2 chunks */
+static void append_icc_profile(output_buffer* out, const uint8_t* profile,
+                               size_t profile_length) {
+  static const uint8_t ICC_NAME[12] = "ICC_PROFILE";
+  size_t chunk_count = (profile_length + ICC_CHUNK_BYTES - 1) / ICC_CHUNK_BYTES;
+  size_t offset = 0;
+  for(uint32_t chunk = 1; offset < profile_length; chunk++) {
+    size_t length = profile_length - offset;
+    if(length > ICC_CHUNK_BYTES) length = ICC_CHUNK_BYTES;
+    /* safe: length is at most ICC_CHUNK_BYTES */
+    append_marker(out, MARKER_APP2, (uint32_t)(length + 16));
+    append_bytes(out, ICC_NAME, 12);
+    append_byte(out, chunk);
+    append_byte(out, (uint32_t)chunk_count);
+    append_bytes(out, profile + offset, length);
+    offset += length;
+  }
+}
+
+static void append_headers(const encoder* state, output_buffer* out,
+                           uint32_t width, uint32_t height, double ppi,
+                           const uint8_t* icc_profile,
+                           size_t icc_profile_length, const char* comment) {
+  append_byte(out, 0xFF);
+  append_byte(out, MARKER_SOI);
+  append_jfif(out, ppi);
+  if(icc_profile != NULL && icc_profile_length > 0) {
+    append_icc_profile(out, icc_profile, icc_profile_length);
+  }
+  if(comment != NULL && comment[0] != '\0') {
+    size_t length = strlen(comment);
+    /* safe: the caller checked FT_JPEG_COMMENT_MAX_BYTES */
+    append_marker(out, MARKER_COM, (uint32_t)(length + 2));
+    append_bytes(out, comment, length);
+  }
+  /* the quantisation tables, in zigzag order */
+  for(uint32_t table = 0; table < 2; table++) {
+    append_marker(out, MARKER_DQT, 67);
+    append_byte(out, table);
+    for(uint32_t index = 0; index < 64; index++) {
+      append_byte(out, (uint32_t)state->quantisation[table][ZIGZAG[index]]);
     }
-    for(bx = 0; bx < bw; bx++)
-      for(c = 0; c < 3; c++) {
-        block(s, rows, wd, bx, c, blk);
-        code_block(s, w, blk, c ? 1 : 0, &dc[c]);
+  }
+  /* SOF0: 8 bits, the size, 3 components, no subsampling (0x11), Y on
+   * table 0 and Cb, Cr on table 1 */
+  append_marker(out, MARKER_SOF0, 17);
+  append_byte(out, 8);
+  append_word(out, height);
+  append_word(out, width);
+  append_byte(out, 3);
+  for(uint32_t component = 0; component < 3; component++) {
+    append_byte(out, component + 1);
+    append_byte(out, 0x11);
+    append_byte(out, component == COMPONENT_Y ? 0 : 1);
+  }
+  /* the Huffman tables: DC 0, AC 0, DC 1, AC 1 */
+  for(uint32_t table = 0; table < 2; table++) {
+    for(uint32_t kind = 0; kind < 2; kind++) {
+      const huffman_table* huffman = &state->tables[kind][table];
+      uint32_t value_count = 0;
+      for(uint32_t bits = 1; bits <= 16; bits++) {
+        value_count += huffman->counts[bits];
       }
+      append_marker(out, MARKER_DHT, 19 + value_count);
+      append_byte(out, (kind << 4) | table);
+      append_bytes(out, huffman->counts + 1, 16);
+      append_bytes(out, huffman->values, value_count);
+    }
+  }
+  /* SOS: 3 components (Y on tables 0/0, Cb and Cr on 1/1), spectral
+   * selection 0..63, no successive approximation */
+  append_marker(out, MARKER_SOS, 12);
+  append_byte(out, 3);
+  for(uint32_t component = 0; component < 3; component++) {
+    append_byte(out, component + 1);
+    append_byte(out, component == COMPONENT_Y ? 0x00 : 0x11);
+  }
+  append_byte(out, 0);
+  append_byte(out, 63);
+  append_byte(out, 0);
+}
+
+/* Every MCU (Y, Cb, Cr blocks) in raster order: count (out NULL) or
+ * write. */
+static void encode_scan(encoder* state, output_buffer* out,
+                        const uint8_t* pixels, uint32_t width,
+                        uint32_t height) {
+  uint32_t blocks_across = (width + 7) / 8;
+  uint32_t blocks_down = (height + 7) / 8;
+  int32_t previous_dc[3] = {0, 0, 0};
+  int32_t coefficients[64];
+  const uint8_t* rows[8];
+  for(uint32_t block_y = 0; block_y < blocks_down; block_y++) {
+    /* the 8 rows of this block row; past the bottom, repeat the last */
+    for(uint32_t y = 0; y < 8; y++) {
+      uint32_t row = block_y * 8 + y;
+      if(row >= height) row = height - 1;
+      rows[y] = pixels + (size_t)row * width * 3;
+    }
+    for(uint32_t block_x = 0; block_x < blocks_across; block_x++) {
+      for(uint32_t component = 0; component < 3; component++) {
+        encode_block(state, rows, width, block_x, component, coefficients);
+        uint32_t table = component == COMPONENT_Y ? 0 : 1;
+        code_block(state, out, coefficients, table, &previous_dc[component]);
+      }
+    }
   }
 }
 
-int ft_jpeg_encode(const unsigned char* rgb, int w, int h, int quality,
-                   double ppi, const unsigned char* icc, size_t icc_n,
-                   const char* comment, unsigned char** out, size_t* n,
-                   ft_err* e) {
-  enc* s;
-  wbuf b;
-  int t, k;
-
-  *out = NULL;
-  *n = 0;
-  if(!rgb || w < 1 || h < 1 || w > 65500 || h > 65500)
-    return ft_fail(e, "jpeg: bad size %dx%d", w, h);
-  if(quality < 1 || quality > 100)
-    return ft_fail(e, "jpeg: quality %d (1..100)", quality);
-  if(icc && icc_n > 65519L * 255)
-    return ft_fail(e, "jpeg: ICC profile too large");
-  if(comment && strlen(comment) > FT_JPEG_COMMENT_MAX)
-    return ft_fail(e, "jpeg: comment too long");
-  s = calloc(1, sizeof *s);
-  if(!s) return ft_fail(e, "jpeg: out of memory");
-  quant_tables(s, quality);
-  scan(s, NULL, rgb, w, h);
-  for(k = 0; k < 2; k++)
-    for(t = 0; t < 2; t++) optimal(s->freq[k][t], &s->h[k][t]);
-  memset(&b, 0, sizeof b);
-  headers(s, &b, w, h, ppi, icc, icc_n, comment);
-  scan(s, &b, rgb, w, h);
-  if(b.nacc) /* pad with ones */
-    bits(&b, 0x7F, 8 - b.nacc);
-  byte(&b, 0xFF);
-  byte(&b, 0xD9);
-  free(s);
-  if(b.oom) {
-    free(b.b);
-    return ft_fail(e, "jpeg: out of memory");
+int32_t ft_encode_jpeg(const uint8_t* pixels, uint32_t width, uint32_t height,
+                       int32_t quality, double ppi, const uint8_t* icc_profile,
+                       size_t icc_profile_length, const char* comment,
+                       uint8_t** jpeg, size_t* jpeg_length, ft_err* error) {
+  *jpeg = NULL;
+  *jpeg_length = 0;
+  if(pixels == NULL ||
+     width < 1 ||
+     height < 1 ||
+     width > MAX_SIDE ||
+     height > MAX_SIDE) {
+    return ft_fail(error, "jpeg: bad size %ux%u", (unsigned)width,
+                   (unsigned)height);
   }
-  *out = b.b;
-  *n = b.n;
+  if(quality < 1 || quality > 100) {
+    return ft_fail(error, "jpeg: quality %d (1..100)", (int)quality);
+  }
+  if(icc_profile != NULL &&
+     icc_profile_length > (size_t)ICC_CHUNK_BYTES * ICC_MAX_CHUNKS) {
+    return ft_fail(error, "jpeg: ICC profile too large");
+  }
+  if(comment != NULL && strlen(comment) > FT_JPEG_COMMENT_MAX_BYTES) {
+    return ft_fail(error, "jpeg: comment too long");
+  }
+  encoder* state = calloc(1, sizeof *state);
+  if(state == NULL) return ft_fail(error, "jpeg: out of memory");
+
+  build_quantisation_tables(state, quality);
+  /* first pass: count the symbols, to build optimal tables */
+  encode_scan(state, NULL, pixels, width, height);
+  for(uint32_t kind = 0; kind < 2; kind++) {
+    for(uint32_t table = 0; table < 2; table++) {
+      build_huffman_table(state->frequencies[kind][table],
+                          &state->tables[kind][table]);
+    }
+  }
+  /* second pass: write; the DCT is redone instead of keeping the
+   * coefficients, so memory stays one block row */
+  output_buffer out;
+  memset(&out, 0, sizeof out);
+  append_headers(state, &out, width, height, ppi, icc_profile,
+                 icc_profile_length, comment);
+  encode_scan(state, &out, pixels, width, height);
+  /* pad the last byte with ones */
+  if(out.pending_bit_count > 0) {
+    append_bits(&out, 0x7F, 8 - out.pending_bit_count);
+  }
+  append_byte(&out, 0xFF);
+  append_byte(&out, MARKER_EOI);
+  free(state);
+  if(out.is_out_of_memory) {
+    free(out.bytes);
+    return ft_fail(error, "jpeg: out of memory");
+  }
+  *jpeg = out.bytes;
+  *jpeg_length = out.length;
   return 0;
 }

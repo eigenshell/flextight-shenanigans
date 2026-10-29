@@ -2,327 +2,472 @@
 #include "ft_share.h"
 
 #include <math.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "ft_plan.h"
 
-void ft_share_opts_default(ft_share_opts* o, double scan_len_mm) {
-  memset(o, 0, sizeof *o);
-  o->target_px = FT_SHARE_TARGET_PX;
-  o->margin_mm = FT_SHARE_MARGIN_MM;
-  o->scan_len_mm = scan_len_mm;
+#define MM_PER_INCH 25.4
+/* the allowed target range, pixels */
+#define MIN_TARGET_PIXELS 100
+#define MAX_TARGET_PIXELS 20000
+/* the largest margin, mm */
+#define MAX_MARGIN_MM 10
+/* slack when comparing times, positions and scales */
+#define TOLERANCE 1e-9
+#define SCALE_TOLERANCE 1e-6
+/* the lowest ppi a scan can have, and the largest bin */
+#define MIN_PPI 525
+#define MAX_BIN 12
+/* the highest frame number a list may name */
+#define MAX_LIST_NUMBER 1000000
+
+/* The bins the scanner reads with, largest first. */
+static const int32_t BINS_LARGEST_FIRST[] = {12, 6, 4, 3, 2, 1};
+#define BIN_COUNT (sizeof BINS_LARGEST_FIRST / sizeof BINS_LARGEST_FIRST[0])
+
+void ft_init_share_options(ft_share_options* options, double scan_length_mm) {
+  memset(options, 0, sizeof *options);
+  options->target_pixels = FT_SHARE_TARGET_PIXELS;
+  options->margin_mm = FT_SHARE_MARGIN_MM;
+  options->scan_length_mm = scan_length_mm;
 }
 
-double ft_share_long_mm(const ft_share_frame* f, int hf_half_res) {
-  if(hf_half_res && f->type == FT_FRAME_HALF) return FT_SHARE_FF_LONG_MM;
-  return f->len > f->width ? f->len : f->width;
+static double get_own_long_side_mm(const ft_share_frame* frame) {
+  return frame->length_mm > frame->width_mm ? frame->length_mm
+                                            : frame->width_mm;
 }
 
-double ft_share_target_px(const ft_share_frame* f, const ft_share_opts* o) {
-  double own = f->len > f->width ? f->len : f->width;
-  if(o->hf_half_res && f->type == FT_FRAME_HALF)
-    return o->target_px * own / FT_SHARE_FF_LONG_MM;
-  return o->target_px;
-}
-
-double ft_share_ppi_needed(const ft_share_frame* f, int n,
-                           const ft_share_opts* o) {
-  double need = 0;
-  int i;
-  for(i = 0; i < n; i++) {
-    double l = ft_share_long_mm(&f[i], o->hf_half_res);
-    double p = l > 0 ? o->target_px / (l / 25.4) : 0;
-    if(p > need) need = p;
+double ft_get_share_long_side_mm(const ft_share_frame* frame,
+                                 bool half_frames_at_full_frame_ppi) {
+  if(half_frames_at_full_frame_ppi && frame->type == FT_FRAME_HALF) {
+    return FT_SHARE_FULL_FRAME_LONG_MM;
   }
-  return ceil(need - 1e-9);
+  return get_own_long_side_mm(frame);
 }
 
-/* one window over frames i..j: margins out, clipped to the holder */
-static void window(const ft_share_frame* f, const ft_share_opts* o, int i,
-                   int j, ft_share_window* w) {
-  double a = f[i].y0 - o->margin_mm, b = f[j].y0 + f[j].len + o->margin_mm;
-  if(a < 0) a = 0;
-  if(b > o->scan_len_mm) b = o->scan_len_mm;
-  w->y0 = a;
-  w->len = b - a;
-  w->first = i;
-  w->last = j;
-}
-
-int ft_share_estimate(const ft_share_frame* f, int n, const ft_share_opts* o,
-                      double ppi, int bin, const ft_lens* lens,
-                      ft_share_est* out, ft_err* e) {
-  double best[FT_MAX_FRAMES + 1], scale;
-  int from[FT_MAX_FRAMES + 1], i, j, k;
-
-  if(n < 1 || n > FT_MAX_FRAMES)
-    return ft_fail(e, "share: %d frames selected (1..%d)", n, FT_MAX_FRAMES);
-  if(!(o->target_px >= 100 && o->target_px <= 20000) ||
-     !(o->margin_mm >= 0 && o->margin_mm <= 10) ||
-     !(o->scan_len_mm > 0))
-    return ft_fail(e, "share: bad options");
-  for(i = 0; i < n; i++) {
-    if(!(f[i].len > 0 &&
-         f[i].width > 0 &&
-         f[i].y0 >= 0 &&
-         f[i].y0 + f[i].len <= o->scan_len_mm))
-      return ft_fail(e, "share: frame %d outside the holder", f[i].index);
-    if(i && !(f[i].y0 >= f[i - 1].y0 + f[i - 1].len - 1e-9))
-      return ft_fail(e, "share: frame %d overlaps or precedes frame %d",
-                     f[i].index, f[i - 1].index);
+double ft_get_share_target_pixels(const ft_share_frame* frame,
+                                  const ft_share_options* options) {
+  if(options->half_frames_at_full_frame_ppi && frame->type == FT_FRAME_HALF) {
+    return options->target_pixels *
+           get_own_long_side_mm(frame) /
+           FT_SHARE_FULL_FRAME_LONG_MM;
   }
-  scale = ppi * bin;
-  if(!(bin >= 1 &&
-       bin <= 12 &&
-       12 % bin == 0 &&
-       scale >= FT_SCALE_MIN - 1e-6 &&
-       scale <= FT_SCALE_MAX + 1e-6))
-    return ft_fail(e,
-                   "share: %g ppi x bin %d = optics %g, outside "
-                   "%.0f..%.0f",
-                   ppi, bin, scale, FT_SCALE_MIN, FT_SCALE_MAX);
-  memset(out, 0, sizeof *out);
-  out->ppi = ppi;
-  out->bin = bin;
-  out->scale = scale;
-  out->light = ft_light_rel(lens, scale);
-  out->dmax = ft_dmax_est(out->light);
+  return options->target_pixels;
+}
 
-  /* best[j]: cheapest scan of frames 0..j-1; from[j]: its last window's
-   * first frame */
-  best[0] = 0;
-  for(j = 1; j <= n; j++) {
-    best[j] = HUGE_VAL;
-    for(i = 0; i < j; i++) {
-      ft_share_window w;
-      double c;
-      window(f, o, i, j - 1, &w);
-      c = best[i] + ft_scan_seconds(ppi, bin, w.len);
-      if(c < best[j] - 1e-9) {
-        best[j] = c;
-        from[j] = i;
-      }
+double ft_get_share_ppi_needed(const ft_share_frame* frames,
+                               uint32_t frame_count,
+                               const ft_share_options* options) {
+  double needed = 0;
+  for(uint32_t index = 0; index < frame_count; index++) {
+    double long_mm = ft_get_share_long_side_mm(
+      &frames[index], options->half_frames_at_full_frame_ppi);
+    double ppi =
+      long_mm > 0 ? options->target_pixels / (long_mm / MM_PER_INCH) : 0;
+    if(ppi > needed) needed = ppi;
+  }
+  return ceil(needed - TOLERANCE);
+}
+
+/* One window over frames[first..last]: margins out, clipped to the
+ * holder. */
+static void make_window(const ft_share_frame* frames,
+                        const ft_share_options* options, uint32_t first,
+                        uint32_t last, ft_share_window* window) {
+  double start = frames[first].along_start_mm - options->margin_mm;
+  double end =
+    frames[last].along_start_mm + frames[last].length_mm + options->margin_mm;
+  if(start < 0) start = 0;
+  if(end > options->scan_length_mm) end = options->scan_length_mm;
+  window->start_mm = start;
+  window->length_mm = end - start;
+  window->first_frame = first;
+  window->last_frame = last;
+}
+
+/* Check the options and frames. Returns 0, or -1 with error filled. */
+static int32_t check_share_input(const ft_share_frame* frames,
+                                 uint32_t frame_count,
+                                 const ft_share_options* options,
+                                 ft_err* error) {
+  if(frame_count < 1 || frame_count > FT_MAX_FRAMES) {
+    return ft_fail(error, "share: %u frames selected (1..%d)",
+                   (unsigned)frame_count, FT_MAX_FRAMES);
+  }
+  /* written as "not inside" so that NaN is refused too */
+  bool are_options_valid = options->target_pixels >= MIN_TARGET_PIXELS &&
+                           options->target_pixels <= MAX_TARGET_PIXELS &&
+                           options->margin_mm >= 0 &&
+                           options->margin_mm <= MAX_MARGIN_MM &&
+                           options->scan_length_mm > 0;
+  if(are_options_valid == false) return ft_fail(error, "share: bad options");
+  for(uint32_t index = 0; index < frame_count; index++) {
+    const ft_share_frame* frame = &frames[index];
+    bool is_inside =
+      frame->length_mm > 0 &&
+      frame->width_mm > 0 &&
+      frame->along_start_mm >= 0 &&
+      frame->along_start_mm + frame->length_mm <= options->scan_length_mm;
+    if(is_inside == false) {
+      return ft_fail(error, "share: frame %u outside the holder",
+                     (unsigned)frame->index);
     }
-  }
-  out->scan_s = best[n];
-  /* walk back, then reverse into strip order */
-  for(j = n, k = 0; j > 0; j = from[j])
-    window(f, o, from[j], j - 1, &out->win[k++]);
-  out->nwin = k;
-  out->focus_s = (k > 0) * FT_SHARE_FOCUS_CROPS * FT_FOCUS_SAMPLE_S;
-  out->seconds = out->scan_s + out->focus_s;
-  for(i = 0; i < k / 2; i++) {
-    ft_share_window t = out->win[i];
-    out->win[i] = out->win[k - 1 - i];
-    out->win[k - 1 - i] = t;
+    if(index == 0) continue;
+    const ft_share_frame* previous = &frames[index - 1];
+    if(!(frame->along_start_mm >=
+         previous->along_start_mm + previous->length_mm - TOLERANCE)) {
+      return ft_fail(error, "share: frame %u overlaps or precedes frame %u",
+                     (unsigned)frame->index, (unsigned)previous->index);
+    }
   }
   return 0;
 }
 
-int ft_share_candidates(const ft_share_frame* f, int n, const ft_share_opts* o,
-                        const ft_lens* lens, ft_share_est c[6], ft_err* e) {
-  static const int bins[] = {12, 6, 4, 3, 2, 1};
-  double need;
-  int i, m = 0;
-  if(n < 1) return ft_fail(e, "share: no frames selected");
-  need = ft_share_ppi_needed(f, n, o);
-  if(!(need > 0)) return ft_fail(e, "share: frames have no size");
-  for(i = 0; i < 6; i++) {
-    double ppi = need, lo = ceil(FT_SCALE_MIN / bins[i] - 1e-9);
-    if(ppi < lo) ppi = lo;
-    if(ppi < 525 || ppi * bins[i] > FT_SCALE_MAX + 1e-6) continue;
-    if(ft_share_estimate(f, n, o, ppi, bins[i], lens, &c[m], e)) return -1;
-    m++;
+int32_t ft_estimate_share(const ft_share_frame* frames, uint32_t frame_count,
+                          const ft_share_options* options, double ppi,
+                          int32_t bin, const ft_lens* lens,
+                          ft_share_estimate* estimate, ft_err* error) {
+  if(check_share_input(frames, frame_count, options, error) != 0) return -1;
+  double scale_ppi = ppi * bin;
+  /* the bin divides 12, and the optics are in focus range */
+  bool is_usable = bin >= 1 &&
+                   bin <= MAX_BIN &&
+                   MAX_BIN % bin == 0 &&
+                   scale_ppi >= FT_SCALE_MIN_PPI - SCALE_TOLERANCE &&
+                   scale_ppi <= FT_SCALE_MAX_PPI + SCALE_TOLERANCE;
+  if(is_usable == false) {
+    return ft_fail(
+      error, "share: %g ppi x bin %d = optics %g, outside %.0f..%.0f", ppi,
+      (int)bin, scale_ppi, FT_SCALE_MIN_PPI, FT_SCALE_MAX_PPI);
   }
-  if(!m)
-    return ft_fail(e, "share: %g ppi is beyond the optics (max %.0f)", need,
-                   FT_SCALE_MAX);
-  return m;
+  memset(estimate, 0, sizeof *estimate);
+  estimate->ppi = ppi;
+  estimate->bin = bin;
+  estimate->scale_ppi = scale_ppi;
+  estimate->relative_light = ft_estimate_relative_light(lens, scale_ppi);
+  estimate->dmax = ft_estimate_dmax_for_light(estimate->relative_light);
+
+  /* The dynamic program. best_seconds[end]: the cheapest scan of frames
+   * 0..end-1; last_window_first[end]: its last window's first frame. */
+  double best_seconds[FT_MAX_FRAMES + 1];
+  uint32_t last_window_first[FT_MAX_FRAMES + 1];
+  best_seconds[0] = 0;
+  for(uint32_t end = 1; end <= frame_count; end++) {
+    best_seconds[end] = HUGE_VAL;
+    for(uint32_t start = 0; start < end; start++) {
+      ft_share_window window;
+      make_window(frames, options, start, end - 1, &window);
+      double seconds =
+        best_seconds[start] +
+        ft_estimate_scan_seconds(ppi, (uint32_t)bin, window.length_mm);
+      if(seconds < best_seconds[end] - TOLERANCE) {
+        best_seconds[end] = seconds;
+        last_window_first[end] = start;
+      }
+    }
+  }
+  estimate->scan_seconds = best_seconds[frame_count];
+  /* walk back from the last frame, then reverse into strip order */
+  uint32_t window_count = 0;
+  for(uint32_t end = frame_count; end > 0; end = last_window_first[end]) {
+    make_window(frames, options, last_window_first[end], end - 1,
+                &estimate->windows[window_count]);
+    window_count++;
+  }
+  estimate->window_count = window_count;
+  /* one focus bracket for the job, before its first window */
+  estimate->focus_seconds =
+    window_count > 0 ? FT_SHARE_FOCUS_CROPS * FT_FOCUS_SAMPLE_SECONDS : 0;
+  estimate->seconds = estimate->scan_seconds + estimate->focus_seconds;
+  for(uint32_t index = 0; index < window_count / 2; index++) {
+    ft_share_window swap = estimate->windows[index];
+    estimate->windows[index] = estimate->windows[window_count - 1 - index];
+    estimate->windows[window_count - 1 - index] = swap;
+  }
+  return 0;
 }
 
-int ft_share_pick_max_dmax(const ft_share_est* c, int n) {
-  int i, best = 0;
-  for(i = 1; i < n; i++)
-    if(c[i].dmax > c[best].dmax + 1e-9 ||
-       (fabs(c[i].dmax - c[best].dmax) <= 1e-9 &&
-        c[i].seconds < c[best].seconds))
-      best = i;
+int32_t ft_find_share_candidates(const ft_share_frame* frames,
+                                 uint32_t frame_count,
+                                 const ft_share_options* options,
+                                 const ft_lens* lens,
+                                 ft_share_estimate candidates[6],
+                                 ft_err* error) {
+  if(frame_count < 1) return ft_fail(error, "share: no frames selected");
+  double needed = ft_get_share_ppi_needed(frames, frame_count, options);
+  if(!(needed > 0)) return ft_fail(error, "share: frames have no size");
+  int32_t candidate_count = 0;
+  for(size_t index = 0; index < BIN_COUNT; index++) {
+    int32_t bin = BINS_LARGEST_FIRST[index];
+    /* raise the ppi where the bin's optics would be too low */
+    double ppi = needed;
+    double lowest_ppi = ceil(FT_SCALE_MIN_PPI / bin - TOLERANCE);
+    if(ppi < lowest_ppi) ppi = lowest_ppi;
+    if(ppi < MIN_PPI || ppi * bin > FT_SCALE_MAX_PPI + SCALE_TOLERANCE) {
+      continue;
+    }
+    if(ft_estimate_share(frames, frame_count, options, ppi, bin, lens,
+                         &candidates[candidate_count], error) != 0) {
+      return -1;
+    }
+    candidate_count++;
+  }
+  if(candidate_count == 0) {
+    return ft_fail(error, "share: %g ppi is beyond the optics (max %.0f)",
+                   needed, FT_SCALE_MAX_PPI);
+  }
+  return candidate_count;
+}
+
+uint32_t ft_pick_most_light(const ft_share_estimate* candidates,
+                            uint32_t candidate_count) {
+  uint32_t best = 0;
+  for(uint32_t index = 1; index < candidate_count; index++) {
+    const ft_share_estimate* candidate = &candidates[index];
+    bool has_more_light = candidate->dmax > candidates[best].dmax + TOLERANCE;
+    bool is_tie_but_faster =
+      fabs(candidate->dmax - candidates[best].dmax) <= TOLERANCE &&
+      candidate->seconds < candidates[best].seconds;
+    if(has_more_light || is_tie_but_faster) best = index;
+  }
   return best;
 }
 
-/* one number at *p (digits only); -1 if none or too big */
-static long number(const char** p) {
-  long v = 0;
-  if(**p < '0' || **p > '9') return -1;
-  while(**p >= '0' && **p <= '9') {
-    v = v * 10 + (**p - '0');
-    if(v > 1000000) return -1;
-    (*p)++;
+/* Read a number at *cursor (digits only). Returns it, or -1 when there
+ * is none or it is too big. */
+static int64_t read_number(const char** cursor) {
+  if(**cursor < '0' || **cursor > '9') return -1;
+  int64_t value = 0;
+  while(**cursor >= '0' && **cursor <= '9') {
+    value = value * 10 + (**cursor - '0');
+    if(value > MAX_LIST_NUMBER) return -1;
+    (*cursor)++;
   }
-  return v;
+  return value;
 }
 
-static int job_has(const ft_job* j, long idx) {
-  int i;
-  for(i = 0; i < j->nframes; i++)
-    if(j->f[i].index == idx) return 1;
+static bool does_job_have(const ft_job* job, int64_t frame_number) {
+  for(uint32_t index = 0; index < job->frame_count; index++) {
+    if(job->frames[index].index == frame_number) return true;
+  }
+  return false;
+}
+
+/* Mark the job frames the list names. Returns 0, or -1 with error
+ * filled. */
+static int32_t mark_listed_frames(const ft_job* job, const char* list,
+                                  bool* is_wanted, ft_err* error) {
+  const char* cursor = list;
+  while(true) {
+    int64_t first = read_number(&cursor);
+    if(first < 0) return ft_fail(error, "share: bad frame list '%s'", list);
+    int64_t last = first;
+    if(*cursor == '-') {
+      cursor++;
+      last = read_number(&cursor);
+      if(last < first) {
+        return ft_fail(error, "share: bad frame list '%s'", list);
+      }
+    }
+    for(int64_t number = first; number <= last; number++) {
+      if(does_job_have(job, number) == false) {
+        return ft_fail(error, "share: the job has no frame %d", (int)number);
+      }
+      for(uint32_t index = 0; index < job->frame_count; index++) {
+        if(job->frames[index].index == number) is_wanted[index] = true;
+      }
+    }
+    if(*cursor == '\0') return 0;
+    if(*cursor != ',') {
+      return ft_fail(error, "share: bad frame list '%s'", list);
+    }
+    cursor++;
+  }
+}
+
+/* the planner's view of a job frame */
+static ft_share_frame make_share_frame(const ft_job_frame* frame) {
+  ft_share_frame share = {.index = frame->index,
+                          .type = frame->type,
+                          .along_start_mm = frame->along_start_mm,
+                          .length_mm = frame->length_mm,
+                          .across_start_mm = frame->across_start_mm,
+                          .width_mm = frame->width_mm};
+  return share;
+}
+
+int32_t ft_select_share_frames(const ft_job* job, const char* list,
+                               ft_share_frame* frames, uint32_t* frame_count,
+                               ft_err* error) {
+  bool is_wanted[FT_MAX_FRAMES];
+  memset(is_wanted, 0, sizeof is_wanted);
+  if(list == NULL || list[0] == '\0') {
+    for(uint32_t index = 0; index < job->frame_count; index++) {
+      is_wanted[index] = job->frames[index].type != FT_FRAME_PARTIAL;
+    }
+  } else if(mark_listed_frames(job, list, is_wanted, error) != 0) {
+    return -1;
+  }
+  uint32_t count = 0;
+  for(uint32_t index = 0; index < job->frame_count; index++) {
+    if(is_wanted[index] == false) continue;
+    ft_share_frame share = make_share_frame(&job->frames[index]);
+    /* insertion sort by along_start_mm: detection writes strip order
+     * already */
+    uint32_t position = count;
+    while(position > 0 &&
+          frames[position - 1].along_start_mm > share.along_start_mm) {
+      frames[position] = frames[position - 1];
+      position--;
+    }
+    frames[position] = share;
+    count++;
+  }
+  if(count == 0) return ft_fail(error, "share: no frames selected");
+  *frame_count = count;
   return 0;
 }
 
-int ft_share_select(const ft_job* j, const char* list, ft_share_frame* out,
-                    int* n, ft_err* e) {
-  unsigned char want[FT_MAX_FRAMES];
-  int i, k, m = 0;
-  memset(want, 0, sizeof want);
-  if(!list || !*list) {
-    for(i = 0; i < j->nframes; i++) want[i] = j->f[i].type != FT_FRAME_PARTIAL;
-  } else {
-    const char* p = list;
-    for(;;) {
-      long a = number(&p), b;
-      if(a < 0) return ft_fail(e, "share: bad frame list '%s'", list);
-      b = a;
-      if(*p == '-') {
-        p++;
-        b = number(&p);
-        if(b < a) return ft_fail(e, "share: bad frame list '%s'", list);
+/* the window (from 0) that holds selected frame number selected_index */
+static uint32_t find_window(const ft_share_estimate* estimate,
+                            uint32_t selected_index) {
+  uint32_t window = 0;
+  while(window < estimate->window_count &&
+        selected_index > estimate->windows[window].last_frame) {
+    window++;
+  }
+  return window;
+}
+
+void ft_apply_share_plan(ft_job* job, const ft_share_frame* selected,
+                         uint32_t selected_count,
+                         const ft_share_options* options,
+                         const ft_share_estimate* estimate) {
+  job->share_pixels = options->target_pixels;
+  job->half_frames_at_full_frame_ppi = options->half_frames_at_full_frame_ppi;
+  for(uint32_t index = 0; index < job->frame_count; index++) {
+    ft_job_frame* frame = &job->frames[index];
+    frame->is_included = false;
+    frame->group = 0;
+    uint32_t selected_index = 0;
+    while(selected_index < selected_count &&
+          selected[selected_index].index != frame->index) {
+      selected_index++;
+    }
+    if(selected_index == selected_count) continue;
+    frame->is_included = true;
+    frame->ppi = estimate->ppi;
+    frame->bin = estimate->bin;
+    frame->group = (int32_t)find_window(estimate, selected_index) + 1;
+  }
+}
+
+int32_t ft_plan_share_sizes(ft_job* job, const double* target_pixels,
+                            bool half_frames_at_full_frame_ppi,
+                            const ft_lens* lens, double scan_length_mm,
+                            ft_err* error) {
+  /* the chosen frames in strip order, and their targets */
+  ft_share_frame selected[FT_MAX_FRAMES];
+  double targets[FT_MAX_FRAMES];
+  double smallest_target = 0;
+  uint32_t selected_count = 0;
+  for(uint32_t index = 0; index < job->frame_count; index++) {
+    const ft_job_frame* frame = &job->frames[index];
+    double target = target_pixels[index];
+    if(target == 0) continue;
+    if(!(target >= MIN_TARGET_PIXELS && target <= MAX_TARGET_PIXELS)) {
+      return ft_fail(error,
+                     "share: frame %u: %g px is out of range (100..20000)",
+                     (unsigned)frame->index, target);
+    }
+    ft_share_frame share = make_share_frame(frame);
+    uint32_t position = selected_count;
+    while(position > 0 &&
+          selected[position - 1].along_start_mm > share.along_start_mm) {
+      selected[position] = selected[position - 1];
+      targets[position] = targets[position - 1];
+      position--;
+    }
+    selected[position] = share;
+    targets[position] = target;
+    selected_count++;
+    if(smallest_target == 0 || target < smallest_target) {
+      smallest_target = target;
+    }
+  }
+  if(selected_count == 0) return ft_fail(error, "share: no frames selected");
+  for(uint32_t index = 0; index < job->frame_count; index++) {
+    job->frames[index].is_included = false;
+    job->frames[index].group = 0;
+    job->frames[index].share_pixels = 0;
+  }
+
+  /* each run of one size, priced on its own */
+  int32_t group_count = 0;
+  ft_share_estimate candidates[6];
+  uint32_t run_end;
+  for(uint32_t run_start = 0; run_start < selected_count;
+      run_start = run_end + 1) {
+    run_end = run_start;
+    while(run_end + 1 < selected_count &&
+          targets[run_end + 1] == targets[run_start]) {
+      run_end++;
+    }
+    ft_share_options options;
+    ft_init_share_options(&options, scan_length_mm);
+    options.target_pixels = targets[run_start];
+    options.half_frames_at_full_frame_ppi = half_frames_at_full_frame_ppi;
+    int32_t candidate_count =
+      ft_find_share_candidates(selected + run_start, run_end - run_start + 1,
+                               &options, lens, candidates, error);
+    if(candidate_count < 1) return -1;
+    const ft_share_estimate* estimate =
+      &candidates[ft_pick_most_light(candidates, (uint32_t)candidate_count)];
+    for(uint32_t chosen = run_start; chosen <= run_end; chosen++) {
+      uint32_t window = find_window(estimate, chosen - run_start);
+      for(uint32_t index = 0; index < job->frame_count; index++) {
+        ft_job_frame* frame = &job->frames[index];
+        if(frame->index != selected[chosen].index) continue;
+        frame->is_included = true;
+        frame->ppi = estimate->ppi;
+        frame->bin = estimate->bin;
+        frame->group = group_count + (int32_t)window + 1;
+        /* only frames of another size than the strip's carry their own */
+        frame->share_pixels =
+          targets[run_start] == smallest_target ? 0 : targets[run_start];
       }
-      for(k = (int)a; k <= b; k++) {
-        if(!job_has(j, k))
-          return ft_fail(e, "share: the job has no frame %d", k);
-        for(i = 0; i < j->nframes; i++)
-          if(j->f[i].index == k) want[i] = 1;
-      }
-      if(!*p) break;
-      if(*p++ != ',') return ft_fail(e, "share: bad frame list '%s'", list);
     }
+    group_count += (int32_t)estimate->window_count;
   }
-  for(i = 0; i < j->nframes; i++) {
-    const ft_job_frame* f = &j->f[i];
-    ft_share_frame s;
-    if(!want[i]) continue;
-    s.index = f->index;
-    s.type = f->type;
-    s.y0 = f->y0;
-    s.len = f->len;
-    s.x0 = f->x0;
-    s.width = f->width;
-    /* insertion by y0: detection writes strip order already */
-    for(k = m; k > 0 && out[k - 1].y0 > s.y0; k--) out[k] = out[k - 1];
-    out[k] = s;
-    m++;
-  }
-  if(!m) return ft_fail(e, "share: no frames selected");
-  *n = m;
-  return 0;
+  job->share_pixels = smallest_target;
+  job->half_frames_at_full_frame_ppi = half_frames_at_full_frame_ppi;
+  /* measured on the first window */
+  job->focus_mode = FT_FOCUS_PER_FRAME;
+  job->focus_offset_steps = 0;
+  return group_count;
 }
 
-void ft_share_apply(ft_job* j, const ft_share_frame* sel, int n,
-                    const ft_share_opts* o, const ft_share_est* est) {
-  int i, k, w;
-  j->share = o->target_px;
-  j->hf_half_res = o->hf_half_res;
-  for(i = 0; i < j->nframes; i++) {
-    ft_job_frame* f = &j->f[i];
-    f->include = 0;
-    f->group = 0;
-    for(k = 0; k < n; k++)
-      if(sel[k].index == f->index) break;
-    if(k == n) continue;
-    for(w = 0; w < est->nwin && k > est->win[w].last; w++);
-    f->include = 1;
-    f->ppi = est->ppi;
-    f->bin = est->bin;
-    f->group = w + 1;
-  }
-}
-
-int ft_share_plan_sizes(ft_job* j, const double* target_px, int hf_half_res,
-                        const ft_lens* lens, double scan_len_mm, ft_err* e) {
-  ft_share_frame sel[FT_MAX_FRAMES];
-  double tg[FT_MAX_FRAMES], least = 0;
-  ft_share_est c[6];
-  int i, k, m = 0, a, b, groups = 0;
-
-  for(i = 0; i < j->nframes; i++) {
-    const ft_job_frame* f = &j->f[i];
-    ft_share_frame s;
-    double t = target_px[i];
-    if(t == 0) continue;
-    if(!(t >= 100 && t <= 20000))
-      return ft_fail(e,
-                     "share: frame %d: %g px is out of range "
-                     "(100..20000)",
-                     f->index, t);
-    s.index = f->index;
-    s.type = f->type;
-    s.y0 = f->y0;
-    s.len = f->len;
-    s.x0 = f->x0;
-    s.width = f->width;
-    for(k = m; k > 0 && sel[k - 1].y0 > s.y0; k--) {
-      sel[k] = sel[k - 1];
-      tg[k] = tg[k - 1];
+int32_t ft_get_share_group_window(const ft_job* job, int32_t group,
+                                  const ft_share_options* options,
+                                  double* start_mm, double* length_mm) {
+  double start = HUGE_VAL;
+  double end = -HUGE_VAL;
+  for(uint32_t index = 0; index < job->frame_count; index++) {
+    const ft_job_frame* frame = &job->frames[index];
+    if(frame->is_included == false || frame->group != group) continue;
+    if(frame->along_start_mm < start) start = frame->along_start_mm;
+    if(frame->along_start_mm + frame->length_mm > end) {
+      end = frame->along_start_mm + frame->length_mm;
     }
-    sel[k] = s;
-    tg[k] = t;
-    m++;
-    if(least == 0 || t < least) least = t;
   }
-  if(!m) return ft_fail(e, "share: no frames selected");
-  for(i = 0; i < j->nframes; i++) {
-    j->f[i].include = 0;
-    j->f[i].group = 0;
-    j->f[i].share_px = 0;
-  }
-  for(a = 0; a < m; a = b + 1) {
-    ft_share_opts o;
-    const ft_share_est* est;
-    int nc, q, w;
-    for(b = a; b + 1 < m && tg[b + 1] == tg[a]; b++);
-    ft_share_opts_default(&o, scan_len_mm);
-    o.target_px = tg[a];
-    o.hf_half_res = hf_half_res;
-    nc = ft_share_candidates(sel + a, b - a + 1, &o, lens, c, e);
-    if(nc < 1) return -1;
-    est = &c[ft_share_pick_max_dmax(c, nc)];
-    for(q = a; q <= b; q++) {
-      for(w = 0; w < est->nwin && q - a > est->win[w].last; w++);
-      for(i = 0; i < j->nframes; i++)
-        if(j->f[i].index == sel[q].index) {
-          ft_job_frame* f = &j->f[i];
-          f->include = 1;
-          f->ppi = est->ppi;
-          f->bin = est->bin;
-          f->group = groups + w + 1;
-          f->share_px = tg[a] == least ? 0 : tg[a];
-        }
-    }
-    groups += est->nwin;
-  }
-  j->share = least;
-  j->hf_half_res = hf_half_res;
-  j->focus = FT_FOCUS_PER_FRAME; /* measured on the first window */
-  j->focus_offset = 0;
-  return groups;
-}
-
-int ft_share_group_window(const ft_job* j, int g, const ft_share_opts* o,
-                          double* y0, double* len) {
-  double a = HUGE_VAL, b = -HUGE_VAL;
-  int i;
-  for(i = 0; i < j->nframes; i++) {
-    const ft_job_frame* f = &j->f[i];
-    if(!f->include || f->group != g) continue;
-    if(f->y0 < a) a = f->y0;
-    if(f->y0 + f->len > b) b = f->y0 + f->len;
-  }
-  if(a > b) return -1;
-  a -= o->margin_mm;
-  b += o->margin_mm;
-  if(a < 0) a = 0;
-  if(b > o->scan_len_mm) b = o->scan_len_mm;
-  *y0 = a;
-  *len = b - a;
+  if(start > end) return -1;
+  start -= options->margin_mm;
+  end += options->margin_mm;
+  if(start < 0) start = 0;
+  if(end > options->scan_length_mm) end = options->scan_length_mm;
+  *start_mm = start;
+  *length_mm = end - start;
   return 0;
 }

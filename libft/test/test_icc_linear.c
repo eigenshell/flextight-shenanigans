@@ -20,22 +20,22 @@ static unsigned long rd32(const unsigned char* p) {
 
 int main(void) {
   static const char DESC[] = "scanner RGB, linear (flextight)";
-  unsigned char p[FT_ICC_MAX];
+  unsigned char p[FT_ICC_MAX_BYTES];
   double inv[9], a[9];
   ft_image im;
   size_t n;
   int i, k;
 
-  ft_image_init(&im); /* xyz_to_rgb: sRGB until profiled */
+  ft_init_image(&im); /* xyz_to_rgb: sRGB until profiled */
   /* 240 header and tag table + desc 12 + 32 + 78 (-> 124) + cprt 36 +
    * four XYZ 80 + an empty curv 12 */
-  n = ft_icc_build_linear(im.xyz_to_rgb, DESC, p, sizeof p);
+  n = ft_build_linear_icc_profile(im.xyz_to_rgb, DESC, p, sizeof p);
   CHECK(n == 492);
   CHECK(rd32(p) == n && memcmp(p + 12, "mntrRGB XYZ ", 12) == 0);
-  CHECK(ft_icc_build_linear(im.xyz_to_rgb, DESC, p, 491) == 0);
+  CHECK(ft_build_linear_icc_profile(im.xyz_to_rgb, DESC, p, 491) == 0);
   {
     static const double sing[9] = {1, 2, 3, 2, 4, 6, 0, 0, 1};
-    CHECK(ft_icc_build_linear(sing, DESC, p, sizeof p) == 0);
+    CHECK(ft_build_linear_icc_profile(sing, DESC, p, sizeof p) == 0);
   }
   { /* a long description is cut at 63 characters */
     char longd[200];
@@ -43,7 +43,7 @@ int main(void) {
     char name[100];
     memset(longd, 'x', sizeof longd - 1);
     longd[sizeof longd - 1] = 0;
-    n = ft_icc_build_linear(im.xyz_to_rgb, longd, p, sizeof p);
+    n = ft_build_linear_icc_profile(im.xyz_to_rgb, longd, p, sizeof p);
     pr = cmsOpenProfileFromMem(p, (cmsUInt32Number)n);
     CHECK(pr != NULL);
     cmsGetProfileInfoASCII(pr, cmsInfoDescription, "en", "US", name,
@@ -52,7 +52,7 @@ int main(void) {
     cmsCloseProfile(pr);
   }
 
-  n = ft_icc_build_linear(im.xyz_to_rgb, DESC, p, sizeof p);
+  n = ft_build_linear_icc_profile(im.xyz_to_rgb, DESC, p, sizeof p);
   {
     cmsHPROFILE prof = cmsOpenProfileFromMem(p, (cmsUInt32Number)n);
     cmsHPROFILE lab = cmsCreateLab4Profile(NULL);
@@ -70,8 +70,8 @@ int main(void) {
     CHECK(strcmp(name, DESC) == 0);
     /* linear 16-bit RGB decoded by lcms through the profile lands on
      * XYZ = xyz_to_rgb^-1 RGB, adapted to D50: dE2000 < 0.1 */
-    CHECK(ft_mat3_inv(im.xyz_to_rgb, inv) == 0);
-    ft_icc_bradford(a);
+    CHECK(ft_invert_matrix3(im.xyz_to_rgb, inv) == 0);
+    ft_get_bradford_matrix(a);
     tr = cmsCreateTransform(prof, TYPE_RGB_16, lab, TYPE_Lab_DBL,
                             INTENT_RELATIVE_COLORIMETRIC, 0);
     CHECK(tr != NULL);

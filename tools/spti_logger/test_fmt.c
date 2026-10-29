@@ -112,8 +112,8 @@ int main(void) {
   /* (i) empty in/out buffers, failure path */
   {
     static const char* expect =
-      "{\"h\":\"0x12\",\"seq\":0,\"t\":0,\"code\":\"0x2a002c\",\"in_len\":0,"
-      "\"in_head\":\"\","
+      "{\"h\":\"0x12\",\"seq\":0,\"t\":0,\"code\":"
+      "\"0x2a002c\",\"in_len\":0,\"in_head\":\"\","
       "\"ok\":0,\"out_len\":0,\"out_head\":\"\"}";
     r = ft_fmt_ioctl_record(buf, sizeof buf, 0x12, 0, 0, 0x2a002c, 0,
                             (const unsigned char*)"", 0, 0, 0,

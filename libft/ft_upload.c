@@ -1,65 +1,103 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "ft_upload.h"
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
-#define HDR 10
+/* the packet header at the start of every WRITE BUFFER's data */
+#define HEADER_BYTES 10
+/* header byte 0: the loader commands */
+#define LOADER_RUN 0x00
+#define LOADER_WRITE_MEMORY 0x01
+/* chunk i goes to segment 0x3i00 */
+#define FIRST_SEGMENT_HIGH 0x30
 
-static void write_buffer_cdb(unsigned char cdb[10], size_t len) {
-  memset(cdb, 0, 10);
-  cdb[0] = 0x3b;
-  cdb[1] = 0x01;
-  cdb[6] = (unsigned char)(len >> 16);
-  cdb[7] = (unsigned char)(len >> 8);
-  cdb[8] = (unsigned char)len;
+/* WRITE BUFFER (opcode 0x3b), mode 1 (vendor specific), with the data
+ * length in bytes 6..8, big endian */
+static void build_write_buffer_command(uint8_t command[10], size_t length) {
+  memset(command, 0, 10);
+  command[0] = 0x3b;
+  command[1] = 0x01;
+  command[6] = (uint8_t)(length >> 16);
+  command[7] = (uint8_t)(length >> 8);
+  command[8] = (uint8_t)length;
 }
 
-int ft_upload_chunk(int i, const unsigned char code[FT_UPLOAD_CHUNK],
-                    unsigned char cdb[10], unsigned char* buf, size_t cap,
-                    ft_err* e) {
-  if(i < 0 || i >= FT_UPLOAD_CHUNKS)
-    return ft_fail(e, "upload: chunk %d (0..15)", i);
-  if(cap < HDR + FT_UPLOAD_CHUNK) return ft_fail(e, "upload: buffer too small");
-  memset(buf, 0, HDR);
-  buf[0] = 0x01;                      /* write memory */
-  buf[1] = (unsigned char)(0x30 + i); /* segment 0x3i00, offset 0 */
-  memcpy(buf + HDR, code, FT_UPLOAD_CHUNK);
-  write_buffer_cdb(cdb, HDR + FT_UPLOAD_CHUNK);
-  return HDR + FT_UPLOAD_CHUNK;
+int32_t ft_build_upload_chunk(uint32_t chunk_index,
+                              const uint8_t code[FT_UPLOAD_CHUNK_BYTES],
+                              uint8_t command[10], uint8_t* data,
+                              size_t data_capacity, ft_err* error) {
+  if(chunk_index >= FT_UPLOAD_CHUNK_COUNT) {
+    return ft_fail(error, "upload: chunk %u (0..15)", (unsigned)chunk_index);
+  }
+  if(data_capacity < HEADER_BYTES + FT_UPLOAD_CHUNK_BYTES) {
+    return ft_fail(error, "upload: buffer too small");
+  }
+  memset(data, 0, HEADER_BYTES);
+  data[0] = LOADER_WRITE_MEMORY;
+  /* the segment's high byte: 0x3i00; the offset stays 0 */
+  data[1] = (uint8_t)(FIRST_SEGMENT_HIGH + chunk_index);
+  memcpy(data + HEADER_BYTES, code, FT_UPLOAD_CHUNK_BYTES);
+  build_write_buffer_command(command, HEADER_BYTES + FT_UPLOAD_CHUNK_BYTES);
+  return HEADER_BYTES + FT_UPLOAD_CHUNK_BYTES;
 }
 
-int ft_upload_trailer(unsigned char cdb[10], unsigned char* buf, size_t cap,
-                      ft_err* e) {
-  static const unsigned char run[HDR] = {0x00, 0x30, 0x01, 0x00, 0x0e,
-                                         0,    0,    0,    0,    0};
-  if(cap < HDR) return ft_fail(e, "upload: buffer too small");
-  memcpy(buf, run, HDR);
-  write_buffer_cdb(cdb, HDR);
-  return HDR;
+int32_t ft_build_upload_trailer(uint8_t command[10], uint8_t* data,
+                                size_t data_capacity, ft_err* error) {
+  /* run from 3001:000E: segment 0x3001 and offset 0x000E, high byte
+   * first, as FlexColor sends them */
+  static const uint8_t RUN_HEADER[HEADER_BYTES] = {
+    LOADER_RUN, 0x30, 0x01, 0x00, 0x0e, 0, 0, 0, 0, 0};
+  if(data_capacity < HEADER_BYTES) {
+    return ft_fail(error, "upload: buffer too small");
+  }
+  memcpy(data, RUN_HEADER, HEADER_BYTES);
+  build_write_buffer_command(command, HEADER_BYTES);
+  return HEADER_BYTES;
 }
 
-int ft_upload_is_loader(const unsigned char* inq, size_t n) {
-  return n >= 27 && memcmp(inq + 16, "SCSI Loader", 11) == 0;
+bool ft_is_loader(const uint8_t* inquiry, size_t inquiry_length) {
+  /* the product name starts at byte 16 */
+  return inquiry_length >= 16 + 11 &&
+         memcmp(inquiry + 16, "SCSI Loader", 11) == 0;
 }
 
-/* s[0..n) + t into out (FT_UPLOAD_PATH); 0, or -1 if it does not fit */
-static int join(char* out, const char* s, size_t n, const char* t) {
-  size_t m = strlen(t);
-  if(n + m >= FT_UPLOAD_PATH) return -1;
-  memcpy(out, s, n);
-  memcpy(out + n, t, m + 1);
-  return 0;
+/* Join the first prefix_length bytes of prefix and all of name into path.
+ * Returns false when the result does not fit FT_UPLOAD_PATH_BYTES. */
+static bool join_path(char* path, const char* prefix, size_t prefix_length,
+                      const char* name) {
+  size_t name_length = strlen(name);
+  if(prefix_length + name_length >= FT_UPLOAD_PATH_BYTES) return false;
+  memcpy(path, prefix, prefix_length);
+  /* + 1 copies the NUL at the end of name too */
+  memcpy(path + prefix_length, name, name_length + 1);
+  return true;
 }
 
-int ft_upload_paths(const char* given, const char* exe,
-                    char out[2][FT_UPLOAD_PATH]) {
-  size_t i, dir = 0;
-  int k = 0;
-  if(given) return given[0] && join(out[0], "", 0, given) == 0 ? 1 : 0;
-  for(i = 0; exe && exe[i]; i++)
-    if(exe[i] == '\\' || exe[i] == '/')
-      dir = i + 1; /* up to and with the separator */
-  if(dir && join(out[k], exe, dir, FT_UPLOAD_FILE) == 0) k++;
-  if(join(out[k], "", 0, FT_UPLOAD_FILE) == 0) k++;
-  return k;
+uint32_t ft_find_microcode_paths(const char* given, const char* program_path,
+                                 char paths[2][FT_UPLOAD_PATH_BYTES]) {
+  if(given != NULL) {
+    if(given[0] != '\0' && join_path(paths[0], "", 0, given)) return 1;
+    return 0;
+  }
+
+  /* the directory part of program_path: up to and with its last
+   * separator; 0 when there is none */
+  size_t directory_length = 0;
+  for(size_t index = 0; program_path != NULL && program_path[index] != '\0';
+      index++) {
+    if(program_path[index] == '\\' || program_path[index] == '/') {
+      directory_length = index + 1;
+    }
+  }
+
+  uint32_t path_count = 0;
+  if(directory_length > 0 && join_path(paths[path_count], program_path,
+                                       directory_length, FT_MICROCODE_FILE)) {
+    path_count++;
+  }
+  if(join_path(paths[path_count], "", 0, FT_MICROCODE_FILE)) path_count++;
+  return path_count;
 }

@@ -1,207 +1,310 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "ft_calib.h"
 
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "ft_geom.h"
 
-/* each line dark (-1), white (1) or neither (0) by its mean level: within
- * FT_CAL_BAND of the range from the darkest or brightest line mean */
-static int classify(const unsigned short* cal, int lines, long n3,
-                    signed char* cls) {
-  double *lm = malloc(lines * sizeof *lm), lo, hi, band;
-  long i;
-  int l;
-  if(!lm) return -1;
-  for(l = 0; l < lines; l++) {
-    double s = 0;
-    for(i = 0; i < n3; i++) s += cal[l * n3 + i];
-    lm[l] = s / n3;
+/* each kind of calibration needs at least this many lines */
+#define MIN_REFERENCE_LINES 10
+/* a reference range below 1 DN is treated as 1, to never divide by 0 */
+#define MIN_SPAN 1
+/* the Faul Pixs dump: CCD pixel 100 with value 0 starts a channel,
+ * value +999 marks a faulty pixel */
+#define CHANNEL_MARKER_PIXEL 100
+
+/* What a calibration line shows, by its mean level. */
+typedef enum line_level { LINE_DARK, LINE_WHITE, LINE_NEITHER } line_level;
+
+/* Classify every line as dark, white or neither: within
+ * FT_CALIBRATION_BAND of the range from the darkest or brightest line
+ * mean. Returns false when memory runs out. */
+static bool classify_lines(const uint16_t* calibration, uint32_t lines,
+                           size_t values_per_line, uint8_t* levels) {
+  double* line_means = malloc(lines * sizeof *line_means);
+  if(line_means == NULL) return false;
+  for(size_t line = 0; line < lines; line++) {
+    double sum = 0;
+    for(size_t index = 0; index < values_per_line; index++) {
+      sum += calibration[line * values_per_line + index];
+    }
+    line_means[line] = sum / values_per_line;
   }
-  lo = hi = lm[0];
-  for(l = 1; l < lines; l++) {
-    if(lm[l] < lo) lo = lm[l];
-    if(lm[l] > hi) hi = lm[l];
+
+  double darkest = line_means[0];
+  double brightest = line_means[0];
+  for(size_t line = 1; line < lines; line++) {
+    if(line_means[line] < darkest) darkest = line_means[line];
+    if(line_means[line] > brightest) brightest = line_means[line];
   }
-  band = FT_CAL_BAND * (hi - lo);
-  for(l = 0; l < lines; l++)
-    cls[l] = lm[l] < lo + band ? -1 : lm[l] > hi - band ? 1 : 0;
-  free(lm);
-  return 0;
+  double band = FT_CALIBRATION_BAND * (brightest - darkest);
+  for(size_t line = 0; line < lines; line++) {
+    levels[line] = LINE_NEITHER;
+    if(line_means[line] > brightest - band) levels[line] = LINE_WHITE;
+    /* checked last: a line that is both (no range at all) counts dark */
+    if(line_means[line] < darkest + band) levels[line] = LINE_DARK;
+  }
+  free(line_means);
+  return true;
 }
 
-int ft_split_cal(const unsigned short* cal, int lines, int px, float* dark,
-                 float* white, ft_err* e) {
-  long n3 = (long)px * 3, i;
-  double *sd, *sw;
-  signed char* cls;
-  int l, nd = 0, nw = 0, rc = 0;
+int32_t ft_split_calibration(const uint16_t* calibration, uint32_t lines,
+                             uint32_t pixels, float* dark, float* white,
+                             ft_err* error) {
+  if(lines < 1 || pixels < 1) {
+    return ft_fail(error, "calibration: bad dimensions");
+  }
+  size_t values_per_line = (size_t)pixels * 3;
+  uint8_t* levels = malloc(lines);
+  double* dark_sums = calloc(values_per_line, sizeof *dark_sums);
+  double* white_sums = calloc(values_per_line, sizeof *white_sums);
+  int32_t result = 0;
 
-  if(lines < 1 || px < 1) return ft_fail(e, "calibration: bad dimensions");
-  cls = malloc((size_t)lines);
-  sd = calloc(n3, sizeof *sd);
-  sw = calloc(n3, sizeof *sw);
+  if(levels == NULL ||
+     dark_sums == NULL ||
+     white_sums == NULL ||
+     classify_lines(calibration, lines, values_per_line, levels) == false) {
+    result = ft_fail(error, "calibration: out of memory");
+    goto cleanup;
+  }
 
-  if(!cls || !sd || !sw || classify(cal, lines, n3, cls)) {
-    rc = ft_fail(e, "calibration: out of memory");
-    goto out;
-  }
-  for(l = 0; l < lines; l++) {
-    double* acc = cls[l] < 0 ? sd : cls[l] > 0 ? sw : NULL;
-    if(!acc) continue;
-    if(acc == sd)
-      nd++;
-    else
-      nw++;
-    for(i = 0; i < n3; i++) acc[i] += cal[l * n3 + i];
-  }
-  if(nd < 10 || nw < 10) {
-    rc = ft_fail(e, "calibration: %d dark / %d white lines", nd, nw);
-    goto out;
-  }
-  for(i = 0; i < n3; i++) {
-    dark[i] = (float)(sd[i] / nd);
-    white[i] = (float)(sw[i] / nw);
-  }
-out:
-  free(cls);
-  free(sd);
-  free(sw);
-  return rc;
-}
-
-int ft_white_var(const unsigned short* cal, int lines, int px, double var[3],
-                 ft_err* e) {
-  long n3 = (long)px * 3, i;
-  float *dark = malloc(n3 * sizeof *dark), *white = malloc(n3 * sizeof *white);
-  double *ss = calloc(n3, sizeof *ss), sum[3] = {0, 0, 0};
-  signed char* cls = malloc(lines > 0 ? (size_t)lines : 1);
-  int l, nw = 0, c, rc = -1;
-
-  if(!dark || !white || !ss || !cls) {
-    ft_fail(e, "calibration: out of memory");
-    goto out;
-  }
-  if(ft_split_cal(cal, lines, px, dark, white, e)) goto out;
-  if(classify(cal, lines, n3, cls)) {
-    ft_fail(e, "calibration: out of memory");
-    goto out;
-  }
-  for(l = 0; l < lines; l++) {
-    if(cls[l] <= 0) continue;
-    nw++;
-    for(i = 0; i < n3; i++) {
-      double d = cal[l * n3 + i] - white[i];
-      ss[i] += d * d;
+  uint32_t dark_count = 0;
+  uint32_t white_count = 0;
+  for(size_t line = 0; line < lines; line++) {
+    double* sums = NULL;
+    switch((line_level)levels[line]) {
+      case LINE_DARK:
+        sums = dark_sums;
+        dark_count++;
+        break;
+      case LINE_WHITE:
+        sums = white_sums;
+        white_count++;
+        break;
+      case LINE_NEITHER:
+        break;
+    }
+    if(sums == NULL) continue;
+    for(size_t index = 0; index < values_per_line; index++) {
+      sums[index] += calibration[line * values_per_line + index];
     }
   }
-  for(i = 0; i < n3; i++) {
-    double span = white[i] - dark[i];
-    if(span < 1) span = 1;
-    sum[i % 3] += ss[i] / nw / (span * span);
+  if(dark_count < MIN_REFERENCE_LINES || white_count < MIN_REFERENCE_LINES) {
+    result = ft_fail(error, "calibration: %u dark / %u white lines",
+                     (unsigned)dark_count, (unsigned)white_count);
+    goto cleanup;
   }
-  for(c = 0; c < 3; c++) var[c] = sum[c] / px;
-  rc = 0;
-out:
+  for(size_t index = 0; index < values_per_line; index++) {
+    dark[index] = (float)(dark_sums[index] / dark_count);
+    white[index] = (float)(white_sums[index] / white_count);
+  }
+
+/* one exit, so every buffer is freed on every path */
+cleanup:
+  free(levels);
+  free(dark_sums);
+  free(white_sums);
+  return result;
+}
+
+int32_t ft_measure_white_variance(const uint16_t* calibration, uint32_t lines,
+                                  uint32_t pixels, double variance[3],
+                                  ft_err* error) {
+  size_t values_per_line = (size_t)pixels * 3;
+  float* dark = malloc(values_per_line * sizeof *dark);
+  float* white = malloc(values_per_line * sizeof *white);
+  double* square_sums = calloc(values_per_line, sizeof *square_sums);
+  /* malloc(0) may return NULL, so ask for at least 1 byte */
+  uint8_t* levels = malloc(lines > 0 ? lines : 1);
+  double channel_sums[3] = {0, 0, 0};
+  int32_t result = -1;
+
+  if(dark == NULL || white == NULL || square_sums == NULL || levels == NULL) {
+    ft_fail(error, "calibration: out of memory");
+    goto cleanup;
+  }
+  if(ft_split_calibration(calibration, lines, pixels, dark, white, error) !=
+     0) {
+    goto cleanup;
+  }
+  if(classify_lines(calibration, lines, values_per_line, levels) == false) {
+    ft_fail(error, "calibration: out of memory");
+    goto cleanup;
+  }
+
+  uint32_t white_count = 0;
+  for(size_t line = 0; line < lines; line++) {
+    if(levels[line] != LINE_WHITE) continue;
+    white_count++;
+    for(size_t index = 0; index < values_per_line; index++) {
+      double difference =
+        calibration[line * values_per_line + index] - white[index];
+      square_sums[index] += difference * difference;
+    }
+  }
+  for(size_t index = 0; index < values_per_line; index++) {
+    double span = white[index] - dark[index];
+    if(span < MIN_SPAN) span = MIN_SPAN;
+    /* index % 3 is the channel: values go red, green, blue */
+    channel_sums[index % 3] += square_sums[index] / white_count / (span * span);
+  }
+  for(uint32_t channel = 0; channel < 3; channel++) {
+    variance[channel] = channel_sums[channel] / pixels;
+  }
+  result = 0;
+
+cleanup:
   free(dark);
   free(white);
-  free(ss);
-  free(cls);
-  return rc;
+  free(square_sums);
+  free(levels);
+  return result;
 }
 
-void ft_flatfield(const unsigned short* raw, int lines, int px,
-                  const float* dark, const float* white, float* t) {
-  long n3 = (long)px * 3, i;
-  int l;
-  for(l = 0; l < lines; l++)
-    for(i = 0; i < n3; i++) {
-      float span = white[i] - dark[i];
-      float v = (raw[l * n3 + i] - dark[i]) / (span < 1 ? 1 : span);
-      t[l * n3 + i] = v < 0 ? 0 : v > 1 ? 1 : v;
+void ft_apply_flat_field(const uint16_t* raw, uint32_t lines, uint32_t pixels,
+                         const float* dark, const float* white,
+                         float* transmittance) {
+  size_t values_per_line = (size_t)pixels * 3;
+  for(size_t line = 0; line < lines; line++) {
+    for(size_t index = 0; index < values_per_line; index++) {
+      size_t at = line * values_per_line + index;
+      float span = white[index] - dark[index];
+      if(span < MIN_SPAN) span = MIN_SPAN;
+      float value = (raw[at] - dark[index]) / span;
+      if(value < 0) value = 0;
+      if(value > 1) value = 1;
+      transmittance[at] = value;
     }
+  }
 }
 
-int ft_faul_parse(const char* text, size_t n, int pix[3][FT_FAUL_MAX],
-                  int count[3]) {
-  int ch = -1, first = 1;
-  size_t i = 0;
-  count[0] = count[1] = count[2] = 0;
-  while(i < n) {
-    char ln[64], val[16];
-    size_t k = 0;
-    long p;
-    while(i < n && text[i] != '\n' && text[i] != '\r' && text[i] != '\0') {
-      if(k < sizeof ln - 1) ln[k++] = text[i];
-      i++;
+uint32_t ft_parse_faulty_pixels(const char* text, size_t text_length,
+                                int32_t faulty[3][FT_FAULTY_PIXEL_MAX],
+                                uint32_t count[3]) {
+  /* the channel the entries belong to; -1 before the first marker */
+  int32_t channel = -1;
+  bool is_header = true;
+  size_t position = 0;
+  count[0] = 0;
+  count[1] = 0;
+  count[2] = 0;
+
+  while(position < text_length) {
+    /* copy one line; a longer one is cut at 63 characters */
+    char line[64];
+    size_t line_length = 0;
+    while(position < text_length &&
+          text[position] != '\n' &&
+          text[position] != '\r' &&
+          text[position] != '\0') {
+      if(line_length < sizeof line - 1) {
+        line[line_length] = text[position];
+        line_length++;
+      }
+      position++;
     }
-    i++;
-    ln[k] = 0;
-    if(first) { /* header line */
-      first = 0;
+    position++;
+    line[line_length] = '\0';
+    if(is_header) {
+      is_header = false;
       continue;
     }
-    if(sscanf(ln, " %ld %15s", &p, val) != 2) continue;
-    if(p == 100 && strcmp(val, "0") == 0) {
-      ch++;
+
+    long pixel;
+    char value[16];
+    if(sscanf(line, " %ld %15s", &pixel, value) != 2) continue;
+    if(pixel == CHANNEL_MARKER_PIXEL && strcmp(value, "0") == 0) {
+      channel++;
       continue;
     }
-    if(ch >= 0 && ch < 3 && strcmp(val, "+999") == 0 && count[ch] < FT_FAUL_MAX)
-      pix[ch][count[ch]++] = (int)p;
+    bool is_faulty = channel >= 0 && channel < 3 && strcmp(value, "+999") == 0;
+    if(is_faulty && count[channel] < FT_FAULTY_PIXEL_MAX) {
+      faulty[channel][count[channel]] = (int32_t)pixel;
+      count[channel]++;
+    }
   }
   return count[0] + count[1] + count[2];
 }
 
-int ft_faul_fix(float* t, int lines, int px, int pix[3][FT_FAUL_MAX],
-                const int count[3], int x, int bin) {
-  unsigned char* bad;
-  int ch, i, j, l;
-  if(bin < 1 || px < 1) return -1;
-  bad = malloc(px);
-  if(!bad) return -1;
-  for(ch = 0; ch < 3; ch++) {
-    memset(bad, 0, px);
-    for(i = 0; i < count[ch]; i++) {
-      long d = pix[ch][i] - (long)FT_CCD_FIRST;
-      long q = (d >= 0 ? d / bin : -((-d + bin - 1) / bin)) - x;
-      if(q >= 0 && q < px) bad[q] = 1;
+/* Integer division that rounds down (towards minus infinity); C's "/"
+ * rounds towards zero, which is wrong for negative numbers. */
+static int64_t divide_rounding_down(int64_t numerator, int64_t denominator) {
+  if(numerator >= 0) return numerator / denominator;
+  return -((-numerator + denominator - 1) / denominator);
+}
+
+int32_t ft_repair_faulty_pixels(float* transmittance, uint32_t lines,
+                                uint32_t pixels,
+                                int32_t faulty[3][FT_FAULTY_PIXEL_MAX],
+                                const uint32_t count[3], int32_t window_start,
+                                uint32_t bin) {
+  if(bin < 1 || pixels < 1) return -1;
+  /* is_bad[x]: output pixel x of this channel is faulty */
+  uint8_t* is_bad = malloc(pixels);
+  if(is_bad == NULL) return -1;
+
+  for(uint32_t channel = 0; channel < 3; channel++) {
+    memset(is_bad, 0, pixels);
+    for(uint32_t index = 0; index < count[channel]; index++) {
+      int64_t from_first = faulty[channel][index] - (int64_t)FT_CCD_FIRST_PIXEL;
+      int64_t output_pixel =
+        divide_rounding_down(from_first, bin) - window_start;
+      if(output_pixel >= 0 && output_pixel < pixels) is_bad[output_pixel] = 1;
     }
-    for(j = 0; j < px; j++) {
-      int lo = j - 1, hi = j + 1;
-      if(!bad[j]) continue;
-      while(lo >= 0 && bad[lo]) lo--;
-      while(hi < px && bad[hi]) hi++;
-      if(lo < 0 && hi >= px) continue;
-      for(l = 0; l < lines; l++) {
-        float *r = t + (long)l * px * 3, v;
-        if(lo < 0)
-          v = r[hi * 3 + ch];
-        else if(hi >= px)
-          v = r[lo * 3 + ch];
-        else {
-          float w = (float)(j - lo) / (hi - lo);
-          v = (1 - w) * r[lo * 3 + ch] + w * r[hi * 3 + ch];
+
+    for(int64_t pixel = 0; pixel < pixels; pixel++) {
+      if(is_bad[pixel] == 0) continue;
+      /* the nearest good pixels left and right; -1 or pixels: none */
+      int64_t left = pixel - 1;
+      int64_t right = pixel + 1;
+      while(left >= 0 && is_bad[left] == 1) left--;
+      while(right < pixels && is_bad[right] == 1) right++;
+      bool has_left = left >= 0;
+      bool has_right = right < pixels;
+      if(has_left == false && has_right == false) continue;
+
+      for(size_t line = 0; line < lines; line++) {
+        float* row = transmittance + line * pixels * 3;
+        float value;
+        if(has_left == false) {
+          value = row[right * 3 + channel];
+        } else if(has_right == false) {
+          value = row[left * 3 + channel];
+        } else {
+          float weight = (float)(pixel - left) / (right - left);
+          value = (1 - weight) * row[left * 3 + channel] +
+                  weight * row[right * 3 + channel];
         }
-        r[j * 3 + ch] = v;
+        row[pixel * 3 + channel] = value;
       }
     }
   }
-  free(bad);
+  free(is_bad);
   return 0;
 }
 
-int ft_align_rgb(float* t, int lines, int px, int k) {
-  long n3 = (long)px * 3;
-  int l, n, c;
-  if(k <= 0 || lines <= 2 * k) return lines;
-  n = lines - 2 * k;
-  /* in place, increasing l: every source row is >= the row written */
-  for(l = 0; l < n; l++)
-    for(c = 0; c < px; c++) {
-      t[l * n3 + c * 3 + 0] = t[(l + 2 * k) * n3 + c * 3 + 0];
-      t[l * n3 + c * 3 + 1] = t[(l + k) * n3 + c * 3 + 1];
+uint32_t ft_align_rgb_rows(float* transmittance, uint32_t lines,
+                           uint32_t pixels, uint32_t row_offset) {
+  size_t values_per_line = (size_t)pixels * 3;
+  if(row_offset == 0 || lines <= 2 * row_offset) return lines;
+  uint32_t aligned_lines = lines - 2 * row_offset;
+  /* In place, line by line upwards: every line read is at or after the
+   * line written, so nothing is overwritten before it is read. Blue
+   * (index 2) stays where it is. */
+  for(size_t line = 0; line < aligned_lines; line++) {
+    float* out = transmittance + line * values_per_line;
+    const float* red_source =
+      transmittance + (line + 2 * row_offset) * values_per_line;
+    const float* green_source =
+      transmittance + (line + row_offset) * values_per_line;
+    for(size_t pixel = 0; pixel < pixels; pixel++) {
+      out[pixel * 3 + 0] = red_source[pixel * 3 + 0];
+      out[pixel * 3 + 1] = green_source[pixel * 3 + 1];
     }
-  return n;
+  }
+  return aligned_lines;
 }

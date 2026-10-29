@@ -3,126 +3,221 @@
  * colour per frame. Each frame's large-area mean film density per channel
  * (strongly coloured areas left out, so a lawn or a red wall barely
  * counts) is compared with the roll: the roll's median is printed at the
- * aim in full, a frame's deviation from it only by the slopes k_d
- * (density) and k_c (colour, < 1, at most clamp D on any channel), so a
- * sunset keeps much of its warmth. Film density d_c is green-referenced D above
- * base (the recipe's n_c x range[green]); the print exposure e_c = d_c +
+ * aim in full, a frame's deviation from it only by the slopes
+ * density_correction and colour_correction (< 1, at most clamp_density
+ * D on any channel), so a
+ * sunset keeps much of its warmth. Film density d_c is green-referenced D
+ * above base (the recipe's n_c x range[green]); the print exposure e_c = d_c +
  * lift_c, lift = exposure log10(2) + tint / 100 (ft_render.c). */
 #include <math.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "ft_pm.h"
 
-#define BLOCK 4       /* means on 4x4 blocks: noise / 4 */
-#define EDGE 50       /* 2 % in from each edge (the rebate) */
-#define CLEAR_T 0.9   /* open beam in all three channels */
-#define OPAQUE_T 1e-4 /* 4.0 D in all three: not film */
+/* means on 4x4 blocks: the noise / 4 */
+#define BLOCK 4
+/* 2 % in from each edge (the rebate) */
+#define EDGE_FRACTION 50
+/* open beam in all three channels */
+#define CLEAR_TRANSMITTANCE 0.9
+/* 4.0 D in all three: not film */
+#define OPAQUE_TRANSMITTANCE 1e-4
+/* the green channel: densities are referenced to its range */
+#define GREEN 1
 
-static int frontier_measure(const void* par, const ft_recipe* r,
-                            const ft_image* im, ft_print_frame* fr, ft_err* e) {
-  const ft_pm_frontier_par* p = par;
-  double sum[3] = {0, 0, 0}, all[3] = {0, 0, 0};
-  unsigned long kept = 0, n = 0;
-  int x0 = im->w / EDGE, x1 = im->w - im->w / EDGE;
-  int y0 = im->h / EDGE, y1 = im->h - im->h / EDGE, x, y, c, i, j;
-  int bw = r->mode == FT_RENDER_BW;
-  if(r->mode == FT_RENDER_SLIDE)
-    return ft_fail(e, "frontier: colour negatives and b&w only");
-  for(y = y0; y + BLOCK <= y1; y += BLOCK)
-    for(x = x0; x + BLOCK <= x1; x += BLOCK) {
-      double t[3] = {0, 0, 0}, d[3], m;
-      int bad = 0;
-      for(j = 0; j < BLOCK; j++)
-        for(i = 0; i < BLOCK; i++) {
-          const float* q = im->rgb + 3 * ((size_t)(y + j) * im->w + x + i);
-          for(c = 0; c < 3; c++) {
-            if(!isfinite(q[c])) bad = 1;
-            t[c] += q[c];
-          }
-        }
-      if(bad) continue;
-      for(c = 0; c < 3; c++) t[c] /= BLOCK * BLOCK;
-      if((t[0] > CLEAR_T && t[1] > CLEAR_T && t[2] > CLEAR_T) ||
-         (t[0] < OPAQUE_T && t[1] < OPAQUE_T && t[2] < OPAQUE_T))
-        continue;
-      if(bw) {
-        double l = r->bw_weights[0] * t[0] +
-                   r->bw_weights[1] * t[1] +
-                   r->bw_weights[2] * t[2];
-        d[0] = d[1] = d[2] =
-          -log10(l > FT_T_FLOOR ? l : FT_T_FLOOR) - r->base[1];
-      } else {
-        for(c = 0; c < 3; c++)
-          d[c] = (-log10(t[c] > FT_T_FLOOR ? t[c] : FT_T_FLOOR) - r->base[c]) /
-                 r->range[c] *
-                 r->range[1];
+/* the mean of a block's 3 x 16 values; false when one is not finite */
+static bool measure_block(const ft_image* image, uint32_t x, uint32_t y,
+                          double means[3]) {
+  means[0] = 0;
+  means[1] = 0;
+  means[2] = 0;
+  bool is_finite = true;
+  for(uint32_t row = 0; row < BLOCK; row++) {
+    for(uint32_t column = 0; column < BLOCK; column++) {
+      const float* pixel =
+        image->pixels + 3 * ((size_t)(y + row) * image->width + x + column);
+      for(uint32_t channel = 0; channel < 3; channel++) {
+        if(isfinite(pixel[channel]) == false) is_finite = false;
+        means[channel] += pixel[channel];
       }
-      m = (d[0] + d[1] + d[2]) / 3;
-      n++;
-      for(c = 0; c < 3; c++) all[c] += d[c];
-      if(fabs(d[0] - m) > p->sat ||
-         fabs(d[1] - m) > p->sat ||
-         fabs(d[2] - m) > p->sat)
-        continue;
-      kept++;
-      for(c = 0; c < 3; c++) sum[c] += d[c];
     }
-  if(n == 0) return ft_fail(e, "frontier: no film pixels to measure");
-  for(c = 0; c < 3; c++) /* all saturated: use everything */
-    fr->mean[c] = kept ? sum[c] / kept : all[c] / n;
-  fr->has_mean = 1;
+  }
+  for(uint32_t channel = 0; channel < 3; channel++) {
+    means[channel] /= BLOCK * BLOCK;
+  }
+  return is_finite;
+}
+
+/* -log10, floored at the transmittance floor */
+static double get_density(double transmittance) {
+  if(!(transmittance > FT_TRANSMITTANCE_FLOOR)) {
+    transmittance = FT_TRANSMITTANCE_FLOOR;
+  }
+  return -log10(transmittance);
+}
+
+static int32_t measure_frontier(const void* parameters, const ft_recipe* recipe,
+                                const ft_image* image, ft_print_frame* frame,
+                                ft_err* error) {
+  const ft_frontier_parameters* frontier = parameters;
+  bool is_bw = recipe->mode == FT_RENDER_BW;
+  if(recipe->mode == FT_RENDER_SLIDE) {
+    return ft_fail(error, "frontier: colour negatives and b&w only");
+  }
+  /* the sums over the kept (not saturated) blocks and over all blocks */
+  double kept_sums[3] = {0, 0, 0};
+  double all_sums[3] = {0, 0, 0};
+  uint64_t kept_count = 0;
+  uint64_t all_count = 0;
+  uint32_t first_x = image->width / EDGE_FRACTION;
+  uint32_t end_x = image->width - image->width / EDGE_FRACTION;
+  uint32_t first_y = image->height / EDGE_FRACTION;
+  uint32_t end_y = image->height - image->height / EDGE_FRACTION;
+  for(uint32_t y = first_y; y + BLOCK <= end_y; y += BLOCK) {
+    for(uint32_t x = first_x; x + BLOCK <= end_x; x += BLOCK) {
+      double means[3];
+      if(measure_block(image, x, y, means) == false) continue;
+      bool is_clear = means[0] > CLEAR_TRANSMITTANCE &&
+                      means[1] > CLEAR_TRANSMITTANCE &&
+                      means[2] > CLEAR_TRANSMITTANCE;
+      bool is_opaque = means[0] < OPAQUE_TRANSMITTANCE &&
+                       means[1] < OPAQUE_TRANSMITTANCE &&
+                       means[2] < OPAQUE_TRANSMITTANCE;
+      if(is_clear || is_opaque) continue;
+      /* green-referenced density above base */
+      double densities[3];
+      if(is_bw) {
+        double luminance = recipe->bw_weights[0] * means[0] +
+                           recipe->bw_weights[1] * means[1] +
+                           recipe->bw_weights[2] * means[2];
+        double density = get_density(luminance) - recipe->base_density[GREEN];
+        densities[0] = density;
+        densities[1] = density;
+        densities[2] = density;
+      } else {
+        for(uint32_t channel = 0; channel < 3; channel++) {
+          densities[channel] =
+            (get_density(means[channel]) - recipe->base_density[channel]) /
+            recipe->range_density[channel] *
+            recipe->range_density[GREEN];
+        }
+      }
+      double mean = (densities[0] + densities[1] + densities[2]) / 3;
+      all_count++;
+      for(uint32_t channel = 0; channel < 3; channel++) {
+        all_sums[channel] += densities[channel];
+      }
+      /* strongly coloured blocks are left out of the kept means */
+      double limit = frontier->saturation_limit;
+      if(fabs(densities[0] - mean) > limit ||
+         fabs(densities[1] - mean) > limit ||
+         fabs(densities[2] - mean) > limit) {
+        continue;
+      }
+      kept_count++;
+      for(uint32_t channel = 0; channel < 3; channel++) {
+        kept_sums[channel] += densities[channel];
+      }
+    }
+  }
+  if(all_count == 0) {
+    return ft_fail(error, "frontier: no film pixels to measure");
+  }
+  for(uint32_t channel = 0; channel < 3; channel++) {
+    /* all saturated: use everything */
+    if(kept_count > 0) {
+      frame->mean_density[channel] = kept_sums[channel] / kept_count;
+    } else {
+      frame->mean_density[channel] = all_sums[channel] / all_count;
+    }
+  }
+  frame->has_mean = true;
   return 0;
 }
 
-static double neutral(const double v[3]) { return (v[0] + v[1] + v[2]) / 3; }
+/* the neutral part: the mean of the three channels */
+static double get_neutral(const double values[3]) {
+  return (values[0] + values[1] + values[2]) / 3;
+}
 
-static int frontier_roll(const void* par, const ft_print_frame* fr, int n,
-                         ft_print_roll* roll, ft_err* e) {
-  const ft_pm_frontier_par* p = par;
-  double v[FT_MAX_FRAMES];
-  int i, c;
-  (void)e;
-  for(i = 0; i < n; i++) v[i] = neutral(fr[i].mean);
-  roll->ref_d = ft_print_median(v, n);
-  for(c = 0; c < 3; c++) {
-    if(n < p->min_frames || roll->mode == FT_RENDER_BW) {
-      roll->ref_c[c] = roll->mode == FT_RENDER_BW ? 0 : p->aim_c[c];
+static int32_t measure_frontier_roll(const void* parameters,
+                                     const ft_print_frame* frames,
+                                     uint32_t frame_count, ft_print_roll* roll,
+                                     ft_err* error) {
+  const ft_frontier_parameters* frontier = parameters;
+  double values[FT_MAX_FRAMES];
+  (void)error;
+  for(uint32_t index = 0; index < frame_count; index++) {
+    values[index] = get_neutral(frames[index].mean_density);
+  }
+  roll->reference_density = ft_get_print_median(values, frame_count);
+  for(uint32_t channel = 0; channel < 3; channel++) {
+    if(frame_count < frontier->min_frames || roll->mode == FT_RENDER_BW) {
+      roll->reference_colour[channel] =
+        roll->mode == FT_RENDER_BW ? 0 : frontier->aim_colour[channel];
       continue;
     }
-    for(i = 0; i < n; i++) v[i] = fr[i].mean[c] - neutral(fr[i].mean);
-    roll->ref_c[c] = ft_print_median(v, n);
+    for(uint32_t index = 0; index < frame_count; index++) {
+      values[index] = frames[index].mean_density[channel] -
+                      get_neutral(frames[index].mean_density);
+    }
+    roll->reference_colour[channel] = ft_get_print_median(values, frame_count);
   }
-  roll->has_ref = 1;
+  roll->has_reference = true;
   return 0;
 }
 
-static void frontier_frame(const void* par, const ft_print_roll* roll,
-                           const ft_print_frame* fr, const ft_recipe* r,
-                           ft_print_auto* a) {
-  const ft_pm_frontier_par* p = par;
-  double m = neutral(fr->mean), lift_d, dev[3], corr[3], big = 0;
-  double ref = neutral(roll->ref_c), dm;
-  int c;
-  (void)r;
-  memset(a, 0, sizeof *a);
-  /* density: the roll at the aim, the frame's deviation by k_d */
-  lift_d = (p->aim - roll->ref_d) + p->k_d * (roll->ref_d - m);
-  a->exposure = (float)(lift_d / log10(2));
+static void set_frontier_frame(const void* parameters,
+                               const ft_print_roll* roll,
+                               const ft_print_frame* frame,
+                               const ft_recipe* recipe,
+                               ft_print_auto* automatic) {
+  const ft_frontier_parameters* frontier = parameters;
+  (void)recipe;
+  memset(automatic, 0, sizeof *automatic);
+  double frame_neutral = get_neutral(frame->mean_density);
+  /* density: the roll at the aim, the frame's deviation by the density
+   * correction */
+  double density_lift =
+    (frontier->aim_density - roll->reference_density) +
+    frontier->density_correction * (roll->reference_density - frame_neutral);
+  automatic->exposure = (float)(density_lift / log10(2));
   if(roll->mode == FT_RENDER_BW) return;
-  /* colour (centred: density is above): the roll's cast in full, the
-   * frame's own deviation by k_c, scaled down as a whole so that no
-   * channel moves more than the clamp (the correction keeps its hue) */
-  for(c = 0; c < 3; c++) dev[c] = (fr->mean[c] - m) - (roll->ref_c[c] - ref);
-  dm = neutral(dev);
-  for(c = 0; c < 3; c++) {
-    corr[c] = p->k_c * (dev[c] - dm);
-    if(fabs(corr[c]) > big) big = fabs(corr[c]);
+
+  /* Colour (centred: density is above): the roll's cast in full, the
+   * frame's own deviation by the colour correction, scaled down as a
+   * whole so that no channel moves more than the clamp (the correction
+   * keeps its hue). */
+  double reference_neutral = get_neutral(roll->reference_colour);
+  double deviations[3];
+  for(uint32_t channel = 0; channel < 3; channel++) {
+    deviations[channel] = (frame->mean_density[channel] - frame_neutral) -
+                          (roll->reference_colour[channel] - reference_neutral);
   }
-  for(c = 0; c < 3; c++) {
-    if(big > p->clamp) corr[c] *= p->clamp / big;
-    a->tint[c] = (float)(-100 * ((roll->ref_c[c] - ref) + corr[c]));
+  double deviation_neutral = get_neutral(deviations);
+  double corrections[3];
+  double largest = 0;
+  for(uint32_t channel = 0; channel < 3; channel++) {
+    corrections[channel] =
+      frontier->colour_correction * (deviations[channel] - deviation_neutral);
+    if(fabs(corrections[channel]) > largest) {
+      largest = fabs(corrections[channel]);
+    }
+  }
+  for(uint32_t channel = 0; channel < 3; channel++) {
+    if(largest > frontier->clamp_density) {
+      corrections[channel] *= frontier->clamp_density / largest;
+    }
+    automatic->tint[channel] =
+      (float)(-100 * ((roll->reference_colour[channel] - reference_neutral) +
+                      corrections[channel]));
   }
 }
 
-const ft_pm_balance ft_pm_balance_frontier = {"frontier", frontier_measure,
-                                              frontier_roll, frontier_frame};
+const ft_balance_module ft_balance_module_frontier = {
+  .name = "frontier",
+  .measure = measure_frontier,
+  .measure_roll = measure_frontier_roll,
+  .set_frame = set_frontier_frame};

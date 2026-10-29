@@ -300,7 +300,7 @@ def test_engine_stream_is_develop_then_detect(tools, tmp_path):
         assert abs(g[1] + g[3] - w[3]) < 0.0015
 
 
-# libft's ft_lens_dof95 (ft_focus.c, the focus survey 2026-10-15/16's
+# libft's ft_estimate_depth_of_field95 (ft_focus.c, the focus survey 2026-10-15/16's
 # fit): K (1+m)/m^2 x bin, m = p x scale; K and the default p pinned here
 DOF95_K, LENS_P = 980.0, 3.4799e-4
 LENS_2P = ("film = 1468601.0\nw = 268105.0\nfl = 317836.0\n"
@@ -351,7 +351,7 @@ def cli_json(run, *args):
 
 @needs_cc
 def test_engine_resolutions_dmax_is_libft(tools):
-    """the landing page's Dmax is libft's estimator (ft_dmax_for_ppi, on
+    """the landing page's Dmax is libft's estimator (ft_estimate_dmax, on
     today's optics limits) to one decimal; null where it has none"""
     run = lambda a: subprocess.run([str(tools[1]), *a], capture_output=True,
                                    text=True)

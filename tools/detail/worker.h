@@ -14,11 +14,11 @@ typedef struct {
                         every stall_every lines (a slow card) */
   long stall_every;
   /* out, valid after pass_worker_join */
-  int failed; /* ft_detail_line failed: e says why */
+  int failed; /* ft_add_detail_line failed: e says why */
   ft_err e;
   long lines;
   double max_line_ms; /* longest single line: develop + write */
-  double busy_ms;     /* time spent in ft_detail_line */
+  double busy_ms;     /* time spent in ft_add_detail_line */
   ring_thread* t;
 } pass_worker;
 

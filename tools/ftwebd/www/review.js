@@ -196,20 +196,23 @@ const PVM = () => "px=" + (lv.px || 666) + "\nx=2\nbin=12\n",
   slideOf = () => filmOf(emOf()) === "slide";
 // strip.print and strip.review: the edits re-attach to frames by number
 async function edits() {
-  const s = cur,
-    p = await get(S("strip.print"));
+  const s = cur;
+  const [p, r] = await Promise.all([
+    get(S("strip.print")),
+    get(S("strip.review")),
+  ]);
   if (s !== cur) return;
+  dec = {};
+  for (const l of (await (r || "")).split("\n")) {
+    const m = l.match(/^(\d+) (\w+)$/);
+    if (m) dec[+m[1]] = m[2];
+  }
   try {
     if (p) await ft("printLoad", p);
     else await ft("printNew", emOf());
   } catch (e) {
     st("strip.print: " + e.message, 1);
     await ft("printNew", emOf());
-  }
-  dec = {};
-  for (const l of ((await get(S("strip.review"))) || "").split("\n")) {
-    const m = l.match(/^(\d+) (\w+)$/);
-    if (m) dec[+m[1]] = m[2];
   }
 }
 // the strip's files -> frames (the preview replayed through the streaming
