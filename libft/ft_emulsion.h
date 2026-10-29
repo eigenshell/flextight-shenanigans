@@ -6,13 +6,18 @@
  * which science made it. Pure C99. */
 #ifndef FT_EMULSION_H
 #define FT_EMULSION_H
+
+#include <stdint.h>
+
 #include "ft_print.h"
 
+/* bump when an emulsion, a module or a .cube changes */
 #define FT_EMULSION_REV 1
 
-/* NULL if no emulsion has that id */
-const ft_emulsion* ft_emulsion_find(const char* id);
-/* the i-th emulsion (0..), NULL past the last */
-const ft_emulsion* ft_emulsion_at(int i);
+/* Find an emulsion by id. Returns NULL when no emulsion has that id. */
+const ft_emulsion* ft_find_emulsion(const char* id);
+
+/* The index-th emulsion (from 0); NULL past the last. */
+const ft_emulsion* ft_get_emulsion_at(uint32_t index);
 
 #endif

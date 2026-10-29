@@ -3,8 +3,11 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <math.h>
 #include <stdarg.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,530 +15,790 @@
 #include "ft_holder.h"
 #include "ft_plan.h"
 
-static const char* TYPES[] = {"full", "half", "panorama", "partial"};
-static const char* DETAIL[] = {"none", "neg", "pos"};
-static const char* DFMT[] = {"dng", "tiff"};
-static const char* BW[] = {"off", "mono", "rgb"};
+/* the words in the file, in the order of their enums */
+static const char* const FRAME_TYPE_WORDS[] = {"full", "half", "panorama",
+                                               "partial"};
+static const char* const DETAIL_WORDS[] = {"none", "neg", "pos"};
+static const char* const DETAIL_FORMAT_WORDS[] = {"dng", "tiff"};
+static const char* const BW_WORDS[] = {"off", "mono", "rgb"};
+#define WORD_COUNT(words) (sizeof words / sizeof words[0])
 
-static const char* yn(int v) { return v ? "yes" : "no"; }
+/* the longest line the parser reads */
+#define MAX_LINE_BYTES 256
+/* the highest frame number a [frame N] header may have */
+#define MAX_FRAME_NUMBER 1000000
+/* the share target range, pixels on the long side */
+#define MIN_SHARE_PIXELS 100
+#define MAX_SHARE_PIXELS 20000
+/* the largest film base density */
+#define MAX_FILM_BASE_DENSITY 4.5
+/* the largest frame tilt, degrees */
+#define MAX_TILT_DEGREES 45
+/* the largest bin */
+#define MAX_BIN 12
+/* room for "line 123 (frame 45)" */
+#define WHERE_BYTES 48
 
-int ft_job_bin(const ft_job_frame* f) {
-  return f->bin ? f->bin : ft_bin_for_ppi(f->ppi);
-}
+/* The keys of the [strip] section, in the order of STRIP_KEYS. */
+typedef enum strip_key {
+  STRIP_HOLDER,
+  STRIP_FILM,
+  STRIP_FOCUS,
+  STRIP_FOCUS_OFFSET,
+  STRIP_FILM_BASE,
+  STRIP_DETAIL,
+  STRIP_DETAIL_FORMAT,
+  STRIP_DETAIL_BW,
+  STRIP_KEEP_RAW,
+  STRIP_RING_MEGABYTES,
+  STRIP_SHARE,
+  STRIP_HALF_FRAMES
+} strip_key;
+static const char* const STRIP_KEYS[] = {
+  "holder",    "film",    "focus",      "focus_offset",
+  "film_base", "detail",  "detail_fmt", "detail_bw",
+  "keep_raw",  "ring_mb", "share",      "hf_half_res"};
 
-double ft_job_share_px(const ft_job* j, const ft_job_frame* f) {
-  return f->share_px > 0 ? f->share_px : j->share;
-}
-
-int ft_job_pass_todo(const ft_job* j, int pass) {
-  int i, n = 0;
-  for(i = 0; i < j->nframes; i++)
-    n += j->f[i].include && !j->f[i].done && j->f[i].pass == pass;
-  return n;
-}
-
-/* text into a caller's buffer: n counts every byte asked for, the buffer
- * keeps what fits and stays NUL-terminated */
-typedef struct {
-  char* b;
-  size_t cap, n;
-} wbuf;
-
-static void putf(wbuf* w, const char* fmt, ...) {
-  va_list ap;
-  int k;
-  va_start(ap, fmt);
-  k = vsnprintf(w->n < w->cap ? w->b + w->n : NULL,
-                w->n < w->cap ? w->cap - w->n : 0, fmt, ap);
-  va_end(ap);
-  if(k > 0) w->n += (size_t)k;
-}
-
-/* "# bin options at P ppi: b: time, light, Dmax | ..." for the frame */
-static void bin_options(wbuf* out, const ft_job_frame* f) {
-  int b[6], n = ft_bins_for_ppi(f->ppi, b), i;
-  if(n < 2) return;
-  putf(out, "# bin options at %g ppi (time, light, Dmax~):", f->ppi);
-  for(i = 0; i < n; i++) {
-    double l = ft_light_rel(&ft_lens_default, f->ppi * b[i]);
-    putf(out, "%s %d: %.0f s %.1fx %.2f", i ? " |" : "", b[i],
-         ft_scan_seconds(f->ppi, b[i], f->len), l, ft_dmax_est(l));
-  }
-  putf(out, "\n");
-}
-
-size_t ft_job_write_buf(const ft_job* j, char* buf, size_t cap) {
-  wbuf wb = {buf, cap, 0}, *out = &wb;
-  int i;
-  if(cap) buf[0] = 0;
-  for(i = 0; i < j->nframes; i++)
-    if((int)j->f[i].type < 0 || (int)j->f[i].type > 3) return FT_JOB_BAD;
-  if((int)j->detail < 0 ||
-     (int)j->detail > 2 ||
-     (int)j->detail_fmt < 0 ||
-     (int)j->detail_fmt > 1 ||
-     (int)j->detail_bw < 0 ||
-     (int)j->detail_bw > 2)
-    return FT_JOB_BAD;
-  putf(out,
-       "[strip]\nholder = %s\nfilm = %s\nfocus = %s\n"
-       "focus_offset = %ld\n",
-       j->holder, j->film == FT_FILM_SLIDE ? "slide" : "negative",
-       j->focus == FT_FOCUS_PER_FRAME ? "per-frame" : "shifted",
-       j->focus_offset);
-  if(j->has_film_base)
-    putf(out, "film_base = %.4f %.4f %.4f   # D r g b: unexposed film\n",
-         j->film_base[0], j->film_base[1], j->film_base[2]);
-  if(j->detail != FT_DETAIL_NONE)
-    putf(out,
-         "detail = %s   # neg: digital negative, pos: archive "
-         "positive\ndetail_fmt = %s\ndetail_bw = %s\n"
-         "keep_raw = %s\nring_mb = %d\n",
-         DETAIL[j->detail], DFMT[j->detail_fmt], BW[j->detail_bw],
-         yn(j->keep_raw), j->ring_mb);
-  if(j->share > 0)
-    putf(out,
-         "share = %g   # scan to share: px on each frame's long "
-         "side\nhf_half_res = %s\n",
-         j->share, yn(j->hf_half_res));
-  for(i = 0; i < j->nframes; i++) {
-    const ft_job_frame* f = &j->f[i];
-    putf(out,
-         "\n[frame %d]\ntype = %s\ninclude = %s\nppi = %g\n"
-         "bin = %d   # 0 = fastest; smaller = more light, slower\n",
-         f->index, TYPES[f->type], yn(f->include), f->ppi, f->bin);
-    bin_options(out, f);
-    putf(out,
-         "window = %.3f %.3f %.3f %.3f   # y0 x0 length width, mm\n"
-         "tilt = %.2f\nsprockets = %s\nstraighten = %s\n"
-         "confidence = %s\nfocus_offset = %ld\ndone = %s\n",
-         f->y0, f->x0, f->len, f->width, f->tilt_deg, yn(f->sprockets),
-         yn(f->straighten), f->confidence_low ? "low" : "high", f->focus_offset,
-         yn(f->done));
-    if(j->detail != FT_DETAIL_NONE) putf(out, "pass = %d\n", f->pass);
-    if(j->share > 0)
-      putf(out,
-           "group = %d   # window: frames of one group scan "
-           "together\n",
-           f->group);
-    if(f->share_px > 0)
-      putf(out,
-           "share_px = %g   # this frame's target, px on its "
-           "long side\n",
-           f->share_px);
-  }
-  return wb.n;
-}
-
-static char* trim(char* s) {
-  char* end;
-  while(isspace((unsigned char)*s)) s++;
-  end = s + strlen(s);
-  while(end > s && isspace((unsigned char)end[-1])) *--end = 0;
-  return s;
-}
-
-static int yesno(const char* v, int* out) {
-  if(strcmp(v, "yes") == 0) {
-    *out = 1;
-    return 0;
-  }
-  if(strcmp(v, "no") == 0) {
-    *out = 0;
-    return 0;
-  }
-  return -1;
-}
-
-static int num(const char* v, double* out) {
-  char* end;
-  *out = strtod(v, &end);
-  return end != v && *trim(end) == 0 && isfinite(*out) ? 0 : -1;
-}
-
-static int lnum(const char* v, long* out) {
-  char* end;
-  errno = 0;
-  *out = strtol(v, &end, 10);
-  return end != v && *trim(end) == 0 && errno != ERANGE ? 0 : -1;
-}
-
-static const char* STRIP_KEYS[] = {"holder",       "film",      "focus",
-                                   "focus_offset", "film_base", "detail",
-                                   "detail_fmt",   "detail_bw", "keep_raw",
-                                   "ring_mb",      "share",     "hf_half_res"};
-#define N_STRIP_KEYS 12
-static const char* FRAME_KEYS[] = {
+/* The keys of a [frame N] section, in the order of FRAME_KEYS. */
+typedef enum frame_key {
+  FRAME_TYPE,
+  FRAME_INCLUDE,
+  FRAME_PPI,
+  FRAME_WINDOW,
+  FRAME_TILT,
+  FRAME_SPROCKETS,
+  FRAME_STRAIGHTEN,
+  FRAME_CONFIDENCE,
+  FRAME_FOCUS_OFFSET,
+  FRAME_DONE,
+  FRAME_BIN,
+  FRAME_PASS,
+  FRAME_GROUP,
+  FRAME_SHARE_PIXELS
+} frame_key;
+static const char* const FRAME_KEYS[] = {
   "type",      "include",    "ppi",        "window",       "tilt",
   "sprockets", "straighten", "confidence", "focus_offset", "done",
   "bin",       "pass",       "group",      "share_px"};
-#define N_FRAME_KEYS 14
-#define K_PPI 2
-#define K_WINDOW 3
 
-/* v as an index into tab; -1 if it is none of them */
-static int word(const char** tab, int n, const char* v, int* out) {
-  int i;
-  for(i = 0; i < n; i++)
-    if(strcmp(tab[i], v) == 0) {
-      *out = i;
-      return 0;
-    }
-  return -1;
+static const char* yes_or_no(bool value) { return value ? "yes" : "no"; }
+
+int32_t ft_get_frame_bin(const ft_job_frame* frame) {
+  if(frame->bin != 0) return frame->bin;
+  return ft_get_bin_for_ppi(frame->ppi);
 }
 
-static int key_index(const char** tab, int n, const char* k) {
-  int i;
-  for(i = 0; i < n; i++)
-    if(strcmp(tab[i], k) == 0) return i;
-  return -1;
+double ft_get_frame_share_pixels(const ft_job* job, const ft_job_frame* frame) {
+  if(frame->share_pixels > 0) return frame->share_pixels;
+  return job->share_pixels;
 }
 
-static int finish_frame(const ft_job_frame* f, unsigned seen, ft_err* e) {
-  if(!(seen & (1u << K_PPI)))
-    return ft_fail(e, "line %d: frame %d has no ppi", f->line, f->index);
-  if(!(seen & (1u << K_WINDOW)))
-    return ft_fail(e, "line %d: frame %d has no window", f->line, f->index);
-  return 0;
-}
-
-int ft_job_parse(ft_job* j, const char* text, size_t n, ft_err* e) {
-  char line[256];
-  const char *p = text, *end = text + n;
-  int ln = 0, in_strip = 0, strip_line = 0, i;
-  unsigned seen = 0;
-  ft_job_frame* f = NULL;
-
-  memset(j, 0, sizeof *j);
-  j->ring_mb = FT_RING_MB_DEFAULT;
-  while(p < end) {
-    const char* nl = memchr(p, '\n', (size_t)(end - p));
-    size_t len = (size_t)((nl ? nl : end) - p);
-    char *s, *k, *v, *hash;
-    int bad = 0, ki;
-    ln++;
-    if(memchr(p, 0, len)) return ft_fail(e, "line %d: NUL byte", ln);
-    if(len >= sizeof line - 1) return ft_fail(e, "line %d: too long", ln);
-    memcpy(line, p, len);
-    line[len] = 0;
-    p = nl ? nl + 1 : end;
-    if((hash = strchr(line, '#')) != NULL) *hash = 0;
-    s = trim(line);
-    if(!*s) continue;
-    if(*s == '[') {
-      if(strcmp(s, "[strip]") == 0) {
-        if(f && finish_frame(f, seen, e)) return -1;
-        if(strip_line)
-          return ft_fail(e,
-                         "line %d: duplicate [strip] section "
-                         "(first at line %d)",
-                         ln, strip_line);
-        strip_line = ln;
-        in_strip = 1;
-        f = NULL;
-        seen = 0;
-        continue;
-      }
-      if(strncmp(s, "[frame ", 7) == 0) {
-        char* end;
-        long n;
-        errno = 0;
-        n = strtol(s + 7, &end, 10);
-        if(end == s + 7 ||
-           end[0] != ']' ||
-           end[1] != 0 ||
-           errno == ERANGE ||
-           n < 1 ||
-           n > 1000000)
-          return ft_fail(e, "line %d: bad frame header %s", ln, s);
-        if(f && finish_frame(f, seen, e)) return -1;
-        for(i = 0; i < j->nframes; i++)
-          if(j->f[i].index == (int)n)
-            return ft_fail(e,
-                           "line %d: frame %d repeated "
-                           "(first at line %d)",
-                           ln, (int)n, j->f[i].line);
-        if(j->nframes == FT_MAX_FRAMES)
-          return ft_fail(e, "line %d: more than %d frames", ln, FT_MAX_FRAMES);
-        f = &j->f[j->nframes++];
-        f->index = (int)n;
-        f->line = ln;
-        f->include = 1;
-        in_strip = 0;
-        seen = 0;
-        continue;
-      }
-      return ft_fail(e, "line %d: unknown section %s", ln, s);
+uint32_t ft_count_pass_frames_to_do(const ft_job* job, int32_t pass) {
+  uint32_t count = 0;
+  for(uint32_t index = 0; index < job->frame_count; index++) {
+    const ft_job_frame* frame = &job->frames[index];
+    if(frame->is_included && frame->is_done == false && frame->pass == pass) {
+      count++;
     }
-    v = strchr(s, '=');
-    if(!v) return ft_fail(e, "line %d: expected key = value", ln);
-    *v++ = 0;
-    k = trim(s);
-    v = trim(v);
-    if(in_strip)
-      ki = key_index(STRIP_KEYS, N_STRIP_KEYS, k);
-    else if(f)
-      ki = key_index(FRAME_KEYS, N_FRAME_KEYS, k);
-    else
-      return ft_fail(e, "line %d: %s outside a section", ln, k);
-    if(ki < 0) return ft_fail(e, "line %d: unknown key %s", ln, k);
-    if(seen & (1u << ki)) return ft_fail(e, "line %d: duplicate key %s", ln, k);
-    seen |= 1u << ki;
-    if(in_strip) {
-      if(ki == 0) {
-        if(strlen(v) >= sizeof j->holder || !*v)
-          bad = 1;
-        else
-          strcpy(j->holder, v);
-      } else if(ki == 1) {
-        if(strcmp(v, "negative") == 0)
-          j->film = FT_FILM_NEGATIVE;
-        else if(strcmp(v, "slide") == 0)
-          j->film = FT_FILM_SLIDE;
-        else
-          bad = 1;
-      } else if(ki == 2) {
-        if(strcmp(v, "shifted") == 0)
-          j->focus = FT_FOCUS_SHIFTED;
-        else if(strcmp(v, "per-frame") == 0)
-          j->focus = FT_FOCUS_PER_FRAME;
-        else
-          bad = 1;
-      } else if(ki == 3) {
-        bad = lnum(v, &j->focus_offset);
-      } else if(ki >= 5 && ki <= 7) {
-        int d;
-        bad = ki == 5   ? word(DETAIL + 1, 2, v, &d)
-              : ki == 6 ? word(DFMT, 2, v, &d)
-                        : word(BW, 3, v, &d);
-        if(!bad && ki == 5)
-          j->detail = (ft_detail_out)(d + 1);
-        else if(!bad && ki == 6)
-          j->detail_fmt = (ft_detail_fmt)d;
-        else if(!bad)
-          j->detail_bw = (ft_detail_bw)d;
-      } else if(ki == 8) {
-        bad = yesno(v, &j->keep_raw);
-      } else if(ki == 9) {
-        long m;
-        bad = lnum(v, &m) || m < FT_RING_MB_MIN || m > FT_RING_MB_MAX;
-        if(!bad) j->ring_mb = (int)m;
-      } else if(ki == 10) {
-        bad = num(v, &j->share) || !(j->share >= 100 && j->share <= 20000);
-      } else if(ki == 11) {
-        bad = yesno(v, &j->hf_half_res);
-      } else {
-        double* d = j->film_base;
-        char extra;
-        bad = sscanf(v, "%lf %lf %lf %c", &d[0], &d[1], &d[2], &extra) != 3 ||
-              !(d[0] >= 0 &&
-                d[0] <= 4.5 &&
-                d[1] >= 0 &&
-                d[1] <= 4.5 &&
-                d[2] >= 0 &&
-                d[2] <= 4.5);
-        j->has_film_base = !bad;
-      }
-    } else {
-      switch(ki) {
-        case 0: {
-          int t;
-          for(t = 0; t < 4 && strcmp(v, TYPES[t]) != 0; t++);
-          if(t == 4)
-            bad = 1;
-          else
-            f->type = (ft_frame_type)t;
-          break;
-        }
-        case 1:
-          bad = yesno(v, &f->include);
-          break;
-        case 2:
-          bad = num(v, &f->ppi);
-          break;
-        case 3: {
-          char extra;
-          bad = sscanf(v, "%lf %lf %lf %lf %c", &f->y0, &f->x0, &f->len,
-                       &f->width, &extra) != 4 ||
-                !isfinite(f->y0) ||
-                !isfinite(f->x0) ||
-                !isfinite(f->len) ||
-                !isfinite(f->width);
-          break;
-        }
-        case 4:
-          bad = num(v, &f->tilt_deg);
-          break;
-        case 5:
-          bad = yesno(v, &f->sprockets);
-          break;
-        case 6:
-          bad = yesno(v, &f->straighten);
-          break;
-        case 7:
-          if(strcmp(v, "low") == 0)
-            f->confidence_low = 1;
-          else if(strcmp(v, "high") == 0)
-            f->confidence_low = 0;
-          else
-            bad = 1;
-          break;
-        case 8:
-          bad = lnum(v, &f->focus_offset);
-          break;
-        case 10: {
-          long b;
-          bad = lnum(v, &b) || b < 0 || b > 12;
-          if(!bad) f->bin = (int)b;
-          break;
-        }
-        case 11: {
-          long ps;
-          bad = lnum(v, &ps) || ps < 0 || ps > FT_MAX_FRAMES;
-          if(!bad) f->pass = (int)ps;
-          break;
-        }
-        case 12: {
-          long g;
-          bad = lnum(v, &g) || g < 0 || g > FT_MAX_FRAMES;
-          if(!bad) f->group = (int)g;
-          break;
-        }
-        case 13:
-          bad = num(v, &f->share_px) ||
-                !(f->share_px >= 100 && f->share_px <= 20000);
-          break;
-        default:
-          bad = yesno(v, &f->done);
-          break;
-      }
-    }
-    if(bad) return ft_fail(e, "line %d: bad value for %s: %s", ln, k, v);
   }
-  if(f && finish_frame(f, seen, e)) return -1;
-  if(!strip_line) return ft_fail(e, "no [strip] section");
-  if(!j->holder[0])
-    return ft_fail(e, "line %d: [strip] has no holder", strip_line);
+  return count;
+}
+
+/* Text going into a caller's buffer. length counts every byte asked
+ * for; the buffer keeps what fits and stays NUL-terminated. */
+typedef struct text_buffer {
+  /* the caller's buffer; may be NULL when capacity is 0 */
+  char* text;
+  /* bytes available in text */
+  size_t capacity;
+  /* bytes the whole text needs so far */
+  size_t length;
+} text_buffer;
+
+/* printf onto the end of the buffer */
+#ifdef __GNUC__
+__attribute__((format(printf, 2, 3)))
+#endif
+static void append(text_buffer* buffer, const char* format, ...) {
+  bool has_room = buffer->length < buffer->capacity;
+  char* end = has_room ? buffer->text + buffer->length : NULL;
+  size_t room = has_room ? buffer->capacity - buffer->length : 0;
+  va_list values;
+  va_start(values, format);
+  int written = vsnprintf(end, room, format, values);
+  va_end(values);
+  /* safe: only added when not negative */
+  if(written > 0) buffer->length += (size_t)written;
+}
+
+/* A comment listing the frame's bin options:
+ * "# bin options at P ppi: b: time, light, Dmax | ..." */
+static void append_bin_options(text_buffer* out, const ft_job_frame* frame) {
+  uint32_t bins[6];
+  uint32_t bin_count = ft_find_bins_for_ppi(frame->ppi, bins);
+  if(bin_count < 2) return;
+  append(out, "# bin options at %g ppi (time, light, Dmax~):", frame->ppi);
+  for(uint32_t index = 0; index < bin_count; index++) {
+    double light =
+      ft_estimate_relative_light(&ft_lens_default, frame->ppi * bins[index]);
+    double seconds =
+      ft_estimate_scan_seconds(frame->ppi, bins[index], frame->length_mm);
+    append(out, "%s %u: %.0f s %.1fx %.2f", index > 0 ? " |" : "",
+           (unsigned)bins[index], seconds, light,
+           ft_estimate_dmax_for_light(light));
+  }
+  append(out, "\n");
+}
+
+/* every enum inside its word list; the casts to unsigned also catch
+ * values below 0 */
+static bool is_job_in_range(const ft_job* job) {
+  for(uint32_t index = 0; index < job->frame_count; index++) {
+    if((unsigned)job->frames[index].type >= WORD_COUNT(FRAME_TYPE_WORDS)) {
+      return false;
+    }
+  }
+  return (unsigned)job->detail < WORD_COUNT(DETAIL_WORDS) &&
+         (unsigned)job->detail_format < WORD_COUNT(DETAIL_FORMAT_WORDS) &&
+         (unsigned)job->detail_bw < WORD_COUNT(BW_WORDS);
+}
+
+static void append_frame(text_buffer* out, const ft_job* job,
+                         const ft_job_frame* frame) {
+  append(out,
+         "\n[frame %u]\ntype = %s\ninclude = %s\nppi = %g\n"
+         "bin = %d   # 0 = fastest; smaller = more light, slower\n",
+         (unsigned)frame->index, FRAME_TYPE_WORDS[frame->type],
+         yes_or_no(frame->is_included), frame->ppi, (int)frame->bin);
+  append_bin_options(out, frame);
+  append(out,
+         "window = %.3f %.3f %.3f %.3f   # y0 x0 length width, mm\n"
+         "tilt = %.2f\nsprockets = %s\nstraighten = %s\n"
+         "confidence = %s\nfocus_offset = %" PRId64 "\ndone = %s\n",
+         frame->along_start_mm, frame->across_start_mm, frame->length_mm,
+         frame->width_mm, frame->tilt_degrees, yes_or_no(frame->has_sprockets),
+         yes_or_no(frame->should_straighten),
+         frame->is_confidence_low ? "low" : "high", frame->focus_offset_steps,
+         yes_or_no(frame->is_done));
+  if(job->detail != FT_DETAIL_NONE) {
+    append(out, "pass = %d\n", (int)frame->pass);
+  }
+  if(job->share_pixels > 0) {
+    append(out, "group = %d   # window: frames of one group scan together\n",
+           (int)frame->group);
+  }
+  if(frame->share_pixels > 0) {
+    append(out, "share_px = %g   # this frame's target, px on its long side\n",
+           frame->share_pixels);
+  }
+}
+
+size_t ft_format_job(const ft_job* job, char* text, size_t text_capacity) {
+  text_buffer buffer = {.text = text, .capacity = text_capacity, .length = 0};
+  text_buffer* out = &buffer;
+  if(text_capacity > 0) text[0] = '\0';
+  if(is_job_in_range(job) == false) return FT_JOB_BAD;
+
+  append(out,
+         "[strip]\nholder = %s\nfilm = %s\nfocus = %s\n"
+         "focus_offset = %" PRId64 "\n",
+         job->holder, job->film == FT_FILM_SLIDE ? "slide" : "negative",
+         job->focus_mode == FT_FOCUS_PER_FRAME ? "per-frame" : "shifted",
+         job->focus_offset_steps);
+  if(job->has_film_base) {
+    append(out, "film_base = %.4f %.4f %.4f   # D r g b: unexposed film\n",
+           job->film_base_density[0], job->film_base_density[1],
+           job->film_base_density[2]);
+  }
+  if(job->detail != FT_DETAIL_NONE) {
+    append(out,
+           "detail = %s   # neg: digital negative, pos: archive "
+           "positive\ndetail_fmt = %s\ndetail_bw = %s\n"
+           "keep_raw = %s\nring_mb = %d\n",
+           DETAIL_WORDS[job->detail], DETAIL_FORMAT_WORDS[job->detail_format],
+           BW_WORDS[job->detail_bw], yes_or_no(job->keep_raw),
+           (int)job->ring_megabytes);
+  }
+  if(job->share_pixels > 0) {
+    append(out,
+           "share = %g   # scan to share: px on each frame's long "
+           "side\nhf_half_res = %s\n",
+           job->share_pixels, yes_or_no(job->half_frames_at_full_frame_ppi));
+  }
+  for(uint32_t index = 0; index < job->frame_count; index++) {
+    append_frame(out, job, &job->frames[index]);
+  }
+  return buffer.length;
+}
+
+/* Cut white space from both ends of text, in place. */
+static char* trim(char* text) {
+  while(isspace((unsigned char)*text)) text++;
+  char* end = text + strlen(text);
+  while(end > text && isspace((unsigned char)end[-1])) {
+    end--;
+    *end = '\0';
+  }
+  return text;
+}
+
+/* The parsers below return true when value was well formed and fill
+ * *out; false leaves *out as it may be. */
+
+static bool parse_yes_no(const char* value, bool* out) {
+  if(strcmp(value, "yes") == 0) {
+    *out = true;
+    return true;
+  }
+  if(strcmp(value, "no") == 0) {
+    *out = false;
+    return true;
+  }
+  return false;
+}
+
+/* a finite decimal number, nothing after it but white space */
+static bool parse_number(const char* value, double* out) {
+  char* end;
+  *out = strtod(value, &end);
+  return end != value && *trim(end) == '\0' && isfinite(*out);
+}
+
+/* a whole number, nothing after it but white space */
+static bool parse_integer(const char* value, int64_t* out) {
+  char* end;
+  errno = 0;
+  /* strtoll: long long is at least 64 bits on every platform */
+  long long number = strtoll(value, &end, 10);
+  *out = number;
+  return end != value && *trim(end) == '\0' && errno != ERANGE;
+}
+
+/* a whole number within minimum..maximum */
+static bool parse_integer_in(const char* value, int64_t minimum,
+                             int64_t maximum, int32_t* out) {
+  int64_t number;
+  if(parse_integer(value, &number) == false) return false;
+  if(number < minimum || number > maximum) return false;
+  /* safe: the range checked above fits 32 bits */
+  *out = (int32_t)number;
+  return true;
+}
+
+/* value as an index into words */
+static bool parse_word(const char* const* words, size_t word_count,
+                       const char* value, uint32_t* out) {
+  for(size_t index = 0; index < word_count; index++) {
+    if(strcmp(words[index], value) == 0) {
+      *out = (uint32_t)index;
+      return true;
+    }
+  }
+  return false;
+}
+
+/* key as an index into keys; -1 when it is none of them */
+static int32_t find_key(const char* const* keys, size_t key_count,
+                        const char* key) {
+  for(size_t index = 0; index < key_count; index++) {
+    if(strcmp(keys[index], key) == 0) return (int32_t)index;
+  }
+  return -1;
+}
+
+static bool is_share_in_range(double share_pixels) {
+  return share_pixels >= MIN_SHARE_PIXELS && share_pixels <= MAX_SHARE_PIXELS;
+}
+
+/* Read one [strip] value. Returns true when it was well formed. */
+static bool parse_strip_value(ft_job* job, strip_key key, const char* value) {
+  uint32_t word;
+  switch(key) {
+    case STRIP_HOLDER:
+      if(value[0] == '\0' || strlen(value) >= sizeof job->holder) return false;
+      strcpy(job->holder, value);
+      return true;
+    case STRIP_FILM:
+      if(strcmp(value, "negative") == 0) {
+        job->film = FT_FILM_NEGATIVE;
+        return true;
+      }
+      if(strcmp(value, "slide") == 0) {
+        job->film = FT_FILM_SLIDE;
+        return true;
+      }
+      return false;
+    case STRIP_FOCUS:
+      if(strcmp(value, "shifted") == 0) {
+        job->focus_mode = FT_FOCUS_SHIFTED;
+        return true;
+      }
+      if(strcmp(value, "per-frame") == 0) {
+        job->focus_mode = FT_FOCUS_PER_FRAME;
+        return true;
+      }
+      return false;
+    case STRIP_FOCUS_OFFSET:
+      return parse_integer(value, &job->focus_offset_steps);
+    case STRIP_FILM_BASE: {
+      double* density = job->film_base_density;
+      /* a 4th match means something follows the three numbers */
+      char extra;
+      bool is_valid = sscanf(value, "%lf %lf %lf %c", &density[0], &density[1],
+                             &density[2], &extra) == 3;
+      for(uint32_t channel = 0; channel < 3 && is_valid; channel++) {
+        is_valid =
+          density[channel] >= 0 && density[channel] <= MAX_FILM_BASE_DENSITY;
+      }
+      job->has_film_base = is_valid;
+      return is_valid;
+    }
+    case STRIP_DETAIL:
+      /* "none" is not written in a file: detail starts at "neg" */
+      if(parse_word(DETAIL_WORDS + 1, WORD_COUNT(DETAIL_WORDS) - 1, value,
+                    &word) == false) {
+        return false;
+      }
+      job->detail = (ft_detail_output)(word + 1);
+      return true;
+    case STRIP_DETAIL_FORMAT:
+      if(parse_word(DETAIL_FORMAT_WORDS, WORD_COUNT(DETAIL_FORMAT_WORDS), value,
+                    &word) == false) {
+        return false;
+      }
+      job->detail_format = (ft_detail_format)word;
+      return true;
+    case STRIP_DETAIL_BW:
+      if(parse_word(BW_WORDS, WORD_COUNT(BW_WORDS), value, &word) == false) {
+        return false;
+      }
+      job->detail_bw = (ft_detail_bw)word;
+      return true;
+    case STRIP_KEEP_RAW:
+      return parse_yes_no(value, &job->keep_raw);
+    case STRIP_RING_MEGABYTES:
+      return parse_integer_in(value, FT_RING_MEGABYTES_MIN,
+                              FT_RING_MEGABYTES_MAX, &job->ring_megabytes);
+    case STRIP_SHARE:
+      return parse_number(value, &job->share_pixels) &&
+             is_share_in_range(job->share_pixels);
+    case STRIP_HALF_FRAMES:
+      return parse_yes_no(value, &job->half_frames_at_full_frame_ppi);
+  }
+  return false;
+}
+
+/* Read one [frame N] value. Returns true when it was well formed. */
+static bool parse_frame_value(ft_job_frame* frame, frame_key key,
+                              const char* value) {
+  uint32_t word;
+  switch(key) {
+    case FRAME_TYPE:
+      if(parse_word(FRAME_TYPE_WORDS, WORD_COUNT(FRAME_TYPE_WORDS), value,
+                    &word) == false) {
+        return false;
+      }
+      frame->type = (ft_frame_type)word;
+      return true;
+    case FRAME_INCLUDE:
+      return parse_yes_no(value, &frame->is_included);
+    case FRAME_PPI:
+      return parse_number(value, &frame->ppi);
+    case FRAME_WINDOW: {
+      char extra;
+      bool is_valid = sscanf(value, "%lf %lf %lf %lf %c",
+                             &frame->along_start_mm, &frame->across_start_mm,
+                             &frame->length_mm, &frame->width_mm, &extra) == 4;
+      return is_valid &&
+             isfinite(frame->along_start_mm) &&
+             isfinite(frame->across_start_mm) &&
+             isfinite(frame->length_mm) &&
+             isfinite(frame->width_mm);
+    }
+    case FRAME_TILT:
+      return parse_number(value, &frame->tilt_degrees);
+    case FRAME_SPROCKETS:
+      return parse_yes_no(value, &frame->has_sprockets);
+    case FRAME_STRAIGHTEN:
+      return parse_yes_no(value, &frame->should_straighten);
+    case FRAME_CONFIDENCE:
+      if(strcmp(value, "low") == 0) {
+        frame->is_confidence_low = true;
+        return true;
+      }
+      if(strcmp(value, "high") == 0) {
+        frame->is_confidence_low = false;
+        return true;
+      }
+      return false;
+    case FRAME_FOCUS_OFFSET:
+      return parse_integer(value, &frame->focus_offset_steps);
+    case FRAME_DONE:
+      return parse_yes_no(value, &frame->is_done);
+    case FRAME_BIN:
+      return parse_integer_in(value, 0, MAX_BIN, &frame->bin);
+    case FRAME_PASS:
+      return parse_integer_in(value, 0, FT_MAX_FRAMES, &frame->pass);
+    case FRAME_GROUP:
+      return parse_integer_in(value, 0, FT_MAX_FRAMES, &frame->group);
+    case FRAME_SHARE_PIXELS:
+      return parse_number(value, &frame->share_pixels) &&
+             is_share_in_range(frame->share_pixels);
+  }
+  return false;
+}
+
+/* A frame section needs a ppi and a window. seen has bit k set for every
+ * frame key k read. Returns 0, or -1 with error filled. */
+static int32_t finish_frame(const ft_job_frame* frame, uint32_t seen,
+                            ft_err* error) {
+  if((seen & (1u << FRAME_PPI)) == 0) {
+    return ft_fail(error, "line %u: frame %u has no ppi",
+                   (unsigned)frame->source_line, (unsigned)frame->index);
+  }
+  if((seen & (1u << FRAME_WINDOW)) == 0) {
+    return ft_fail(error, "line %u: frame %u has no window",
+                   (unsigned)frame->source_line, (unsigned)frame->index);
+  }
   return 0;
 }
 
-static void where(char* buf, size_t n, const ft_job_frame* f) {
-  if(f->line > 0)
-    snprintf(buf, n, "line %d (frame %d)", f->line, f->index);
-  else
-    snprintf(buf, n, "frame %d", f->index);
+/* Read "[frame N]" (header points at the '['). Returns N, or -1 when
+ * the header is malformed. */
+static int64_t parse_frame_header(const char* header) {
+  const char* number_start = header + strlen("[frame ");
+  char* end;
+  errno = 0;
+  long long number = strtoll(number_start, &end, 10);
+  bool is_valid = end != number_start &&
+                  end[0] == ']' &&
+                  end[1] == '\0' &&
+                  errno != ERANGE &&
+                  number >= 1 &&
+                  number <= MAX_FRAME_NUMBER;
+  return is_valid ? number : -1;
+}
+
+int32_t ft_parse_job(ft_job* job, const char* text, size_t text_length,
+                     ft_err* error) {
+  const char* cursor = text;
+  const char* text_end = text + text_length;
+  uint32_t line_number = 0;
+  /* the line of [strip]; 0 = not seen yet */
+  uint32_t strip_line = 0;
+  bool is_in_strip = false;
+  /* bit k set: key k of the current section was read */
+  uint32_t seen = 0;
+  /* the frame section being read; NULL outside one */
+  ft_job_frame* frame = NULL;
+
+  memset(job, 0, sizeof *job);
+  job->ring_megabytes = FT_RING_MEGABYTES_DEFAULT;
+  while(cursor < text_end) {
+    const char* newline = memchr(cursor, '\n', (size_t)(text_end - cursor));
+    const char* line_end = newline != NULL ? newline : text_end;
+    size_t length = (size_t)(line_end - cursor);
+    line_number++;
+    if(memchr(cursor, '\0', length) != NULL) {
+      return ft_fail(error, "line %u: NUL byte", (unsigned)line_number);
+    }
+    char line[MAX_LINE_BYTES];
+    if(length >= sizeof line - 1) {
+      return ft_fail(error, "line %u: too long", (unsigned)line_number);
+    }
+    memcpy(line, cursor, length);
+    line[length] = '\0';
+    cursor = newline != NULL ? newline + 1 : text_end;
+
+    /* '#' starts a comment anywhere on the line */
+    char* hash = strchr(line, '#');
+    if(hash != NULL) *hash = '\0';
+    char* content = trim(line);
+    if(content[0] == '\0') continue;
+
+    if(content[0] == '[') {
+      if(strcmp(content, "[strip]") == 0) {
+        if(frame != NULL && finish_frame(frame, seen, error) != 0) return -1;
+        if(strip_line != 0) {
+          return ft_fail(error,
+                         "line %u: duplicate [strip] section "
+                         "(first at line %u)",
+                         (unsigned)line_number, (unsigned)strip_line);
+        }
+        strip_line = line_number;
+        is_in_strip = true;
+        frame = NULL;
+        seen = 0;
+        continue;
+      }
+      if(strncmp(content, "[frame ", 7) == 0) {
+        int64_t number = parse_frame_header(content);
+        if(number < 0) {
+          return ft_fail(error, "line %u: bad frame header %s",
+                         (unsigned)line_number, content);
+        }
+        if(frame != NULL && finish_frame(frame, seen, error) != 0) return -1;
+        for(uint32_t index = 0; index < job->frame_count; index++) {
+          if(job->frames[index].index == number) {
+            return ft_fail(error,
+                           "line %u: frame %d repeated (first at line %u)",
+                           (unsigned)line_number, (int)number,
+                           (unsigned)job->frames[index].source_line);
+          }
+        }
+        if(job->frame_count == FT_MAX_FRAMES) {
+          return ft_fail(error, "line %u: more than %d frames",
+                         (unsigned)line_number, FT_MAX_FRAMES);
+        }
+        frame = &job->frames[job->frame_count];
+        job->frame_count++;
+        /* safe: parse_frame_header keeps it within 1..1000000 */
+        frame->index = (uint32_t)number;
+        frame->source_line = line_number;
+        frame->is_included = true;
+        is_in_strip = false;
+        seen = 0;
+        continue;
+      }
+      return ft_fail(error, "line %u: unknown section %s",
+                     (unsigned)line_number, content);
+    }
+
+    char* value = strchr(content, '=');
+    if(value == NULL) {
+      return ft_fail(error, "line %u: expected key = value",
+                     (unsigned)line_number);
+    }
+    /* split "key = value" at the '=' */
+    *value = '\0';
+    value++;
+    char* key = trim(content);
+    value = trim(value);
+
+    int32_t key_index;
+    if(is_in_strip) {
+      key_index = find_key(STRIP_KEYS, WORD_COUNT(STRIP_KEYS), key);
+    } else if(frame != NULL) {
+      key_index = find_key(FRAME_KEYS, WORD_COUNT(FRAME_KEYS), key);
+    } else {
+      return ft_fail(error, "line %u: %s outside a section",
+                     (unsigned)line_number, key);
+    }
+    if(key_index < 0) {
+      return ft_fail(error, "line %u: unknown key %s", (unsigned)line_number,
+                     key);
+    }
+    if((seen & (1u << key_index)) != 0) {
+      return ft_fail(error, "line %u: duplicate key %s", (unsigned)line_number,
+                     key);
+    }
+    seen |= 1u << key_index;
+
+    bool is_valid;
+    if(is_in_strip) {
+      is_valid = parse_strip_value(job, (strip_key)key_index, value);
+    } else {
+      is_valid = parse_frame_value(frame, (frame_key)key_index, value);
+    }
+    if(is_valid == false) {
+      return ft_fail(error, "line %u: bad value for %s: %s",
+                     (unsigned)line_number, key, value);
+    }
+  }
+  if(frame != NULL && finish_frame(frame, seen, error) != 0) return -1;
+  if(strip_line == 0) return ft_fail(error, "no [strip] section");
+  if(job->holder[0] == '\0') {
+    return ft_fail(error, "line %u: [strip] has no holder",
+                   (unsigned)strip_line);
+  }
+  return 0;
+}
+
+/* "line 12 (frame 3)", or "frame 3" for a frame not read from a file */
+static void describe_frame(char* text, size_t capacity,
+                           const ft_job_frame* frame) {
+  if(frame->source_line > 0) {
+    snprintf(text, capacity, "line %u (frame %u)", (unsigned)frame->source_line,
+             (unsigned)frame->index);
+  } else {
+    snprintf(text, capacity, "frame %u", (unsigned)frame->index);
+  }
+}
+
+/* An ordinary job has no groups and no share_px. */
+static int32_t check_no_share(const ft_job* job, ft_err* error) {
+  char where[WHERE_BYTES];
+  for(uint32_t index = 0; index < job->frame_count; index++) {
+    if(job->frames[index].group != 0) {
+      describe_frame(where, sizeof where, &job->frames[index]);
+      return ft_fail(error, "%s: group without share in [strip]", where);
+    }
+  }
+  for(uint32_t index = 0; index < job->frame_count; index++) {
+    if(job->frames[index].share_pixels > 0) {
+      describe_frame(where, sizeof where, &job->frames[index]);
+      return ft_fail(error, "%s: share_px without share in [strip]", where);
+    }
+  }
+  return 0;
 }
 
 /* A share job scans each group of frames as one window: every included
  * frame is in a group, included frames follow the strip, a group's frames
- * share ppi and bin and are not split by another group's. An ordinary job
- * has no groups. */
-static int share_groups(const ft_job* j, ft_err* e) {
-  int i, k, prev = -1;
-  char w[48];
-  if(!(j->share > 0)) {
-    for(i = 0; i < j->nframes; i++)
-      if(j->f[i].group) {
-        where(w, sizeof w, &j->f[i]);
-        return ft_fail(e, "%s: group without share in [strip]", w);
+ * share ppi, bin and target, and are not split by another group's. */
+static int32_t check_share_groups(const ft_job* job, ft_err* error) {
+  if(!(job->share_pixels > 0)) return check_no_share(job, error);
+
+  /* the included frame before this one; NULL for the first */
+  const ft_job_frame* previous = NULL;
+  for(uint32_t index = 0; index < job->frame_count; index++) {
+    const ft_job_frame* frame = &job->frames[index];
+    if(frame->is_included == false) continue;
+    char where[WHERE_BYTES];
+    describe_frame(where, sizeof where, frame);
+    if(frame->group < 1) {
+      return ft_fail(error, "%s: share job frame without a group", where);
+    }
+    if(previous == NULL) {
+      previous = frame;
+      continue;
+    }
+    if(frame->along_start_mm < previous->along_start_mm) {
+      return ft_fail(error, "%s: share job frames must follow the strip",
+                     where);
+    }
+    if(frame->group != previous->group) {
+      /* a new group starts: it must not have appeared before */
+      for(const ft_job_frame* earlier = job->frames; earlier < previous;
+          earlier++) {
+        if(earlier->is_included && earlier->group == frame->group) {
+          return ft_fail(error, "%s: group %d is split by group %d", where,
+                         (int)frame->group, (int)previous->group);
+        }
       }
-    for(i = 0; i < j->nframes; i++)
-      if(j->f[i].share_px > 0) {
-        where(w, sizeof w, &j->f[i]);
-        return ft_fail(e, "%s: share_px without share in [strip]", w);
-      }
-    return 0;
-  }
-  for(i = 0; i < j->nframes; i++) {
-    const ft_job_frame* f = &j->f[i];
-    if(!f->include) continue;
-    where(w, sizeof w, f);
-    if(f->group < 1)
-      return ft_fail(e, "%s: share job frame without a group", w);
-    if(prev >= 0 && f->y0 < j->f[prev].y0)
-      return ft_fail(e, "%s: share job frames must follow the strip", w);
-    if(prev >= 0 && f->group != j->f[prev].group)
-      for(k = 0; k < prev; k++)
-        if(j->f[k].include && j->f[k].group == f->group)
-          return ft_fail(e, "%s: group %d is split by group %d", w, f->group,
-                         j->f[prev].group);
-    if(prev >= 0 &&
-       f->group == j->f[prev].group &&
-       (f->ppi != j->f[prev].ppi || f->bin != j->f[prev].bin))
-      return ft_fail(e, "%s: frames of group %d differ in ppi or bin", w,
-                     f->group);
-    if(prev >= 0 &&
-       f->group == j->f[prev].group &&
-       ft_job_share_px(j, f) != ft_job_share_px(j, &j->f[prev]))
-      return ft_fail(e, "%s: frames of group %d differ in share_px", w,
-                     f->group);
-    prev = i;
+      previous = frame;
+      continue;
+    }
+    if(frame->ppi != previous->ppi || frame->bin != previous->bin) {
+      return ft_fail(error, "%s: frames of group %d differ in ppi or bin",
+                     where, (int)frame->group);
+    }
+    if(ft_get_frame_share_pixels(job, frame) !=
+       ft_get_frame_share_pixels(job, previous)) {
+      return ft_fail(error, "%s: frames of group %d differ in share_px", where,
+                     (int)frame->group);
+    }
+    previous = frame;
   }
   return 0;
 }
 
-int ft_job_validate(const ft_job* j, const ft_lens* lens, ft_err* e) {
-  const ft_holder* h = ft_find_holder(j->holder);
-  int i;
-  if(!h) return ft_fail(e, "unknown holder '%s'", j->holder);
-  if(j->nframes <= 0) return ft_fail(e, "no frames");
-  if(j->detail == FT_DETAIL_POS && j->film != FT_FILM_NEGATIVE)
-    return ft_fail(e,
+/* The detail settings that go together. */
+static int32_t check_detail(const ft_job* job, ft_err* error) {
+  if(job->detail == FT_DETAIL_POSITIVE && job->film != FT_FILM_NEGATIVE) {
+    return ft_fail(error,
                    "detail = pos (archive positive) is for negative "
                    "film; slides: detail = neg");
-  if(j->detail == FT_DETAIL_POS && j->detail_fmt != FT_DFMT_TIFF)
-    return ft_fail(e, "detail = pos is always TIFF (detail_fmt = tiff)");
-  if(j->detail == FT_DETAIL_NEG && j->detail_bw != FT_BW_OFF)
-    return ft_fail(e, "detail_bw is for detail = pos only");
-  if(j->detail == FT_DETAIL_POS && !j->has_film_base)
-    return ft_fail(e, "detail = pos needs film_base (from the preview)");
-  if(share_groups(j, e)) return -1;
-  for(i = 0; i < j->nframes; i++) {
-    const ft_job_frame* f = &j->f[i];
-    long ccd, optic, off;
-    char w[48];
-    if(!f->include) continue;
-    where(w, sizeof w, f);
-    if(!isfinite(f->ppi) || !ft_ppi_supported(f->ppi))
-      return ft_fail(e,
-                     "%s: ppi %g not supported "
-                     "(525..6300)",
-                     w, f->ppi);
-    if(f->bin && !ft_bin_ok(f->ppi, f->bin))
-      return ft_fail(e,
-                     "%s: bin %d not usable at %g ppi (the optics "
-                     "ppi x bin must be 1500..6300)",
-                     w, f->bin, f->ppi);
-    if(!(f->len > 0 &&
-         f->width > 0 &&
-         f->y0 >= 0 &&
-         f->x0 >= 0 &&
-         f->y0 + f->len <= h->scan_length_mm &&
-         f->x0 + f->width <= h->scan_width_mm))
-      return ft_fail(e, "%s: window outside the holder (%.0f x %.0f mm)", w,
-                     h->scan_length_mm, h->scan_width_mm);
-    if(!(fabs(f->tilt_deg) <= 45))
-      return ft_fail(e, "%s: tilt %g out of range (+-45 degrees)", w,
-                     f->tilt_deg);
-    if(j->detail != FT_DETAIL_NONE) {
-      int k;
-      if(f->pass < 1) return ft_fail(e, "%s: detailed scan without a pass", w);
-      if(ft_job_bin(f) != 1)
-        return ft_fail(e, "%s: detailed scans are bin 1", w);
-      for(k = 0; k < i; k++)
-        if(j->f[k].include && j->f[k].pass == f->pass && j->f[k].ppi != f->ppi)
-          return ft_fail(e, "%s: pass %d mixes %g and %g ppi", w, f->pass,
-                         j->f[k].ppi, f->ppi);
+  }
+  if(job->detail == FT_DETAIL_POSITIVE &&
+     job->detail_format != FT_DETAIL_FORMAT_TIFF) {
+    return ft_fail(error, "detail = pos is always TIFF (detail_fmt = tiff)");
+  }
+  if(job->detail == FT_DETAIL_NEGATIVE && job->detail_bw != FT_BW_OFF) {
+    return ft_fail(error, "detail_bw is for detail = pos only");
+  }
+  if(job->detail == FT_DETAIL_POSITIVE && job->has_film_base == false) {
+    return ft_fail(error, "detail = pos needs film_base (from the preview)");
+  }
+  return 0;
+}
+
+static bool is_window_inside(const ft_job_frame* frame,
+                             const ft_holder* holder) {
+  return frame->length_mm > 0 &&
+         frame->width_mm > 0 &&
+         frame->along_start_mm >= 0 &&
+         frame->across_start_mm >= 0 &&
+         frame->along_start_mm + frame->length_mm <= holder->scan_length_mm &&
+         frame->across_start_mm + frame->width_mm <= holder->scan_width_mm;
+}
+
+/* Check one included frame. Returns 0, or -1 with error filled. */
+static int32_t check_frame(const ft_job* job, uint32_t frame_index,
+                           const ft_holder* holder, const ft_lens* lens,
+                           ft_err* error) {
+  const ft_job_frame* frame = &job->frames[frame_index];
+  char where[WHERE_BYTES];
+  describe_frame(where, sizeof where, frame);
+
+  if(isfinite(frame->ppi) == false ||
+     ft_is_ppi_supported(frame->ppi) == false) {
+    return ft_fail(error, "%s: ppi %g not supported (525..6300)", where,
+                   frame->ppi);
+  }
+  if(frame->bin != 0 && ft_is_bin_usable(frame->ppi, frame->bin) == false) {
+    return ft_fail(error,
+                   "%s: bin %d not usable at %g ppi (the optics "
+                   "ppi x bin must be 1500..6300)",
+                   where, (int)frame->bin, frame->ppi);
+  }
+  /* written as "not inside" so that NaN is refused too */
+  if(is_window_inside(frame, holder) == false) {
+    return ft_fail(error, "%s: window outside the holder (%.0f x %.0f mm)",
+                   where, holder->scan_length_mm, holder->scan_width_mm);
+  }
+  if(!(fabs(frame->tilt_degrees) <= MAX_TILT_DEGREES)) {
+    return ft_fail(error, "%s: tilt %g out of range (+-45 degrees)", where,
+                   frame->tilt_degrees);
+  }
+  if(job->detail != FT_DETAIL_NONE) {
+    if(frame->pass < 1) {
+      return ft_fail(error, "%s: detailed scan without a pass", where);
     }
-    off = j->focus == FT_FOCUS_PER_FRAME ? f->focus_offset : j->focus_offset;
-    if(off < -FT_CCD_MAX ||
-       off > FT_CCD_MAX ||
-       ft_optics_focus(lens, f->ppi * ft_job_bin(f), off, &ccd, &optic) ||
-       !ft_positions_ok(ccd, optic))
-      return ft_fail(e,
-                     "%s: focus offset %ld puts the CCD/lens "
-                     "outside the safe range",
-                     w, off);
+    if(ft_get_frame_bin(frame) != 1) {
+      return ft_fail(error, "%s: detailed scans are bin 1", where);
+    }
+    for(uint32_t index = 0; index < frame_index; index++) {
+      const ft_job_frame* earlier = &job->frames[index];
+      if(earlier->is_included &&
+         earlier->pass == frame->pass &&
+         earlier->ppi != frame->ppi) {
+        return ft_fail(error, "%s: pass %d mixes %g and %g ppi", where,
+                       (int)frame->pass, earlier->ppi, frame->ppi);
+      }
+    }
+  }
+
+  int64_t offset_steps = job->focus_mode == FT_FOCUS_PER_FRAME
+                           ? frame->focus_offset_steps
+                           : job->focus_offset_steps;
+  int64_t ccd_steps;
+  int64_t lens_steps;
+  /* the range check first keeps the additions below from overflowing */
+  bool is_safe = offset_steps >= -FT_CCD_MAX_STEPS &&
+                 offset_steps <= FT_CCD_MAX_STEPS &&
+                 ft_find_focused_optics_positions(
+                   lens, frame->ppi * ft_get_frame_bin(frame), offset_steps,
+                   &ccd_steps, &lens_steps) == 0 &&
+                 ft_are_positions_safe(ccd_steps, lens_steps);
+  if(is_safe == false) {
+    return ft_fail(error,
+                   "%s: focus offset %" PRId64
+                   " puts the CCD/lens outside the safe range",
+                   where, offset_steps);
+  }
+  return 0;
+}
+
+int32_t ft_validate_job(const ft_job* job, const ft_lens* lens, ft_err* error) {
+  const ft_holder* holder = ft_find_holder(job->holder);
+  if(holder == NULL) return ft_fail(error, "unknown holder '%s'", job->holder);
+  if(job->frame_count == 0) return ft_fail(error, "no frames");
+  if(check_detail(job, error) != 0) return -1;
+  if(check_share_groups(job, error) != 0) return -1;
+  for(uint32_t index = 0; index < job->frame_count; index++) {
+    if(job->frames[index].is_included == false) continue;
+    if(check_frame(job, index, holder, lens, error) != 0) return -1;
   }
   return 0;
 }

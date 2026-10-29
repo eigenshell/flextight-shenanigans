@@ -9,9 +9,9 @@ int main(int argc, char** argv) {
     255, 0, 0, 0, 255, 0, 0, 0, 255, 10, 20, 30, 40, 50, 60, 70, 80, 90,
   };
   ft_err e;
-  if(argc < 2 || ft_png_write_rgb8(argv[1], rgb, 3, 2, &e)) {
+  if(argc < 2 || ft_write_png_rgb8(argv[1], rgb, 3, 2, &e)) {
     fprintf(stderr, "png_dump: %s\n",
-            argc < 2 ? "usage: png_dump out.png" : e.msg);
+            argc < 2 ? "usage: png_dump out.png" : e.message);
     return 1;
   }
   return 0;

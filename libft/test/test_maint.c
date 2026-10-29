@@ -70,7 +70,7 @@ int main(void) {
                      &e) == -1);
   CHECK(ft_maint_mem(0x4000, 0x7688, dword16, 4, cdb, buf, 13, &e) == -1);
   CHECK(ft_maint_io(0x344, 0, cdb, buf, 10, &e) == -1);
-  CHECK(strlen(e.msg) > 0);
+  CHECK(strlen(e.message) > 0);
 
   /* every packet built is longer than the header: the firmware computes
    * len - 10 unchecked, so len < 11 would underflow (Phase A, A1) */

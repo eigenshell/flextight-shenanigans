@@ -87,7 +87,7 @@ int ftdev_cut(int argc, char** argv) {
     *meta = NULL, *faul = NULL, *dt = NULL;
   unsigned short *raw = NULL, *cal = NULL;
   long nmeta = 0, nraw = 0, ncal = 0, nfaul = 0, nd = 0;
-  ft_share_meta m;
+  ft_share_metadata m;
   ft_defects defects;
   ft_err e;
   int i, rc = 1;
@@ -121,14 +121,15 @@ int ftdev_cut(int argc, char** argv) {
     fprintf(stderr, "ftdev: cannot read %s\n", path);
     goto out;
   }
-  if(ft_share_meta_parse(meta, (size_t)nmeta, &m, &e)) {
-    fprintf(stderr, "ftdev: %s: %s (not a share window scan?)\n", path, e.msg);
+  if(ft_parse_share_metadata(meta, (size_t)nmeta, &m, &e)) {
+    fprintf(stderr, "ftdev: %s: %s (not a share window scan?)\n", path,
+            e.message);
     goto out;
   }
   if(dpath) {
     dt = ftdev_load(dpath, &nd);
-    if(!dt || ft_defects_parse(dt, (size_t)nd, &defects, &e)) {
-      fprintf(stderr, "ftdev: %s: %s\n", dpath, dt ? e.msg : "cannot read");
+    if(!dt || ft_parse_defects(dt, (size_t)nd, &defects, &e)) {
+      fprintf(stderr, "ftdev: %s: %s\n", dpath, dt ? e.message : "cannot read");
       goto out;
     }
   }
@@ -149,23 +150,25 @@ int ftdev_cut(int argc, char** argv) {
   faul = ftdev_load(path, &nfaul);
   if(!faul)
     fprintf(stderr, "ftdev: note: no %s; Faul Pixs not interpolated\n", path);
-  if(ft_share_cut(
-       raw, (int)(nraw / ((long)m.px * 6)), cal, (int)(ncal / ((long)m.px * 6)),
-       faul, (size_t)(faul ? nfaul : 0), dpath ? &defects : NULL, &m, &r, &e)) {
-    fprintf(stderr, "ftdev: %s: %s\n", scan, e.msg);
+  if(ft_cut_share_frames(raw, (int)(nraw / ((long)m.pixel_count * 6)), cal,
+                         (int)(ncal / ((long)m.pixel_count * 6)), faul,
+                         (size_t)(faul ? nfaul : 0), dpath ? &defects : NULL,
+                         &m, &r, &e)) {
+    fprintf(stderr, "ftdev: %s: %s\n", scan, e.message);
     goto out;
   }
   free(raw);
   raw = NULL;
-  if(!r.detect_ok)
+  if(!r.was_detected)
     fprintf(stderr,
             "ftdev: WARNING: frame detection failed on %s; "
             "every frame cut at its preview box\n",
             scan);
-  if(r.noise_rc) fprintf(stderr, "ftdev: note: %s\n", r.noise_err.msg);
+  if(r.noise_result)
+    fprintf(stderr, "ftdev: note: %s\n", r.noise_error.message);
   rc = 0;
-  for(i = 0; i < r.n; i++) {
-    ft_share_cut_frame* c = &r.f[i];
+  for(i = 0; i < (int)r.frame_count; i++) {
+    ft_share_cut_frame* c = &r.frames[i];
     FILE* f;
     int long_px = c->box[2] > c->box[3] ? c->box[2] : c->box[3];
     char num[32];
@@ -174,26 +177,26 @@ int ftdev_cut(int argc, char** argv) {
       rc = 2;
       break;
     }
-    if(ft_dng_write(path, &c->im, &e)) {
-      fprintf(stderr, "ftdev: %s\n", e.msg);
+    if(ft_write_dng(path, &c->image, &e)) {
+      fprintf(stderr, "ftdev: %s\n", e.message);
       rc = 1;
       continue;
     }
     printf("%s: %dx%d, frame %dx%d, shift %+.2f mm%s, exports at %d px\n", path,
-           c->im.w, c->im.h, c->box[2], c->box[3], c->shift_mm,
-           c->estimated ? " (ESTIMATED: not detected)" : "",
+           c->image.width, c->image.height, c->box[2], c->box[3], c->shift_mm,
+           c->is_estimated ? " (ESTIMATED: not detected)" : "",
            (int)floor(long_px * c->export_scale + 0.5));
     if(path_cat(txt, sizeof txt, path, ".txt")) {
       rc = 2;
       break;
     }
     f = fopen(txt, "w");
-    if(!f || ft_share_sidecar_write(f, &m, c) || fclose(f)) {
+    if(!f || ft_write_share_sidecar(f, &m, c) || fclose(f)) {
       fprintf(stderr, "ftdev: cannot write %s\n", txt);
       rc = 1;
     }
   }
-  ft_share_cut_free(&r);
+  ft_free_share_cut(&r);
 out:
   free(meta);
   free(faul);
@@ -248,17 +251,17 @@ static int strength(const char* a, const char* v, const char* name, double hi,
 
 int ftdev_denoise(const ft_image* im, const ft_share_sidecar* sc, ft_image* cut,
                   const ft_look_detail* d) {
-  int notes;
+  uint32_t notes;
   ft_err e;
-  if(ft_share_denoise(im, sc, cut, d, &notes, &e)) {
-    fprintf(stderr, "ftdev: %s\n", e.msg);
+  if(ft_denoise_share_frame(im, sc, cut, d, &notes, &e)) {
+    fprintf(stderr, "ftdev: %s\n", e.message);
     return 1;
   }
-  if(notes & FT_NR_NOTE_DISAGREE)
+  if(notes & FT_NOISE_NOTE_DISAGREE)
     fprintf(stderr,
             "ftdev: warning: sidecar noise_profile disagrees "
             "with the DNG; using the DNG's\n");
-  if(notes & FT_NR_NOTE_ESTIMATED)
+  if(notes & FT_NOISE_NOTE_ESTIMATED)
     fprintf(stderr, "ftdev: warning: no noise profile, estimated\n");
   return 0;
 }
@@ -278,8 +281,9 @@ int ftdev_write_jpeg(const char* outp, const unsigned char* jpg, size_t n,
     fprintf(stderr, "ftdev: jpeg: cannot write %s\n", outp);
     return 1;
   }
-  printf("%s: %dx%d, %s, gamut %s, q%d\n", outp, ow, oh, ft_space_what(space),
-         gamut == FT_GAMUT_SOFT ? "soft" : "clip", quality);
+  printf("%s: %dx%d, %s, gamut %s, q%d\n", outp, ow, oh,
+         ft_describe_space(space), gamut == FT_GAMUT_SOFT ? "soft" : "clip",
+         quality);
   /* how it was made, next to it: <out.jpg>.txt */
   if(path_cat(rpath, sizeof rpath, outp, ".txt")) return 2;
   f = fopen(rpath, "w");
@@ -300,11 +304,12 @@ int ftdev_finish(const ft_image* cut, double scale, double sharpen,
                  const char* outp) {
   unsigned char* jpg;
   size_t n;
-  int ow, oh, rc;
+  uint32_t ow, oh;
+  int rc;
   ft_err e;
-  if(ft_share_finish(cut, scale, sharpen, space, gamut, quality, text, &jpg, &n,
-                     &ow, &oh, &e)) {
-    fprintf(stderr, "ftdev: %s\n", e.msg);
+  if(ft_finish_share_jpeg(cut, scale, sharpen, space, gamut, quality, text,
+                          &jpg, &n, &ow, &oh, &e)) {
+    fprintf(stderr, "ftdev: %s\n", e.message);
     return 1;
   }
   rc = ftdev_write_jpeg(outp, jpg, n, ow, oh, space, gamut, quality, text);
@@ -333,8 +338,8 @@ int ftdev_export(int argc, char** argv) {
   double nr_sensor = 1, nr_chroma = 2, nr_grain = 0, sharpen = 0.5;
   ft_err e;
 
-  ft_image_init(&im);
-  ft_image_init(&cut);
+  ft_init_image(&im);
+  ft_init_image(&cut);
   rflags_init(&rf);
   for(i = 0; i < argc; i++) {
     const char* a = argv[i];
@@ -353,7 +358,7 @@ int ftdev_export(int argc, char** argv) {
     }
     if(strcmp(a, "--space") == 0 && i + 1 < argc) {
       space_name = argv[++i];
-      if(ft_space_find(space_name, &space) || space == FT_SPACE_REC2020) {
+      if(ft_find_space(space_name, &space) || space == FT_SPACE_REC2020) {
         fprintf(stderr,
                 "ftdev: --space is srgb, p3 or adobe "
                 "(8-bit Rec.2020 bands)\n");
@@ -371,7 +376,7 @@ int ftdev_export(int argc, char** argv) {
         return 2;
       }
     } else if(strcmp(a, "--gamut") == 0 && i + 1 < argc) {
-      if(ft_gamut_find(argv[++i], &gamut)) {
+      if(ft_find_gamut(argv[++i], &gamut)) {
         fprintf(stderr, "ftdev: --gamut is soft or clip\n");
         return 2;
       }
@@ -433,8 +438,8 @@ int ftdev_export(int argc, char** argv) {
   if(path_cat(path, sizeof path, dng, ".txt")) return 2;
   side = ftdev_load(path, &nside);
   if(side) {
-    if(ft_share_sidecar_parse(side, (size_t)nside, &sc, &e)) {
-      fprintf(stderr, "ftdev: %s: %s\n", path, e.msg);
+    if(ft_parse_share_sidecar(side, (size_t)nside, &sc, &e)) {
+      fprintf(stderr, "ftdev: %s: %s\n", path, e.message);
       goto out;
     }
     has_side = 1;
@@ -479,26 +484,27 @@ int ftdev_export(int argc, char** argv) {
       fprintf(stderr, "ftdev: cannot read %s\n", edit);
       goto out;
     }
-    if(ft_edit_parse(txt, (size_t)nt, FT_EDIT_FILE, &g_edit, &e)) {
-      fprintf(stderr, "ftdev: %s: %s\n", edit, e.msg);
+    if(ft_parse_edit(txt, (size_t)nt, FT_EDIT_FILE, &g_edit, &e)) {
+      fprintf(stderr, "ftdev: %s: %s\n", edit, e.message);
       free(txt);
       rc = 2;
       goto out;
     }
     free(txt);
-    if(g_edit.stock.has_ratio && rflags_mode(&rf) != FT_RENDER_NEG)
+    if(g_edit.stock.has_ratio && rflags_mode(&rf) != FT_RENDER_NEGATIVE)
       fprintf(stderr,
               "ftdev: warning: %s: range_ratio is for colour "
               "negatives; ignored for %s\n",
               edit, rf.bw ? "b&w" : "a slide");
-    ft_edit_taste(&g_edit, frame, &taste, NULL);
-    ft_look_detail_of(&taste, &det);
+    ft_get_frame_taste(&g_edit, frame, &taste, NULL);
+    ft_get_look_detail(&taste, &det);
     nr_sensor = det.nr_sensor;
     nr_chroma = det.nr_chroma;
     nr_grain = det.nr_grain;
     sharpen = det.sharpen;
     for(k = 0; k < 4; k++)
-      curves[k] = (taste.set & (FT_T_CURVE << k)) ? taste.curve[k] : NULL;
+      curves[k] =
+        (taste.set_keys & (FT_TASTE_CURVE << k)) ? taste.curves[k] : NULL;
   }
   if(!outp) {
     if(path_swap(outbuf, sizeof outbuf, dng, ".dng", ".jpg")) {
@@ -507,8 +513,8 @@ int ftdev_export(int argc, char** argv) {
     }
     outp = outbuf;
   }
-  if(ft_dng_read(dng, &im, &e)) {
-    fprintf(stderr, "ftdev: %s\n", e.msg);
+  if(ft_read_dng(dng, &im, &e)) {
+    fprintf(stderr, "ftdev: %s\n", e.message);
     goto out;
   }
   /* the crop: --crop, else the frame box, else everything */
@@ -516,17 +522,17 @@ int ftdev_export(int argc, char** argv) {
     if(has_side)
       memcpy(crop, sc.box, sizeof crop);
     else {
-      crop[2] = im.w;
-      crop[3] = im.h;
+      crop[2] = im.width;
+      crop[3] = im.height;
     }
   }
-  if(crop[2] > im.w ||
-     crop[3] > im.h ||
-     crop[0] > im.w - crop[2] ||
-     crop[1] > im.h - crop[3]) {
+  if(crop[2] > (int)im.width ||
+     crop[3] > (int)im.height ||
+     crop[0] > (int)im.width - crop[2] ||
+     crop[1] > (int)im.height - crop[3]) {
     fprintf(stderr, "ftdev: %s %d,%d %dx%d outside the %dx%d image%s\n",
             has_crop ? "crop" : "sidecar box", crop[0], crop[1], crop[2],
-            crop[3], im.w, im.h,
+            crop[3], im.width, im.height,
             has_crop ? "" : " (sidecar from another DNG?)");
     rc = 2;
     goto out;
@@ -543,8 +549,8 @@ int ftdev_export(int argc, char** argv) {
     fprintf(stderr,
             "ftdev: note: no sidecar; exporting at full size "
             "(use --long-edge)\n");
-  if(ft_image_crop(&im, crop, &cut, &e)) {
-    fprintf(stderr, "ftdev: %s\n", e.msg);
+  if(ft_crop_image(&im, crop, &cut, &e)) {
+    fprintf(stderr, "ftdev: %s\n", e.message);
     goto out;
   }
   det.nr_sensor = nr_sensor;
@@ -552,14 +558,15 @@ int ftdev_export(int argc, char** argv) {
   det.nr_grain = nr_grain;
   det.sharpen = sharpen;
   if(ftdev_denoise(&im, has_side ? &sc : NULL, &cut, &det)) goto out;
-  ft_image_free(&im);
+  ft_free_image(&im);
   {
-    const double* base_d =
-      !rf.has_base && has_side && sc.has_film_base ? sc.film_base : NULL;
-    int r = edit
-              ? look_render(g_edit.stock.present ? &g_edit.stock : NULL, &taste,
-                            rflags_mode(&rf), base_d, &cut, &rcp, &g_render)
-              : rflags_render(&rf, &rcp, base_d, &cut, &g_render);
+    const double* base_d = !rf.has_base && has_side && sc.has_film_base
+                             ? sc.film_base_density
+                             : NULL;
+    int r =
+      edit ? look_render(g_edit.stock.is_present ? &g_edit.stock : NULL, &taste,
+                         rflags_mode(&rf), base_d, &cut, &rcp, &g_render)
+           : rflags_render(&rf, &rcp, base_d, &cut, &g_render);
     if(r) {
       rc = r;
       goto out;
@@ -568,10 +575,10 @@ int ftdev_export(int argc, char** argv) {
       unsigned ff, bit;
       const char* key;
       int k, any = 0;
-      ft_edit_taste(&g_edit, frame, &taste, &ff);
+      ft_get_frame_taste(&g_edit, frame, &taste, &ff);
       printf("recipe: look %s, frame %d",
              g_edit.from[0] ? g_edit.from : "(unnamed)", frame);
-      for(k = 0; (key = ft_taste_key(k, &bit)) != NULL; k++)
+      for(k = 0; (key = ft_get_taste_key(k, &bit)) != NULL; k++)
         if(ff & bit) printf("%s%s", any++ ? " " : "; frame overrides: ", key);
       printf("\n");
     }
@@ -616,8 +623,8 @@ int ftdev_export(int argc, char** argv) {
     }
   }
 out:
-  ft_image_free(&im);
-  ft_image_free(&cut);
+  ft_free_image(&im);
+  ft_free_image(&cut);
   free(side);
   return rc;
 }

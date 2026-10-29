@@ -23,6 +23,7 @@
  * the scanner's rate into a ring of --ring-mb and are refused when it is
  * full, as in a real scan: the ring's peak tells how close it came.
  */
+#include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -104,7 +105,7 @@ static int feed(ft_detail* d, const unsigned short* (*line_at)(long, void*),
   *seconds = (ring_ms() - t0) / 1000.0;
   pass_worker_report(&w, *seconds, report, cap);
   if(w.failed) {
-    fprintf(stderr, "ftdev: %s\n", w.e.msg);
+    fprintf(stderr, "ftdev: %s\n", w.e.message);
     rc = -1;
   }
   ring_close(r);
@@ -134,28 +135,29 @@ static void detail_usage(void) {
 
 static void print_result(const ft_detail_result* r) {
   int i;
-  for(i = 0; i < r->nframes; i++) {
-    const ft_detail_frame_result* f = &r->f[i];
+  for(i = 0; i < (int)r->frame_count; i++) {
+    const ft_detail_frame_result* f = &r->frames[i];
     printf("%s: %dx%d, frame %d at %d,%d %dx%d, shift %+.2f mm%s%s\n", f->path,
-           f->w, f->h, f->index, f->box[0], f->box[1], f->box[2], f->box[3],
-           f->shift_mm,
-           f->estimated ? " (ESTIMATED: not found on the scan)" : "",
-           f->edge ? " (WARNING: at the file edge, frame may be cut; "
-                     "margin too small)"
-                   : "");
+           f->width, f->height, f->index, f->box[0], f->box[1], f->box[2],
+           f->box[3], f->shift_mm,
+           f->is_estimated ? " (ESTIMATED: not found on the scan)" : "",
+           f->touches_edge ? " (WARNING: at the file edge, frame may be cut; "
+                             "margin too small)"
+                           : "");
   }
 }
 
 int ftdev_detail(int argc, char** argv) {
   const char *scan = NULL, *jobp = NULL, *base = NULL, *dpath = NULL;
-  int out = -1, fmt = -1, bw = -1, ring_mb = FT_RING_MB_DEFAULT, i, rc = 1;
+  int out = -1, fmt = -1, bw = -1, ring_mb = FT_RING_MEGABYTES_DEFAULT, i,
+      rc = 1;
   unsigned stall_ms = 0;
   long stall_every = 0, nmeta = 0, nraw = 0, ncal = 0, nfaul = 0, nd = 0;
   char path[1024], basebuf[1024], report[256];
   char *meta = NULL, *faul = NULL, *dtext = NULL;
   unsigned short *raw = NULL, *cal = NULL;
   static ft_job j;
-  static ft_detail_opts o;
+  static ft_detail_options o;
   static ft_detail_result res;
   ft_defects defects;
   ft_image metaimg;
@@ -191,9 +193,9 @@ int ftdev_detail(int argc, char** argv) {
       }
     } else if(strcmp(a, "--ring-mb") == 0 && i + 1 < argc) {
       ring_mb = atoi(argv[++i]);
-      if(ring_mb < FT_RING_MB_MIN || ring_mb > FT_RING_MB_MAX) {
-        fprintf(stderr, "ftdev: --ring-mb %d..%d\n", FT_RING_MB_MIN,
-                FT_RING_MB_MAX);
+      if(ring_mb < FT_RING_MEGABYTES_MIN || ring_mb > FT_RING_MEGABYTES_MAX) {
+        fprintf(stderr, "ftdev: --ring-mb %d..%d\n", FT_RING_MEGABYTES_MIN,
+                FT_RING_MEGABYTES_MAX);
         return 2;
       }
     } else if(strcmp(a, "--stall") == 0 && i + 1 < argc) {
@@ -217,14 +219,14 @@ int ftdev_detail(int argc, char** argv) {
     fprintf(stderr, "ftdev: cannot read %s\n", jobp);
     return 1;
   }
-  if(ft_job_read(&j, f, &e)) {
+  if(ft_read_job(&j, f, &e)) {
     fclose(f);
-    fprintf(stderr, "ftdev: %s: %s\n", jobp, e.msg);
+    fprintf(stderr, "ftdev: %s: %s\n", jobp, e.message);
     return 1;
   }
   fclose(f);
-  if(out >= 0) j.detail = out == 0 ? FT_DETAIL_NEG : FT_DETAIL_POS;
-  if(fmt >= 0) j.detail_fmt = (ft_detail_fmt)fmt;
+  if(out >= 0) j.detail = out == 0 ? FT_DETAIL_NEGATIVE : FT_DETAIL_POSITIVE;
+  if(fmt >= 0) j.detail_format = (ft_detail_format)fmt;
   if(bw >= 0) j.detail_bw = (ft_detail_bw)bw;
   if(j.detail == FT_DETAIL_NONE) {
     fprintf(stderr,
@@ -233,8 +235,8 @@ int ftdev_detail(int argc, char** argv) {
             jobp);
     return 2;
   }
-  if(j.detail == FT_DETAIL_POS)
-    j.detail_fmt = FT_DFMT_TIFF;
+  if(j.detail == FT_DETAIL_POSITIVE)
+    j.detail_format = FT_DETAIL_FORMAT_TIFF;
   else
     j.detail_bw = FT_BW_OFF;
   if(!base) {
@@ -261,19 +263,19 @@ int ftdev_detail(int argc, char** argv) {
   memset(&o, 0, sizeof o);
   o.scan.ppi = meta_double(meta, "ppi", 0);
   o.scan.bin = (int)meta_long(meta, "bin", 0);
-  o.scan.x_out = meta_long(meta, "x", -1);
-  o.scan.y_line = meta_long(meta, "y", -1);
-  o.scan.px = meta_long(meta, "px", 0);
-  o.scan.lines = meta_long(meta, "lines", 0);
+  o.scan.first_pixel = meta_long(meta, "x", -1);
+  o.scan.first_line = meta_long(meta, "y", -1);
+  o.scan.pixel_count = meta_long(meta, "px", 0);
+  o.scan.line_count = meta_long(meta, "lines", 0);
   pass = (int)meta_long(meta, "pass", 0);
   if(o.scan.ppi <= 0 ||
      o.scan.bin < 1 ||
      o.scan.bin > 12 ||
-     o.scan.x_out < 0 ||
-     o.scan.y_line < 0 ||
-     o.scan.px < 1 ||
-     o.scan.px > 20000 ||
-     o.scan.lines < 1 ||
+     o.scan.first_pixel < 0 ||
+     o.scan.first_line < 0 ||
+     o.scan.pixel_count < 1 ||
+     o.scan.pixel_count > 20000 ||
+     o.scan.line_count < 1 ||
      pass < 1) {
     fprintf(stderr,
             "ftdev: %s.txt lacks the pass geometry (ppi, bin, "
@@ -283,62 +285,64 @@ int ftdev_detail(int argc, char** argv) {
   }
   if(dpath) {
     dtext = load_file(dpath, &nd);
-    if(!dtext || ft_defects_parse(dtext, (size_t)nd, &defects, &e)) {
-      fprintf(stderr, "ftdev: %s: %s\n", dpath, dtext ? e.msg : "cannot read");
+    if(!dtext || ft_parse_defects(dtext, (size_t)nd, &defects, &e)) {
+      fprintf(stderr, "ftdev: %s: %s\n", dpath,
+              dtext ? e.message : "cannot read");
       goto done;
     }
     o.defects = &defects;
   }
-  ft_image_init(&metaimg);
+  ft_init_image(&metaimg);
   o.film = j.film;
-  o.out = j.detail;
-  o.fmt = j.detail_fmt;
+  o.output = j.detail;
+  o.format = j.detail_format;
   o.bw = j.detail_bw;
-  memcpy(o.film_base, j.film_base, sizeof o.film_base);
-  if(o.out == FT_DETAIL_POS && !j.has_film_base) {
+  memcpy(o.film_base_density, j.film_base_density, sizeof o.film_base_density);
+  if(o.output == FT_DETAIL_POSITIVE && !j.has_film_base) {
     fprintf(stderr, "ftdev: %s has no film_base for --out pos\n", jobp);
     goto done;
   }
   o.margin_mm = FT_DETAIL_MARGIN_MM;
   o.holder = ft_find_holder(j.holder);
-  o.meta = &metaimg;
-  o.base = base;
+  o.metadata = &metaimg;
+  o.base_path = base;
   o.pass = pass;
-  o.focus = meta_long(meta, "focus_offset", 0);
-  for(i = 0; i < j.nframes; i++) {
-    const ft_job_frame* fr = &j.f[i];
-    if(!fr->include || fr->pass != pass) continue;
-    o.f[o.nframes].index = fr->index;
-    o.f[o.nframes].y0 = fr->y0;
-    o.f[o.nframes].y1 = fr->y0 + fr->len;
-    o.f[o.nframes].x0 = fr->x0;
-    o.f[o.nframes].x1 = fr->x0 + fr->width;
-    o.nframes++;
+  o.focus_offset_steps = meta_long(meta, "focus_offset", 0);
+  for(i = 0; i < (int)j.frame_count; i++) {
+    const ft_job_frame* fr = &j.frames[i];
+    if(!fr->is_included || fr->pass != pass) continue;
+    o.frames[o.frame_count].index = fr->index;
+    o.frames[o.frame_count].start_mm = fr->along_start_mm;
+    o.frames[o.frame_count].end_mm = fr->along_start_mm + fr->length_mm;
+    o.frames[o.frame_count].across_start_mm = fr->across_start_mm;
+    o.frames[o.frame_count].across_end_mm = fr->across_start_mm + fr->width_mm;
+    o.frame_count++;
   }
-  if(!o.holder || !o.nframes) {
+  if(!o.holder || !o.frame_count) {
     fprintf(stderr,
             "ftdev: %s: no frame in pass %d (or unknown "
             "holder)\n",
             jobp, pass);
     goto done;
   }
-  d = ft_detail_open(&o, cal, (int)(ncal / (o.scan.px * 6)), faul,
+  d = ft_open_detail(&o, cal, (int)(ncal / (o.scan.pixel_count * 6)), faul,
                      (size_t)(faul ? nfaul : 0), &e);
   if(!d) {
-    fprintf(stderr, "ftdev: %s\n", e.msg);
+    fprintf(stderr, "ftdev: %s\n", e.message);
     goto done;
   }
   ctx.raw = raw;
-  ctx.px = o.scan.px;
-  if(feed(d, raw_line, &ctx, nraw / (o.scan.px * 6), (size_t)o.scan.px * 6,
-          ring_mb, 0, stall_ms, stall_every, &secs, report, sizeof report)) {
-    ft_detail_abort(d);
+  ctx.px = o.scan.pixel_count;
+  if(feed(d, raw_line, &ctx, nraw / (o.scan.pixel_count * 6),
+          (size_t)o.scan.pixel_count * 6, ring_mb, 0, stall_ms, stall_every,
+          &secs, report, sizeof report)) {
+    ft_abort_detail(d);
     goto done;
   }
   printf("pass %d: %s\n", pass, report);
-  rc = ft_detail_close(d, &res, &e) ? 1 : 0;
+  rc = ft_close_detail(d, &res, &e) ? 1 : 0;
   print_result(&res);
-  if(rc) fprintf(stderr, "ftdev: %s\n", e.msg);
+  if(rc) fprintf(stderr, "ftdev: %s\n", e.message);
 done:
   free(meta);
   free(raw);
@@ -362,10 +366,10 @@ static const unsigned short* bench_line(long l, void* ctx) {
 
 int ftdev_bench(int argc, char** argv) {
   double ppi = 6300, mm = 10, pace = 0, secs, lo, hi, rate;
-  int out = 0, fmt = 0, bw = 0, ring_mb = FT_RING_MB_DEFAULT, keep = 0;
+  int out = 0, fmt = 0, bw = 0, ring_mb = FT_RING_MEGABYTES_DEFAULT, keep = 0;
   int i, rc;
   const char* base = "bench";
-  static ft_detail_opts o;
+  static ft_detail_options o;
   static ft_detail_result res;
   unsigned short* cal;
   unsigned seed = 1;
@@ -408,44 +412,45 @@ int ftdev_bench(int argc, char** argv) {
   if(out < 0 ||
      fmt < 0 ||
      bw < 0 ||
-     !ft_bin_ok(ppi, 1) ||
+     !ft_is_bin_usable(ppi, 1) ||
      !(mm >= 1 && mm <= 231) ||
-     ring_mb < FT_RING_MB_MIN ||
-     ring_mb > FT_RING_MB_MAX) {
+     ring_mb < FT_RING_MEGABYTES_MIN ||
+     ring_mb > FT_RING_MEGABYTES_MAX) {
     fprintf(stderr, "ftdev bench: bad option (ppi must allow bin 1)\n");
     return 2;
   }
   memset(&o, 0, sizeof o);
-  ft_dscan_reach(ppi, 1, &lo, &hi);
+  ft_get_ccd_reach_mm(ppi, 1, &lo, &hi);
   if(lo < 0.5) lo = 0.5;
   if(hi > 31.5) hi = 31.5;
-  ft_dscan_for(ppi, 1, lo, hi - lo, 10, mm + 2 * FT_DETAIL_MARGIN_MM, &o.scan);
-  if(o.scan.px * 6 > 60000) {
+  ft_make_detail_scan(ppi, 1, lo, hi - lo, 10, mm + 2 * FT_DETAIL_MARGIN_MM,
+                      &o.scan);
+  if(o.scan.pixel_count * 6 > 60000) {
     fprintf(stderr, "ftdev bench: line too long\n");
     return 2;
   }
-  ft_image_init(&meta);
+  ft_init_image(&meta);
   o.film = FT_FILM_NEGATIVE;
-  o.out = out ? FT_DETAIL_POS : FT_DETAIL_NEG;
-  o.fmt = out ? FT_DFMT_TIFF : (ft_detail_fmt)fmt;
+  o.output = out ? FT_DETAIL_POSITIVE : FT_DETAIL_NEGATIVE;
+  o.format = out ? FT_DETAIL_FORMAT_TIFF : (ft_detail_format)fmt;
   o.bw = out ? (ft_detail_bw)bw : FT_BW_OFF;
-  o.film_base[0] = 0.21;
-  o.film_base[1] = 0.40;
-  o.film_base[2] = 0.60;
+  o.film_base_density[0] = 0.21;
+  o.film_base_density[1] = 0.40;
+  o.film_base_density[2] = 0.60;
   o.margin_mm = FT_DETAIL_MARGIN_MM;
   o.holder = ft_find_holder("24x217");
-  o.meta = &meta;
-  o.base = base;
+  o.metadata = &meta;
+  o.base_path = base;
   o.pass = 1;
-  o.nframes = 1;
-  o.f[0].index = 1;
-  o.f[0].y0 = 10 + FT_DETAIL_MARGIN_MM;
-  o.f[0].y1 = o.f[0].y0 + mm;
-  o.f[0].x0 = lo + FT_DETAIL_MARGIN_MM;
-  o.f[0].x1 = hi - FT_DETAIL_MARGIN_MM;
+  o.frame_count = 1;
+  o.frames[0].index = 1;
+  o.frames[0].start_mm = 10 + FT_DETAIL_MARGIN_MM;
+  o.frames[0].end_mm = o.frames[0].start_mm + mm;
+  o.frames[0].across_start_mm = lo + FT_DETAIL_MARGIN_MM;
+  o.frames[0].across_end_mm = hi - FT_DETAIL_MARGIN_MM;
 
   c.n = 64;
-  c.px = o.scan.px;
+  c.px = o.scan.pixel_count;
   c.lines = malloc((size_t)c.n * c.px * 3 * sizeof *c.lines);
   cal = malloc((size_t)250 * c.px * 3 * sizeof *cal);
   if(!c.lines || !cal) {
@@ -461,46 +466,48 @@ int ftdev_bench(int argc, char** argv) {
     seed = seed * 1103515245u + 12345u;
     c.lines[k] = (unsigned short)(400 + (seed >> 16) % 8000);
   }
-  d = ft_detail_open(&o, cal, 250, NULL, 0, &e);
+  d = ft_open_detail(&o, cal, 250, NULL, 0, &e);
   if(!d) {
-    fprintf(stderr, "ftdev bench: %s\n", e.msg);
+    fprintf(stderr, "ftdev bench: %s\n", e.message);
     free(c.lines);
     free(cal);
     return 1;
   }
-  /* the scanner: FT_OUT_PX_RATE output px/s over the full CCD line,
-   * bin 1: lines per second */
-  rate = FT_OUT_PX_RATE / FT_CCD_PIXEL_COUNT;
+  /* the scanner: FT_OUTPUT_PIXELS_PER_SECOND output px/s over the full CCD
+   * line, bin 1: lines per second */
+  rate = FT_OUTPUT_PIXELS_PER_SECOND / FT_CCD_PIXEL_COUNT;
   if(pace) pace = 1000.0 / rate;
-  printf("bench: %g ppi, %ld px x %ld lines (%.1f Mpx), %s%s, ring %d MB%s\n",
-         ppi, o.scan.px, o.scan.lines, o.scan.px * o.scan.lines / 1e6,
-         OUTS[out],
+  printf("bench: %g ppi, %" PRId64 " px x %" PRId64
+         " lines (%.1f Mpx), %s%s, ring %d MB%s\n",
+         ppi, o.scan.pixel_count, o.scan.line_count,
+         o.scan.pixel_count * o.scan.line_count / 1e6, OUTS[out],
          out   ? (bw == 1   ? " mono"
                   : bw == 2 ? " rgb"
                             : " colour")
          : fmt ? " tiff"
                : " dng",
          ring_mb, pace ? ", paced at the scanner's line rate" : "");
-  rc = feed(d, bench_line, &c, o.scan.lines, (size_t)o.scan.px * 6, ring_mb,
-            pace, 0, 0, &secs, report, sizeof report);
+  rc =
+    feed(d, bench_line, &c, o.scan.line_count, (size_t)o.scan.pixel_count * 6,
+         ring_mb, pace, 0, 0, &secs, report, sizeof report);
   if(rc) {
-    ft_detail_abort(d);
+    ft_abort_detail(d);
   } else {
-    double pxs = o.scan.px * o.scan.lines / secs;
+    double pxs = o.scan.pixel_count * o.scan.line_count / secs;
     if(pace) /* the ring only matters paced */
       printf("%s\n", report);
     printf("%.1f s, %.2f Mpx/s of scan lines", secs, pxs / 1e6);
     if(!pace)
       printf("; the scanner sends %.1f lines/s: headroom %.0fx\n", rate,
-             o.scan.lines / secs / rate);
+             o.scan.line_count / secs / rate);
     else
       printf("\n");
-    rc = ft_detail_close(d, &res, &e) ? 1 : 0;
-    if(rc) fprintf(stderr, "ftdev bench: %s\n", e.msg);
+    rc = ft_close_detail(d, &res, &e) ? 1 : 0;
+    if(rc) fprintf(stderr, "ftdev bench: %s\n", e.message);
     if(!keep) {
       char p[700];
-      remove(res.f[0].path);
-      snprintf(p, sizeof p, "%s.txt", res.f[0].path);
+      remove(res.frames[0].path);
+      snprintf(p, sizeof p, "%s.txt", res.frames[0].path);
       remove(p);
     }
   }

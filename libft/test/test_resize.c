@@ -12,14 +12,15 @@ static float in[W * H * 3], out[W * H * 3], scratch[W * H * 3];
 
 int main(void) {
   ft_err e;
-  int ow, oh, x, y, c;
+  uint32_t ow, oh;
+  int x, y, c;
 
   /* sizes */
-  ft_resize_dims(2126, 1417, 2000.0 / 2126, &ow, &oh);
+  ft_get_resized_size(2126, 1417, 2000.0 / 2126, &ow, &oh);
   CHECK(ow == 2000 && oh == 1333);
-  ft_resize_dims(10, 10, 0.01, &ow, &oh);
+  ft_get_resized_size(10, 10, 0.01, &ow, &oh);
   CHECK(ow == 1 && oh == 1);
-  CHECK(ft_resize_scratch_bytes(W, H, 133, 100) ==
+  CHECK(ft_get_resize_scratch_bytes(W, H, 133, 100) ==
         (size_t)H * 133 * 3 * sizeof(float));
 
   /* a flat field stays exactly flat, edges included */
@@ -38,7 +39,7 @@ int main(void) {
   {
     /* encoded 0/1 are the same 0/1: the gamma-domain result is 0.5
      * encoded, i.e. 0.214 linear, not 0.5 */
-    double lin = ft_space_decode(FT_SPACE_SRGB, out[(50 * 133 + 60) * 3]);
+    double lin = ft_decode_space(FT_SPACE_SRGB, out[(50 * 133 + 60) * 3]);
     CHECK(lin < 0.25);
   }
 
@@ -71,7 +72,7 @@ int main(void) {
   CHECK(ft_resize(in, W, H, out, W, H, scratch, &e) == 0);
   CHECK(memcmp(in, out, sizeof in) == 0);
   CHECK(ft_resize(in, W, H, out, W + 1, H, scratch, &e) == -1);
-  CHECK(strstr(e.msg, "upscale") != NULL);
+  CHECK(strstr(e.message, "upscale") != NULL);
   CHECK(ft_resize(in, W, H, out, 0, H, scratch, &e) == -1);
   return TEST_DONE();
 }

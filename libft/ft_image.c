@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "ft_image.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -10,78 +11,124 @@ static const double SRGB_FROM_XYZ[9] = {
   0.0415560, 0.0556434,  -0.2040259, 1.0572252,
 };
 
-void ft_image_init(ft_image* im) {
-  memset(im, 0, sizeof *im);
-  im->film = -1;
-  memcpy(im->xyz_to_rgb, SRGB_FROM_XYZ, sizeof im->xyz_to_rgb);
-  strcpy(im->make, "Imacon");
-  strcpy(im->model, "Flextight Precision II");
+void ft_init_image(ft_image* image) {
+  memset(image, 0, sizeof *image);
+  image->film = -1;
+  memcpy(image->xyz_to_rgb, SRGB_FROM_XYZ, sizeof image->xyz_to_rgb);
+  strcpy(image->make, "Imacon");
+  strcpy(image->model, "Flextight Precision II");
 }
 
-int ft_image_alloc(ft_image* im, int w, int h, ft_err* e) {
-  if(w < 1 || h < 1) return ft_fail(e, "image: bad size %dx%d", w, h);
-  if((double)w * h * 3 > (double)((size_t)-1 / sizeof(float)))
-    return ft_fail(e, "image: %dx%d is too large", w, h);
-  im->rgb = calloc((size_t)w * h * 3, sizeof *im->rgb);
-  if(!im->rgb) return ft_fail(e, "image: out of memory for %dx%d", w, h);
-  im->w = w;
-  im->h = h;
+int32_t ft_allocate_image(ft_image* image, uint32_t width, uint32_t height,
+                          ft_err* error) {
+  if(width < 1 || height < 1) {
+    return ft_fail(error, "image: bad size %ux%u", (unsigned)width,
+                   (unsigned)height);
+  }
+  /* in double, so the check itself cannot overflow */
+  double value_count = (double)width * height * 3;
+  if(value_count > (double)(SIZE_MAX / sizeof(float))) {
+    return ft_fail(error, "image: %ux%u is too large", (unsigned)width,
+                   (unsigned)height);
+  }
+  image->pixels = calloc((size_t)width * height * 3, sizeof *image->pixels);
+  if(image->pixels == NULL) {
+    return ft_fail(error, "image: out of memory for %ux%u", (unsigned)width,
+                   (unsigned)height);
+  }
+  image->width = width;
+  image->height = height;
   return 0;
 }
 
-void ft_image_free(ft_image* im) {
-  free(im->rgb);
-  im->rgb = NULL;
-  im->w = im->h = 0;
+void ft_free_image(ft_image* image) {
+  free(image->pixels);
+  image->pixels = NULL;
+  image->width = 0;
+  image->height = 0;
 }
 
-int ft_image_crop(const ft_image* im, const int box[4], ft_image* cut,
-                  ft_err* e) {
-  int y;
-  if(box[0] < 0 ||
-     box[1] < 0 ||
-     box[2] < 1 ||
-     box[3] < 1 ||
-     box[2] > im->w ||
-     box[3] > im->h ||
-     box[0] > im->w - box[2] ||
-     box[1] > im->h - box[3])
-    return ft_fail(e, "box %d,%d %dx%d outside the %dx%d image", box[0], box[1],
-                   box[2], box[3], im->w, im->h);
-  if(ft_image_alloc(cut, box[2], box[3], e)) return -1;
-  for(y = 0; y < box[3]; y++)
-    memcpy(cut->rgb + (size_t)y * box[2] * 3,
-           im->rgb + ((size_t)(box[1] + y) * im->w + box[0]) * 3,
-           (size_t)box[2] * 3 * sizeof *cut->rgb);
-  cut->ppi = im->ppi;
+int32_t ft_crop_image(const ft_image* image, const int32_t box[4],
+                      ft_image* cut, ft_err* error) {
+  int32_t box_x = box[0];
+  int32_t box_y = box[1];
+  int32_t box_width = box[2];
+  int32_t box_height = box[3];
+  /* written so that nothing can overflow: compare against the image's
+   * size minus the box's, never add */
+  int64_t image_width = image->width;
+  int64_t image_height = image->height;
+  bool fits = box_x >= 0 &&
+              box_y >= 0 &&
+              box_width >= 1 &&
+              box_height >= 1 &&
+              box_width <= image_width &&
+              box_height <= image_height &&
+              box_x <= image_width - box_width &&
+              box_y <= image_height - box_height;
+  if(fits == false) {
+    return ft_fail(error, "box %d,%d %dx%d outside the %ux%u image", (int)box_x,
+                   (int)box_y, (int)box_width, (int)box_height,
+                   (unsigned)image->width, (unsigned)image->height);
+  }
+  if(ft_allocate_image(cut, (uint32_t)box_width, (uint32_t)box_height, error) !=
+     0) {
+    return -1;
+  }
+  size_t row_bytes = (size_t)box_width * 3 * sizeof *cut->pixels;
+  for(size_t row = 0; row < (size_t)box_height; row++) {
+    const float* source =
+      image->pixels + (((size_t)box_y + row) * image->width + box_x) * 3;
+    memcpy(cut->pixels + row * box_width * 3, source, row_bytes);
+  }
+  cut->ppi = image->ppi;
   return 0;
 }
 
-int ft_image_rotate(const ft_image* im, int deg, ft_image* out, ft_err* e) {
-  int x, y, ow, oh;
-  if(deg != 0 && deg != 90 && deg != 180 && deg != 270)
-    return ft_fail(e, "rotate: %d is not 0, 90, 180 or 270", deg);
-  ow = deg % 180 ? im->h : im->w;
-  oh = deg % 180 ? im->w : im->h;
-  *out = *im;
-  out->rgb = NULL;
-  if(ft_image_alloc(out, ow, oh, e)) return -1;
-  /* out (x, y) from in (sx, sy) */
-  for(y = 0; y < oh; y++)
-    for(x = 0; x < ow; x++) {
-      int sx = deg == 0     ? x
-               : deg == 90  ? y
-               : deg == 180 ? im->w - 1 - x
-                            : im->w - 1 - y;
-      int sy = deg == 0     ? y
-               : deg == 90  ? im->h - 1 - x
-               : deg == 180 ? im->h - 1 - y
-                            : x;
-      const float* s = im->rgb + ((size_t)sy * im->w + sx) * 3;
-      float* d = out->rgb + ((size_t)y * ow + x) * 3;
-      d[0] = s[0];
-      d[1] = s[1];
-      d[2] = s[2];
+int32_t ft_rotate_image(const ft_image* image, int32_t degrees,
+                        ft_image* rotated, ft_err* error) {
+  if(degrees != 0 && degrees != 90 && degrees != 180 && degrees != 270) {
+    return ft_fail(error, "rotate: %d is not 0, 90, 180 or 270", (int)degrees);
+  }
+  /* a quarter turn swaps width and height */
+  bool is_quarter_turn = degrees == 90 || degrees == 270;
+  uint32_t width = is_quarter_turn ? image->height : image->width;
+  uint32_t height = is_quarter_turn ? image->width : image->height;
+  *rotated = *image;
+  rotated->pixels = NULL;
+  if(ft_allocate_image(rotated, width, height, error) != 0) return -1;
+
+  /* for every pixel (x, y) of the result, the source pixel it comes
+   * from */
+  for(uint32_t y = 0; y < height; y++) {
+    for(uint32_t x = 0; x < width; x++) {
+      uint32_t source_x;
+      uint32_t source_y;
+      switch(degrees) {
+        case 90:
+          source_x = y;
+          source_y = image->height - 1 - x;
+          break;
+        case 180:
+          source_x = image->width - 1 - x;
+          source_y = image->height - 1 - y;
+          break;
+        case 270:
+          source_x = image->width - 1 - y;
+          source_y = x;
+          break;
+        default:
+          source_x = x;
+          source_y = y;
+          break;
+      }
+      const float* source =
+        image->pixels + ((size_t)source_y * image->width + source_x) * 3;
+      float* target = rotated->pixels + ((size_t)y * width + x) * 3;
+      target[0] = source[0];
+      target[1] = source[1];
+      target[2] = source[2];
     }
+  }
   return 0;
 }

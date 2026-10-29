@@ -5,220 +5,396 @@
 #include "ft_dng.h"
 
 #include <math.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "ft_endian.h"
 #include "ft_tiff_ifd.h"
 
-int ft_dng_noise_ok(const double* v) {
-  int i;
-  for(i = 0; i < 6; i++)
-    if(!isfinite(v[i]) || v[i] < 0 || (i % 2 && v[i] == 0)) return 0;
-  return 1;
+/* the largest 16-bit sample */
+#define SAMPLE_MAX 65535
+/* XResolution is written as a rational over this */
+#define RESOLUTION_DENOMINATOR 1000
+/* the reader refuses more tags than this, or images wider or taller */
+#define MAX_TAG_COUNT 200
+#define MAX_IMAGE_SIDE 100000
+/* the reader refuses a tag with more value bytes than this */
+#define MAX_TAG_BYTES 0x10000000u
+/* bytes per pixel: 3 samples of 16 bits */
+#define PIXEL_BYTES 6
+/* PhotometricInterpretation LinearRaw */
+#define PHOTOMETRIC_LINEAR_RAW 34892
+
+/* the tags the reader looks at */
+enum {
+  TAG_IMAGE_WIDTH = 256,
+  TAG_IMAGE_LENGTH = 257,
+  TAG_BITS_PER_SAMPLE = 258,
+  TAG_COMPRESSION = 259,
+  TAG_PHOTOMETRIC = 262,
+  TAG_IMAGE_DESCRIPTION = 270,
+  TAG_MAKE = 271,
+  TAG_MODEL = 272,
+  TAG_STRIP_OFFSETS = 273,
+  TAG_SAMPLES_PER_PIXEL = 277,
+  TAG_ROWS_PER_STRIP = 278,
+  TAG_STRIP_BYTE_COUNTS = 279,
+  TAG_X_RESOLUTION = 282,
+  TAG_PLANAR_CONFIGURATION = 284,
+  TAG_DNG_VERSION = 50706,
+  TAG_COLOR_MATRIX1 = 50721,
+  TAG_NOISE_PROFILE = 51041
+};
+static const uint32_t WANTED_TAGS[] = {TAG_IMAGE_WIDTH,
+                                       TAG_IMAGE_LENGTH,
+                                       TAG_BITS_PER_SAMPLE,
+                                       TAG_COMPRESSION,
+                                       TAG_PHOTOMETRIC,
+                                       TAG_IMAGE_DESCRIPTION,
+                                       TAG_MAKE,
+                                       TAG_MODEL,
+                                       TAG_STRIP_OFFSETS,
+                                       TAG_SAMPLES_PER_PIXEL,
+                                       TAG_ROWS_PER_STRIP,
+                                       TAG_STRIP_BYTE_COUNTS,
+                                       TAG_X_RESOLUTION,
+                                       TAG_PLANAR_CONFIGURATION,
+                                       TAG_DNG_VERSION,
+                                       TAG_COLOR_MATRIX1,
+                                       TAG_NOISE_PROFILE};
+#define WANTED_TAG_COUNT (sizeof WANTED_TAGS / sizeof WANTED_TAGS[0])
+
+bool ft_is_noise_profile_usable(const double* noise_profile) {
+  /* pairs of S (slope, even index) and O (offset, odd index) */
+  for(uint32_t index = 0; index < 6; index++) {
+    double value = noise_profile[index];
+    bool is_offset = index % 2 == 1;
+    if(isfinite(value) == false || value < 0) return false;
+    if(is_offset && value == 0) return false;
+  }
+  return true;
 }
 
-unsigned ft_dng_q16(float v) {
-  return v <= 0 ? 0 : v >= 1 ? 65535 : (unsigned)(v * 65535.0f + 0.5f);
+uint16_t ft_quantise_dng_sample(float value) {
+  if(value <= 0) return 0;
+  if(value >= 1) return SAMPLE_MAX;
+  /* + 0.5 rounds to the nearest */
+  return (uint16_t)(value * 65535.0f + 0.5f);
 }
 
-void ft_dng_as_stored(ft_image* im) {
-  size_t k, n = im->rgb ? (size_t)im->w * im->h * 3 : 0;
-  for(k = 0; k < n; k++) im->rgb[k] = (float)ft_dng_q16(im->rgb[k]) / 65535.0f;
-  /* XResolution: a rational over 1000 (ft_ifd_common), absent if 0 */
-  im->ppi = im->ppi > 0
-              ? (double)((unsigned long)(long)floor(im->ppi * 1000 + 0.5) &
-                         0xFFFFFFFFUL) /
-                  1000
-              : 0;
-  if(im->has_noise && !ft_dng_noise_ok(im->noise)) im->has_noise = 0;
+void ft_simulate_dng_storage(ft_image* image) {
+  size_t value_count = 0;
+  if(image->pixels != NULL) {
+    value_count = (size_t)image->width * image->height * 3;
+  }
+  for(size_t index = 0; index < value_count; index++) {
+    image->pixels[index] =
+      (float)ft_quantise_dng_sample(image->pixels[index]) / 65535.0f;
+  }
+  /* XResolution: a rational over 1000 (ft_add_ifd_common_tags), left out
+   * when ppi is 0. The numerator is stored in 32 bits, so keep only
+   * those. */
+  if(image->ppi > 0) {
+    int64_t numerator =
+      (int64_t)floor(image->ppi * RESOLUTION_DENOMINATOR + 0.5);
+    image->ppi = (double)(uint32_t)numerator / RESOLUTION_DENOMINATOR;
+  } else {
+    image->ppi = 0;
+  }
+  if(image->has_noise_profile &&
+     ft_is_noise_profile_usable(image->noise_profile) == false) {
+    image->has_noise_profile = false;
+  }
 }
 
 /* ------------------------------------------------------------- reader */
 
-static unsigned long rd16(const unsigned char* p) {
-  return (unsigned long)p[0] | (unsigned long)p[1] << 8;
+/* bytes per value of a field type */
+static size_t get_type_size(uint32_t type) {
+  switch(type) {
+    case FT_TIFF_SHORT:
+      return 2;
+    case FT_TIFF_LONG:
+      return 4;
+    case FT_TIFF_RATIONAL:
+    case FT_TIFF_SRATIONAL:
+    case FT_TIFF_DOUBLE:
+      return 8;
+    default:
+      return 1;
+  }
 }
 
-static size_t type_size(unsigned type) {
-  return type == FT_T_SHORT  ? 2
-         : type == FT_T_LONG ? 4
-         : type == FT_T_RATIONAL ||
-             type == FT_T_SRATIONAL ||
-             type == FT_T_DOUBLE
-           ? 8
-           : 1;
-}
+/* Where a tag's values are in the file. */
+typedef struct tag_reference {
+  /* the field type, FT_TIFF_* */
+  uint32_t type;
+  /* values; 0 = the file has no such tag */
+  uint32_t count;
+  /* the file offset of the value bytes */
+  uint32_t offset;
+} tag_reference;
 
-static unsigned long rd32(const unsigned char* p) {
-  return rd16(p) | rd16(p + 2) << 16;
-}
-
-typedef struct {
-  unsigned long type, count, at; /* at: offset of the value bytes */
-} tag_ref;
-
-/* the tags the reader looks at */
-static const unsigned WANT[] = {256, 257, 258,   259,   262,  270,
-                                271, 272, 273,   277,   278,  279,
-                                282, 284, 50706, 50721, 51041};
-#define NWANT (sizeof WANT / sizeof WANT[0])
-
-static int want(unsigned long tag) {
-  unsigned i;
-  for(i = 0; i < NWANT; i++)
-    if(WANT[i] == tag) return (int)i;
+/* the index of tag in WANTED_TAGS; -1 when the reader ignores it */
+static int32_t find_wanted_index(uint32_t tag) {
+  for(size_t index = 0; index < WANTED_TAG_COUNT; index++) {
+    if(WANTED_TAGS[index] == tag) return (int32_t)index;
+  }
   return -1;
 }
 
-/* NULL if the file has no such tag */
-static const tag_ref* find(const tag_ref* t, unsigned tag) {
-  int i = want(tag);
-  return i >= 0 && t[i].count ? &t[i] : NULL;
+/* the tag's reference; NULL when the file has no such tag */
+static const tag_reference* find_tag(const tag_reference* tags, uint32_t tag) {
+  int32_t index = find_wanted_index(tag);
+  if(index < 0 || tags[index].count == 0) return NULL;
+  return &tags[index];
 }
 
-static int tag_value(const unsigned char* b, const tag_ref* r, unsigned long i,
-                     unsigned long* v) {
-  if(!r || i >= r->count) return -1;
-  if(r->type == FT_T_SHORT)
-    *v = rd16(b + r->at + 2 * i);
-  else if(r->type == FT_T_LONG)
-    *v = rd32(b + r->at + 4 * i);
-  else
-    return -1;
+/* Read value number index of a SHORT or LONG tag.
+ * Returns false when there is no such tag or value, or another type. */
+static bool read_tag_value(const uint8_t* bytes, const tag_reference* tag,
+                           uint32_t index, uint32_t* value) {
+  if(tag == NULL || index >= tag->count) return false;
+  if(tag->type == FT_TIFF_SHORT) {
+    *value = ft_read_little_endian16(bytes + tag->offset + 2 * index);
+    return true;
+  }
+  if(tag->type == FT_TIFF_LONG) {
+    *value = ft_read_little_endian32(bytes + tag->offset + 4 * index);
+    return true;
+  }
+  return false;
+}
+
+/* is tag's first value present and equal to expected? */
+static bool has_tag_value(const uint8_t* bytes, const tag_reference* tags,
+                          uint32_t tag, uint32_t expected) {
+  uint32_t value;
+  return read_tag_value(bytes, find_tag(tags, tag), 0, &value) &&
+         value == expected;
+}
+
+/* Read the IFD's entries for the wanted tags into tags[], checking every
+ * value lies inside the file. Returns 0, or -1 with error filled. */
+static int32_t read_ifd(const uint8_t* bytes, size_t length,
+                        tag_reference* tags, ft_err* error) {
+  uint32_t ifd_offset = ft_read_little_endian32(bytes + 4);
+  if(ifd_offset < 8 || ifd_offset > length || length - ifd_offset < 2) {
+    return ft_fail(error, "dng: bad IFD offset");
+  }
+  uint32_t entry_count = ft_read_little_endian16(bytes + ifd_offset);
+  /* each entry is 12 bytes; 4 more for the next-IFD offset */
+  if(entry_count > MAX_TAG_COUNT ||
+     length - ifd_offset - 2 < 12 * (size_t)entry_count + 4) {
+    return ft_fail(error, "dng: truncated IFD");
+  }
+  for(uint32_t index = 0; index < entry_count; index++) {
+    const uint8_t* entry = bytes + ifd_offset + 2 + 12 * index;
+    uint32_t tag = ft_read_little_endian16(entry);
+    uint32_t type = ft_read_little_endian16(entry + 2);
+    uint32_t count = ft_read_little_endian32(entry + 4);
+    int32_t wanted = find_wanted_index(tag);
+    if(wanted < 0 || count == 0) continue;
+    size_t type_size = get_type_size(type);
+    if(count > MAX_TAG_BYTES / type_size) {
+      return ft_fail(error, "dng: tag %u too large", (unsigned)tag);
+    }
+    size_t value_bytes = type_size * count;
+    tag_reference* reference = &tags[wanted];
+    reference->type = type;
+    reference->count = count;
+    /* up to 4 bytes sit in the entry itself; more are elsewhere */
+    if(value_bytes <= 4) {
+      reference->offset = (uint32_t)(entry + 8 - bytes);
+    } else {
+      reference->offset = ft_read_little_endian32(entry + 8);
+    }
+    if(reference->offset > length || value_bytes > length - reference->offset) {
+      return ft_fail(error, "dng: tag %u points past the end", (unsigned)tag);
+    }
+  }
   return 0;
 }
 
-int ft_dng_parse(const unsigned char* b, size_t n, ft_image* im, ft_err* e) {
-  tag_ref tags[NWANT];
-  unsigned long ifd, cnt, i, w, h, v, rps, nstrips, row_bytes, s;
-  const tag_ref *off, *len;
+/* Check the file is the subset this reader takes.
+ * Returns 0, or -1 with error filled. */
+static int32_t check_format(const uint8_t* bytes, const tag_reference* tags,
+                            ft_err* error) {
+  if(find_tag(tags, TAG_DNG_VERSION) == NULL) {
+    return ft_fail(error, "dng: no DNGVersion: not a DNG");
+  }
+  if(has_tag_value(bytes, tags, TAG_PHOTOMETRIC, PHOTOMETRIC_LINEAR_RAW) ==
+     false) {
+    return ft_fail(error, "dng: not LinearRaw (only this writer's DNGs)");
+  }
+  /* compression 1 = none */
+  if(has_tag_value(bytes, tags, TAG_COMPRESSION, 1) == false) {
+    return ft_fail(error, "dng: compressed (only uncompressed is read)");
+  }
+  if(has_tag_value(bytes, tags, TAG_SAMPLES_PER_PIXEL, 3) == false) {
+    return ft_fail(error, "dng: not 3 samples per pixel");
+  }
+  /* planar configuration 1 = chunky; missing means chunky too */
+  if(find_tag(tags, TAG_PLANAR_CONFIGURATION) != NULL &&
+     has_tag_value(bytes, tags, TAG_PLANAR_CONFIGURATION, 1) == false) {
+    return ft_fail(error, "dng: not chunky (interleaved) RGB");
+  }
+  for(uint32_t sample = 0; sample < 3; sample++) {
+    uint32_t bits;
+    if(read_tag_value(bytes, find_tag(tags, TAG_BITS_PER_SAMPLE), sample,
+                      &bits) == false ||
+       bits != 16) {
+      return ft_fail(error, "dng: not 16 bits per sample");
+    }
+  }
+  return 0;
+}
 
+/* Read the NoiseProfile: 6 little-endian doubles. A bad one reads as
+ * none (export then estimates). */
+static void read_noise_profile(const uint8_t* bytes, const tag_reference* tags,
+                               ft_image* image) {
+  const tag_reference* noise = find_tag(tags, TAG_NOISE_PROFILE);
+  if(noise == NULL || noise->type != FT_TIFF_DOUBLE || noise->count != 6) {
+    return;
+  }
+  double values[6];
+  for(uint32_t index = 0; index < 6; index++) {
+    /* gather the 8 bytes, highest first, into an integer, then copy its
+     * bits into the double */
+    uint64_t bits = 0;
+    for(int32_t byte = 7; byte >= 0; byte--) {
+      bits = bits << 8 | bytes[noise->offset + 8 * index + (uint32_t)byte];
+    }
+    memcpy(&values[index], &bits, 8);
+  }
+  if(ft_is_noise_profile_usable(values)) {
+    memcpy(image->noise_profile, values, sizeof values);
+    image->has_noise_profile = true;
+  }
+}
+
+/* Read ColorMatrix1: 9 signed rationals. */
+static void read_colour_matrix(const uint8_t* bytes, const tag_reference* tags,
+                               ft_image* image) {
+  const tag_reference* matrix = find_tag(tags, TAG_COLOR_MATRIX1);
+  if(matrix == NULL ||
+     matrix->type != FT_TIFF_SRATIONAL ||
+     matrix->count != 9) {
+    return;
+  }
+  for(uint32_t index = 0; index < 9; index++) {
+    const uint8_t* value = bytes + matrix->offset + 8 * index;
+    /* SRATIONAL: two's complement, so the casts give the signed value */
+    int32_t numerator = (int32_t)ft_read_little_endian32(value);
+    int32_t denominator = (int32_t)ft_read_little_endian32(value + 4);
+    if(denominator != 0) {
+      image->xyz_to_rgb[index] = (double)numerator / denominator;
+    }
+  }
+}
+
+/* Copy a text tag into text (capacity bytes), cut to fit. */
+static void read_text_tag(const uint8_t* bytes, const tag_reference* tags,
+                          uint32_t tag, char* text, size_t capacity) {
+  const tag_reference* reference = find_tag(tags, tag);
+  if(reference == NULL || reference->type != FT_TIFF_ASCII) return;
+  size_t length = reference->count < capacity ? reference->count : capacity - 1;
+  memcpy(text, bytes + reference->offset, length);
+  text[length] = '\0';
+}
+
+int32_t ft_parse_dng(const uint8_t* bytes, size_t length, ft_image* image,
+                     ft_err* error) {
+  tag_reference tags[WANTED_TAG_COUNT];
   memset(tags, 0, sizeof tags);
-  if(n < 8 || memcmp(b, "II*\0", 4) != 0)
-    return ft_fail(e, "dng: not a little-endian TIFF");
-  ifd = rd32(b + 4);
-  if(ifd < 8 || ifd > n || n - ifd < 2)
-    return ft_fail(e, "dng: bad IFD offset");
-  cnt = rd16(b + ifd);
-  if(cnt > 200 || n - ifd - 2 < 12 * cnt + 4)
-    return ft_fail(e, "dng: truncated IFD");
-  for(i = 0; i < cnt; i++) {
-    const unsigned char* p = b + ifd + 2 + 12 * i;
-    unsigned long tag = rd16(p), type = rd16(p + 2), c = rd32(p + 4);
-    unsigned long sz = type_size((unsigned)type), bytes;
-    int k = want(tag);
-    tag_ref* r;
-    if(k < 0 || !c) continue;
-    if(c > 0x10000000UL / sz) return ft_fail(e, "dng: tag %lu too large", tag);
-    bytes = sz * c;
-    r = &tags[k];
-    r->type = type;
-    r->count = c;
-    r->at = bytes <= 4 ? (unsigned long)(p + 8 - b) : rd32(p + 8);
-    if(r->at > n || bytes > n - r->at)
-      return ft_fail(e, "dng: tag %lu points past the end", tag);
+  if(length < 8 || memcmp(bytes, "II*\0", 4) != 0) {
+    return ft_fail(error, "dng: not a little-endian TIFF");
   }
-  if(!find(tags, 50706)) return ft_fail(e, "dng: no DNGVersion: not a DNG");
-  if(tag_value(b, find(tags, 262), 0, &v) || v != 34892)
-    return ft_fail(e, "dng: not LinearRaw (only this writer's DNGs)");
-  if(tag_value(b, find(tags, 259), 0, &v) || v != 1)
-    return ft_fail(e, "dng: compressed (only uncompressed is read)");
-  if(tag_value(b, find(tags, 277), 0, &v) || v != 3)
-    return ft_fail(e, "dng: not 3 samples per pixel");
-  if(find(tags, 284) && (tag_value(b, find(tags, 284), 0, &v) || v != 1))
-    return ft_fail(e, "dng: not chunky (interleaved) RGB");
-  for(i = 0; i < 3; i++)
-    if(tag_value(b, find(tags, 258), i, &v) || v != 16)
-      return ft_fail(e, "dng: not 16 bits per sample");
-  if(tag_value(b, find(tags, 256), 0, &w) ||
-     tag_value(b, find(tags, 257), 0, &h) ||
-     w < 1 ||
-     h < 1 ||
-     w > 100000 ||
-     h > 100000)
-    return ft_fail(e, "dng: bad size");
-  row_bytes = w * 6;
-  if(tag_value(b, find(tags, 278), 0, &rps) || rps < 1) rps = h;
-  nstrips = (h + rps - 1) / rps;
-  off = find(tags, 273);
-  len = find(tags, 279);
-  if(!off || !len || off->count != nstrips || len->count != nstrips)
-    return ft_fail(e, "dng: strip tags do not match the size");
-  /* every strip in the file before anything is allocated */
-  for(s = 0; s < nstrips; s++) {
-    unsigned long o, l, rows = s + 1 < nstrips ? rps : h - s * rps;
-    /* in double: rows x row_bytes may wrap a 32-bit long */
-    if(tag_value(b, off, s, &o) ||
-       tag_value(b, len, s, &l) ||
-       (double)rows * row_bytes > (double)n ||
-       l != rows * row_bytes ||
-       o > n ||
-       l > n - o)
-      return ft_fail(e, "dng: strip %lu outside the file", s);
+  if(read_ifd(bytes, length, tags, error) != 0) return -1;
+  if(check_format(bytes, tags, error) != 0) return -1;
+
+  uint32_t width;
+  uint32_t height;
+  if(read_tag_value(bytes, find_tag(tags, TAG_IMAGE_WIDTH), 0, &width) ==
+       false ||
+     read_tag_value(bytes, find_tag(tags, TAG_IMAGE_LENGTH), 0, &height) ==
+       false ||
+     width < 1 ||
+     height < 1 ||
+     width > MAX_IMAGE_SIDE ||
+     height > MAX_IMAGE_SIDE) {
+    return ft_fail(error, "dng: bad size");
   }
-  /* strips may overlap, so they alone do not bound w x h: the pixels
-     must fit in the file (double: no wrap on 32 bits) */
-  if((double)w * h * 6 > (double)n)
-    return ft_fail(e, "dng: %lux%lu pixels do not fit in the file", w, h);
-  if(ft_image_alloc(im, (int)w, (int)h, e)) return -1;
-  for(s = 0; s < nstrips; s++) {
-    unsigned long o, rows = s + 1 < nstrips ? rps : h - s * rps, k;
-    tag_value(b, off, s, &o);
-    for(k = 0; k < rows * w * 3; k++)
-      im->rgb[s * rps * w * 3 + k] = (float)rd16(b + o + 2 * k) / 65535.0f;
+  size_t row_bytes = (size_t)width * PIXEL_BYTES;
+  uint32_t rows_per_strip;
+  if(read_tag_value(bytes, find_tag(tags, TAG_ROWS_PER_STRIP), 0,
+                    &rows_per_strip) == false ||
+     rows_per_strip < 1) {
+    rows_per_strip = height;
   }
-  {
-    const tag_ref* x = find(tags, 282);
-    if(x && x->type == FT_T_RATIONAL && rd32(b + x->at + 4))
-      im->ppi = (double)rd32(b + x->at) / rd32(b + x->at + 4);
+  uint32_t strip_count = (height + rows_per_strip - 1) / rows_per_strip;
+  const tag_reference* offsets = find_tag(tags, TAG_STRIP_OFFSETS);
+  const tag_reference* byte_counts = find_tag(tags, TAG_STRIP_BYTE_COUNTS);
+  if(offsets == NULL ||
+     byte_counts == NULL ||
+     offsets->count != strip_count ||
+     byte_counts->count != strip_count) {
+    return ft_fail(error, "dng: strip tags do not match the size");
   }
-  {
-    /* a bad NoiseProfile reads as none (export then estimates) */
-    const tag_ref* np = find(tags, 51041);
-    if(np && np->type == FT_T_DOUBLE && np->count == 6) {
-      double v[6];
-      int k;
-      for(i = 0; i < 6; i++) {
-        uint64_t u = 0;
-        for(k = 7; k >= 0; k--) u = u << 8 | b[np->at + 8 * i + k];
-        memcpy(&v[i], &u, 8);
-      }
-      if(ft_dng_noise_ok(v)) {
-        memcpy(im->noise, v, sizeof v);
-        im->has_noise = 1;
-      }
+
+  /* check every strip lies in the file before anything is allocated */
+  for(uint32_t strip = 0; strip < strip_count; strip++) {
+    uint32_t rows = strip + 1 < strip_count ? rows_per_strip
+                                            : height - strip * rows_per_strip;
+    uint32_t strip_offset;
+    uint32_t strip_bytes;
+    /* in double: rows x row_bytes may wrap on 32 bits */
+    if(read_tag_value(bytes, offsets, strip, &strip_offset) == false ||
+       read_tag_value(bytes, byte_counts, strip, &strip_bytes) == false ||
+       (double)rows * row_bytes > (double)length ||
+       strip_bytes != rows * row_bytes ||
+       strip_offset > length ||
+       strip_bytes > length - strip_offset) {
+      return ft_fail(error, "dng: strip %u outside the file", (unsigned)strip);
     }
   }
-  {
-    const tag_ref* cm = find(tags, 50721);
-    if(cm && cm->type == FT_T_SRATIONAL && cm->count == 9)
-      for(i = 0; i < 9; i++) {
-        long num = (long)(int)rd32(b + cm->at + 8 * i);
-        long den = (long)(int)rd32(b + cm->at + 8 * i + 4);
-        if(den) im->xyz_to_rgb[i] = (double)num / den;
-      }
+  /* Strips may overlap, so they alone do not bound width x height: the
+   * pixels must fit in the file (in double: no wrap on 32 bits). */
+  if((double)width * height * PIXEL_BYTES > (double)length) {
+    return ft_fail(error, "dng: %ux%u pixels do not fit in the file",
+                   (unsigned)width, (unsigned)height);
   }
-  {
-    static const struct {
-      unsigned tag;
-      size_t cap;
-      size_t off;
-    } S[] = {
-      {270, sizeof im->desc, offsetof(ft_image, desc)},
-      {271, sizeof im->make, offsetof(ft_image, make)},
-      {272, sizeof im->model, offsetof(ft_image, model)},
-    };
-    for(i = 0; i < 3; i++) {
-      const tag_ref* t = find(tags, S[i].tag);
-      char* dst = (char*)im + S[i].off;
-      size_t m;
-      if(!t || t->type != FT_T_ASCII) continue;
-      m = t->count < S[i].cap ? t->count : S[i].cap - 1;
-      memcpy(dst, b + t->at, m);
-      dst[m] = 0;
+  if(ft_allocate_image(image, width, height, error) != 0) return -1;
+  for(uint32_t strip = 0; strip < strip_count; strip++) {
+    uint32_t rows = strip + 1 < strip_count ? rows_per_strip
+                                            : height - strip * rows_per_strip;
+    uint32_t strip_offset;
+    read_tag_value(bytes, offsets, strip, &strip_offset);
+    float* target = image->pixels + (size_t)strip * rows_per_strip * width * 3;
+    size_t sample_count = (size_t)rows * width * 3;
+    for(size_t sample = 0; sample < sample_count; sample++) {
+      uint32_t value =
+        ft_read_little_endian16(bytes + strip_offset + 2 * sample);
+      target[sample] = (float)value / 65535.0f;
     }
   }
+
+  const tag_reference* resolution = find_tag(tags, TAG_X_RESOLUTION);
+  if(resolution != NULL && resolution->type == FT_TIFF_RATIONAL) {
+    uint32_t numerator = ft_read_little_endian32(bytes + resolution->offset);
+    uint32_t denominator =
+      ft_read_little_endian32(bytes + resolution->offset + 4);
+    if(denominator != 0) image->ppi = (double)numerator / denominator;
+  }
+  read_noise_profile(bytes, tags, image);
+  read_colour_matrix(bytes, tags, image);
+  read_text_tag(bytes, tags, TAG_IMAGE_DESCRIPTION, image->description,
+                sizeof image->description);
+  read_text_tag(bytes, tags, TAG_MAKE, image->make, sizeof image->make);
+  read_text_tag(bytes, tags, TAG_MODEL, image->model, sizeof image->model);
   return 0;
 }

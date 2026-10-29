@@ -32,20 +32,20 @@ int main(void) {
       "# stuck column\n3021\n 400 g # green\n"
       "\n500 rb\n";
     ft_defects d;
-    CHECK(ft_defects_parse(txt, sizeof txt - 1, &d, &e) == 0);
-    CHECK(d.n == 3);
-    CHECK(d.ccd[0] == 3021 && d.ch[0] == 7);
-    CHECK(d.ccd[1] == 400 && d.ch[1] == 2);
-    CHECK(d.ccd[2] == 500 && d.ch[2] == 5);
-    CHECK(ft_defects_parse("12 x\n", 5, &d, &e) == -1);
-    CHECK(ft_defects_parse("abc\n", 4, &d, &e) == -1);
+    CHECK(ft_parse_defects(txt, sizeof txt - 1, &d, &e) == 0);
+    CHECK(d.count == 3);
+    CHECK(d.ccd_pixel[0] == 3021 && d.channels[0] == 7);
+    CHECK(d.ccd_pixel[1] == 400 && d.channels[1] == 2);
+    CHECK(d.ccd_pixel[2] == 500 && d.channels[2] == 5);
+    CHECK(ft_parse_defects("12 x\n", 5, &d, &e) == -1);
+    CHECK(ft_parse_defects("abc\n", 4, &d, &e) == -1);
   }
 
   /* crop + orient: image row = CCD pixel, column = scan line */
   {
     enum { L = 5, P = 4 };
     float t[L * P * 3];
-    ft_develop_opts o;
+    ft_develop_options o;
     ft_image im;
     int l, c;
     for(l = 0; l < L; l++)
@@ -55,29 +55,29 @@ int main(void) {
         t[(l * P + c) * 3 + 2] = -1;
       }
     memset(&o, 0, sizeof o);
-    ft_image_init(&im);
-    CHECK(ft_crop_orient(t, L, P, &o, &im, &e) == 0);
-    CHECK(im.w == L && im.h == P);
-    CHECK(im.rgb[(2 * L + 3) * 3] == 32); /* row 2 = px 2, col 3 */
-    ft_image_free(&im);
+    ft_init_image(&im);
+    CHECK(ft_crop_and_orient(t, L, P, &o, &im, &e) == 0);
+    CHECK(im.width == L && im.height == P);
+    CHECK(im.pixels[(2 * L + 3) * 3] == 32); /* row 2 = px 2, col 3 */
+    ft_free_image(&im);
     o.crop_x = 1;
     o.crop_y = 2;
-    o.crop_w = 2;
-    o.crop_h = 3;
-    CHECK(ft_crop_orient(t, L, P, &o, &im, &e) == 0);
-    CHECK(im.w == 3 && im.h == 2);
-    CHECK(im.rgb[0] == 21);               /* line 2, px 1 */
-    CHECK(im.rgb[(1 * 3 + 2) * 3] == 42); /* line 4, px 2 */
-    ft_image_free(&im);
-    o.crop_w = 4; /* 1 + 4 > 4 px */
-    CHECK(ft_crop_orient(t, L, P, &o, &im, &e) == -1);
+    o.crop_width = 2;
+    o.crop_height = 3;
+    CHECK(ft_crop_and_orient(t, L, P, &o, &im, &e) == 0);
+    CHECK(im.width == 3 && im.height == 2);
+    CHECK(im.pixels[0] == 21);               /* line 2, px 1 */
+    CHECK(im.pixels[(1 * 3 + 2) * 3] == 42); /* line 4, px 2 */
+    ft_free_image(&im);
+    o.crop_width = 4; /* 1 + 4 > 4 px */
+    CHECK(ft_crop_and_orient(t, L, P, &o, &im, &e) == -1);
   }
 
   /* develop end to end: flat-field, a user defect, alignment, crop */
   {
     enum { P = 6, L = 20, CL = 250, BIN = 6, K = 12 / BIN };
     static unsigned short raw[L * P * 3], cal[CL * P * 3];
-    ft_develop_opts o;
+    ft_develop_options o;
     ft_defects d;
     ft_image im;
     int l, i, c;
@@ -89,26 +89,26 @@ int main(void) {
         for(i = 0; i < 3; i++) /* T = 0.25, px 3 stuck white */
           raw[(l * P + c) * 3 + i] = c == 3 ? 4300 : 1300;
     memset(&o, 0, sizeof o);
-    o.x = 10;
+    o.first_pixel = 10;
     o.bin = BIN;
     /* output px 3 covers CCD (10 + 3) * 6 + 144 = 222 .. 227 */
-    d.n = 1;
-    d.ccd[0] = 224;
-    d.ch[0] = 7;
+    d.count = 1;
+    d.ccd_pixel[0] = 224;
+    d.channels[0] = 7;
     o.defects = &d;
-    ft_image_init(&im);
+    ft_init_image(&im);
     CHECK(ft_develop(raw, L, P, cal, CL, NULL, 0, &o, &im, &e) == 0);
-    CHECK(im.w == L - 2 * K && im.h == P);
-    CHECK_NEAR(im.rgb[(3 * im.w + 5) * 3 + 1], 0.25, 1e-6);
-    CHECK_NEAR(im.rgb[(0 * im.w + 0) * 3 + 2], 0.25, 1e-6);
+    CHECK(im.width == L - 2 * K && im.height == P);
+    CHECK_NEAR(im.pixels[(3 * im.width + 5) * 3 + 1], 0.25, 1e-6);
+    CHECK_NEAR(im.pixels[(0 * im.width + 0) * 3 + 2], 0.25, 1e-6);
 
     /* PNG and DNG through the writer table */
-    CHECK(ft_writer_find("dng") != NULL);
-    CHECK(ft_writer_find("png") != NULL);
-    CHECK(ft_writer_find("tiff") == NULL);
-    CHECK(ft_writer_find("png")->write("test_develop.png", &im, &e) == 0);
+    CHECK(ft_find_writer("dng") != NULL);
+    CHECK(ft_find_writer("png") != NULL);
+    CHECK(ft_find_writer("tiff") == NULL);
+    CHECK(ft_find_writer("png")->write("test_develop.png", &im, &e) == 0);
     im.ppi = 2000;
-    CHECK(ft_writer_find("dng")->write("test_develop.dng", &im, &e) == 0);
+    CHECK(ft_find_writer("dng")->write("test_develop.dng", &im, &e) == 0);
     {
       FILE* f = fopen("test_develop.dng", "rb");
       unsigned char* b = malloc(1 << 16);
@@ -126,8 +126,8 @@ int main(void) {
         prev = tag;
       }
       CHECK((t = find_tag(b, 262)) && rd16(t + 8) == 34892);
-      CHECK((t = find_tag(b, 256)) && rd32(t + 8) == (unsigned long)im.w);
-      CHECK((t = find_tag(b, 257)) && rd32(t + 8) == (unsigned long)im.h);
+      CHECK((t = find_tag(b, 256)) && rd32(t + 8) == (unsigned long)im.width);
+      CHECK((t = find_tag(b, 257)) && rd32(t + 8) == (unsigned long)im.height);
       CHECK((t = find_tag(b, 50706)) && t[8] == 1 && t[9] == 4);
       CHECK((t = find_tag(b, 50721)) && rd32(t + 4) == 9);
       /* ColorMatrix1[1] = -1.5371385, signed */
@@ -137,13 +137,13 @@ int main(void) {
       {
         const unsigned char* px = b + rd32(t + 8); /* one strip */
         CHECK(rd16(px) == 16384);                  /* 0.25 * 65535 + 0.5 */
-        CHECK(rd16(px + 6 * (3 * im.w + 5) + 2) == 16384);
+        CHECK(rd16(px + 6 * (3 * im.width + 5) + 2) == 16384);
       }
       free(b);
     }
     remove("test_develop.png");
     remove("test_develop.dng");
-    ft_image_free(&im);
+    ft_free_image(&im);
   }
   return TEST_DONE();
 }

@@ -11,7 +11,7 @@ PURE = ft_curve.o ft_render.o ft_render_auto.o ft_density.o ft_dplan.o \
        ft_plan.o ft_dmax.o ft_geom.o ft_share.o ft_output.o ft_icc.o ft_resize.o \
        ft_atrous.o ft_noise_model.o ft_nr.o ft_sharpen.o ft_look.o \
        ft_print.o ft_pm_classic.o ft_pm_stock.o ft_pm_frontier.o \
-       ft_pm_lut3d.o ft_emulsion.o ft_print_file.o
+       ft_pm_lut3d.o ft_emulsion.o ft_print_file.o ft_endian.o
 # lcms2 is a test oracle only: libft itself never links it
 LCMS_LIBS ?= $(shell pkg-config --libs lcms2 2>/dev/null || echo -llcms2)
 # libjpeg-turbo is a test oracle only (test_jpeg, test_jpeg_ref): libft's

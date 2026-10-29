@@ -51,7 +51,7 @@ int main(void) {
   /* S and O within 3 % of the synthesis (rounding to DN is read noise
    * too: +1/12 DN^2) */
   make_cal(ND, NW);
-  CHECK(ft_noise_model(cal, ND + NW, PX, prof, &e) == 0);
+  CHECK(ft_measure_noise_profile(cal, ND + NW, PX, prof, &e) == 0);
   for(c = 0; c < 3; c++) {
     double isp = 0, isp2 = 0, s, o;
     for(i = c; i < PX * 3; i += 3) {
@@ -67,8 +67,9 @@ int main(void) {
   }
 
   /* the profile predicts the variance of developed pixels: flat fields
-   * at four levels through ft_split_cal + ft_flatfield, within 5 % */
-  CHECK(ft_split_cal(cal, ND + NW, PX, dref, wref, &e) == 0);
+   * at four levels through ft_split_calibration + ft_apply_flat_field, within 5
+   * % */
+  CHECK(ft_split_calibration(cal, ND + NW, PX, dref, wref, &e) == 0);
   for(lvl = 0; lvl < 4; lvl++) {
     static const double tv[4] = {0.01, 0.05, 0.3, 0.85};
     for(i = 0; i < NL * PX * 3; i++) {
@@ -76,7 +77,7 @@ int main(void) {
       raw[i] =
         dn(dark[p] + tv[lvl] * span[p], sqrt(G * tv[lvl] * span[p] + RD * RD));
     }
-    ft_flatfield(raw, NL, PX, dref, wref, t);
+    ft_apply_flat_field(raw, NL, PX, dref, wref, t);
     for(c = 0; c < 3; c++) {
       double m = 0, m2 = 0, n = 0, want;
       for(i = c; i < NL * PX * 3; i += 3) {
@@ -102,7 +103,7 @@ int main(void) {
     for(l = ND; l < ND + NW; l++)
       cal[(size_t)l * PX * 3 + i] += (unsigned short)(l - ND) / 5;
   }
-  CHECK(ft_noise_model(cal, ND + NW, PX, prof, &e) == 0);
+  CHECK(ft_measure_noise_profile(cal, ND + NW, PX, prof, &e) == 0);
   for(c = 0; c < 3; c++) {
     double isp = 0, isp2 = 0, s, o;
     for(i = c; i < PX * 3; i += 3) {
@@ -119,14 +120,14 @@ int main(void) {
 
   /* too few dark lines: no profile */
   make_cal(40, NW);
-  CHECK(ft_noise_model(cal, 40 + NW, PX, prof, &e) == -1);
-  CHECK(strstr(e.msg, "40 dark") != NULL);
+  CHECK(ft_measure_noise_profile(cal, 40 + NW, PX, prof, &e) == -1);
+  CHECK(strstr(e.message, "40 dark") != NULL);
 
   /* no noise at all: S = 0, O at the 0.25 DN^2 floor, flagged */
   for(i = 0; i < (ND + NW) * PX * 3; i++)
     cal[i] = (unsigned short)(i < ND * PX * 3 ? 300 : 6300);
-  rc = ft_noise_model(cal, ND + NW, PX, prof, &e);
-  CHECK(rc == 1 && strstr(e.msg, "clamped") != NULL);
+  rc = ft_measure_noise_profile(cal, ND + NW, PX, prof, &e);
+  CHECK(rc == 1 && strstr(e.message, "clamped") != NULL);
   for(c = 0; c < 3; c++) {
     CHECK(prof[2 * c] == 0);
     CHECK_NEAR(prof[2 * c + 1], 0.25 / (6000.0 * 6000.0), 1e-15);

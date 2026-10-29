@@ -239,7 +239,7 @@ static int scan_choices(const char* body, char* text, size_t cap, char* msg,
              !http_param(body, "ppi", ppi, sizeof ppi) +
              !http_param(body, "holder", holder, sizeof holder) +
              !http_param(body, "emulsion", em, sizeof em);
-  int bins[6];
+  uint32_t bins[6];
   double v;
   time_t now = time(NULL);
   text[0] = 0;
@@ -252,11 +252,11 @@ static int scan_choices(const char* body, char* text, size_t cap, char* msg,
   if(strcmp(type, "quick") != 0)
     return snprintf(msg, mcap, "type: only quick scans so far"), -1;
   v = strtod(ppi, &end);
-  if(end == ppi || *end || !ft_bins_for_ppi(v, bins))
+  if(end == ppi || *end || !ft_find_bins_for_ppi(v, bins))
     return snprintf(msg, mcap, "ppi: %s is out of the optics' range", ppi), -1;
   if(!ft_find_holder(holder))
     return snprintf(msg, mcap, "holder: no holder '%s'", holder), -1;
-  if(!ft_emulsion_find(em))
+  if(!ft_find_emulsion(em))
     return snprintf(msg, mcap, "emulsion: no emulsion '%s'", em), -1;
   /* localtime's struct is shared (a thread per connection; C99 has no
    * localtime_r): copied out under a lock */
@@ -374,13 +374,13 @@ static void api_put(sock_t s, const char* dir, const char* name,
   int rc;
   pthread_mutex_lock(&g_put_mu);
   if(strcmp(name, "strip.review") == 0
-       ? review_ok(body, r->nbody, e.msg, sizeof e.msg)
+       ? review_ok(body, r->nbody, e.message, sizeof e.message)
      : strcmp(name, "strip.print") != 0
-       ? ft_job_parse(&j, body, r->nbody, &e) ||
-           ft_job_validate(&j, &g_lens, &e)
-       : ft_print_file_parse(body, r->nbody, &pf, &e)) {
+       ? ft_parse_job(&j, body, r->nbody, &e) ||
+           ft_validate_job(&j, &g_lens, &e)
+       : ft_parse_print_file(body, r->nbody, &pf, &e)) {
     pthread_mutex_unlock(&g_put_mu);
-    http_error(s, 422, e.msg);
+    http_error(s, 422, e.message);
     return;
   }
   snprintf(p, sizeof p, "%s/%s", dir, name);
@@ -412,9 +412,9 @@ static int job_ok(const char* text, size_t n, char* msg, size_t cap) {
   ft_err e;
   int rc;
   pthread_mutex_lock(&g_put_mu);
-  rc = ft_job_parse(&j, text, n, &e) || ft_job_validate(&j, &g_lens, &e);
+  rc = ft_parse_job(&j, text, n, &e) || ft_validate_job(&j, &g_lens, &e);
   pthread_mutex_unlock(&g_put_mu);
-  if(rc) snprintf(msg, cap, "%s", e.msg);
+  if(rc) snprintf(msg, cap, "%s", e.message);
   return rc ? -1 : 0;
 }
 
@@ -740,8 +740,8 @@ static void load_lens(void) {
   ft_err e;
   g_lens = ft_lens_default;
   if(!f) return;
-  if(ft_lens_read(&g_lens, f, &e)) {
-    fprintf(stderr, "focus.txt: %s; using the built-in curve\n", e.msg);
+  if(ft_read_lens(&g_lens, f, &e)) {
+    fprintf(stderr, "focus.txt: %s; using the built-in curve\n", e.message);
     g_lens = ft_lens_default;
   } else {
     printf("focus.txt: this scanner's fit checks the jobs\n");

@@ -9,7 +9,7 @@ The examples come from our own code (sancho/, libft/ft_endian.c).
 ## 1. Names
 
 ### Use snake_case, never camelCase
-`device_handle`, `inquiry_response`, `read_big_endian32`.
+`device_handle`, `inquiry_response`, `ft_read_big_endian32`.
 
 ### Say what it is, in full words
 No abbreviations unless everybody knows them (`rgb`, `scsi`, `ppi`, `mm`).
@@ -133,7 +133,7 @@ A small function decides (`classify_answer`). The caller acts on the answer
 (the `switch`). Each half can be read, and tested, on its own.
 
 ### Compare explicitly
-`if(done_asking == false)`, `if(ft_upload_is_loader(...) == false)`,
+`if(done_asking == false)`, `if(ft_is_loader(...) == false)`,
 `if(candidate == NO_SCANNER)`. Don't make the reader decode `!`.
 
 ### Declare variables where you first need them
@@ -235,6 +235,18 @@ Use one clear marker value (`NO_SCANNER`) and say in the header which value
 means failure. Library code (libft, Sancho) **never prints and never calls
 `exit()`**: it hands the result back, and the caller decides what to tell
 the user.
+
+### Failing: -1 and a message; a question: `bool`
+A function that can fail returns `int32_t`: 0 when it worked, -1 when it
+did not, with the reason in an `ft_err` (`return ft_fail(error, "...")`).
+A function that answers a yes/no question returns `bool`
+(`ft_is_loader`, `ft_are_positions_safe`). Don't turn "it worked" into a
+`bool`: every `if(f(...) != 0)` at the callers would silently flip.
+
+Three or more outcomes get an `enum`, as in section 3. When an old `int`
+result grows into one, give the enum values the old numbers
+(`FT_PEAK_FOUND = 0`, `FT_PEAK_AT_END = 1`, `FT_PEAK_NONE = -1`), so no
+caller changes meaning.
 
 ### Closing is always safe
 A close or free function does nothing when there's nothing open, and resets

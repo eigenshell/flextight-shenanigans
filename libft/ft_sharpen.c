@@ -2,84 +2,135 @@
 #include "ft_sharpen.h"
 
 #include <math.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
-#define MAXHW 3 /* ceil(3 * 0.8) */
+/* the largest kernel half-width: ceil(3 x 0.8) */
+#define MAX_HALF_WIDTH 3
+/* Rec.2020 luminance weights */
+#define LUMINANCE_RED 0.2627
+#define LUMINANCE_GREEN 0.6780
+#define LUMINANCE_BLUE 0.0593
+/* pixels this dark (Lp) are left alone */
+#define MIN_LIGHTNESS 1e-6f
 
-size_t ft_sharpen_scratch_bytes(int w, int h) {
-  return ((size_t)2 * w * h + w) * sizeof(float);
+size_t ft_get_sharpen_scratch_bytes(uint32_t width, uint32_t height) {
+  /* lightness, blur, and one row */
+  return ((size_t)2 * width * height + width) * sizeof(float);
 }
 
-static int refl(int i, int n) {
-  while(i < 0 || i >= n) i = i < 0 ? -i : 2 * n - 2 - i;
-  return i;
+/* Mirror an index into 0..count-1: -1 -> 1, count -> count - 2. */
+static uint32_t reflect(int64_t index, uint32_t count) {
+  while(index < 0 || index >= count) {
+    if(index < 0) {
+      index = -index;
+    } else {
+      index = 2 * (int64_t)count - 2 - index;
+    }
+  }
+  return (uint32_t)index;
 }
 
-void ft_sharpen(float* rgb, int w, int h, double amount, double scale,
-                void* scratch) {
-  size_t n = (size_t)w * h, i;
-  float *lp = scratch, *bl = lp + n, *row = bl + n;
-  float k[2 * MAXHW + 1];
-  double r, s = 0;
-  int hw, t, x, y;
-  if(!(amount > 0) || w < 1 || h < 1) return;
+void ft_sharpen(float* pixels, uint32_t width, uint32_t height, double amount,
+                double scale, void* scratch) {
+  if(!(amount > 0) || width < 1 || height < 1) return;
+  size_t pixel_count = (size_t)width * height;
+  float* lightness = scratch;
+  float* blurred = lightness + pixel_count;
+  float* row = blurred + pixel_count;
   if(!(scale > 0) || scale > 1) scale = 1;
-  r = 0.5 + 0.3 * (1 / scale - 1 < 1 ? 1 / scale - 1 : 1);
-  hw = (int)ceil(3 * r);
-  for(t = -hw; t <= hw; t++)
-    s += k[t + hw] = (float)exp(-0.5 * t * t / (r * r));
-  for(t = 0; t <= 2 * hw; t++) k[t] = (float)(k[t] / s);
-  for(i = 0; i < 3 * n; i++)
-    if(!isfinite(rgb[i])) rgb[i] = 0;
-  for(i = 0; i < n; i++) {
-    double yv =
-      0.2627 * rgb[3 * i] + 0.6780 * rgb[3 * i + 1] + 0.0593 * rgb[3 * i + 2];
-    lp[i] = (float)cbrt(yv);
+
+  /* the Gaussian kernel, normalised to sum 1 */
+  double extra = 1 / scale - 1 < 1 ? 1 / scale - 1 : 1;
+  double radius = 0.5 + 0.3 * extra;
+  int32_t half_width = (int32_t)ceil(3 * radius);
+  float kernel[2 * MAX_HALF_WIDTH + 1];
+  double kernel_sum = 0;
+  for(int32_t tap = -half_width; tap <= half_width; tap++) {
+    kernel[tap + half_width] = (float)exp(-0.5 * tap * tap / (radius * radius));
+    kernel_sum += kernel[tap + half_width];
   }
-  /* vertical lp -> bl, then horizontal in place through row */
-  for(y = 0; y < h; y++)
-    for(x = 0; x < w; x++) {
-      float v = 0;
-      for(t = -hw; t <= hw; t++)
-        v += k[t + hw] * lp[(size_t)refl(y + t, h) * w + x];
-      bl[(size_t)y * w + x] = v;
-    }
-  for(y = 0; y < h; y++) {
-    float* o = bl + (size_t)y * w;
-    memcpy(row, o, (size_t)w * sizeof *row);
-    for(x = 0; x < w; x++) {
-      float v = 0;
-      for(t = -hw; t <= hw; t++) v += k[t + hw] * row[refl(x + t, w)];
-      o[x] = v;
-    }
+  for(int32_t tap = 0; tap <= 2 * half_width; tap++) {
+    kernel[tap] = (float)(kernel[tap] / kernel_sum);
   }
-  for(y = 0; y < h; y++)
-    for(x = 0; x < w; x++) {
-      size_t at = (size_t)y * w + x;
-      float l = lp[at], d = l - bl[at], lo = l, hi = l, f, ln;
-      int dx, dy;
-      if(!(l > 1e-6f)) continue;
-      d = d > FT_SHARPEN_T    ? d - (float)FT_SHARPEN_T
-          : d < -FT_SHARPEN_T ? d + (float)FT_SHARPEN_T
-                              : 0.f;
-      if(d == 0) continue;
-      for(dy = -1; dy <= 1; dy++)
-        for(dx = -1; dx <= 1; dx++) {
-          float v = lp[(size_t)refl(y + dy, h) * w + refl(x + dx, w)];
-          if(v < lo) lo = v;
-          if(v > hi) hi = v;
-        }
-      ln = l + (float)amount * d;
-      {
-        float m = (float)FT_SHARPEN_CLAMP * (hi - lo);
-        if(ln > hi + m) ln = hi + m;
-        if(ln < lo - m) ln = lo - m;
+
+  for(size_t index = 0; index < 3 * pixel_count; index++) {
+    if(isfinite(pixels[index]) == false) pixels[index] = 0;
+  }
+  /* perceptual lightness: the cube root of luminance */
+  for(size_t index = 0; index < pixel_count; index++) {
+    double luminance = LUMINANCE_RED * pixels[3 * index] +
+                       LUMINANCE_GREEN * pixels[3 * index + 1] +
+                       LUMINANCE_BLUE * pixels[3 * index + 2];
+    lightness[index] = (float)cbrt(luminance);
+  }
+  /* blur: vertical lightness -> blurred, then horizontal in place
+   * through row */
+  for(uint32_t y = 0; y < height; y++) {
+    for(uint32_t x = 0; x < width; x++) {
+      float value = 0;
+      for(int32_t tap = -half_width; tap <= half_width; tap++) {
+        value +=
+          kernel[tap + half_width] *
+          lightness[(size_t)reflect((int64_t)y + tap, height) * width + x];
       }
-      if(ln < 0) ln = 0;
-      f = ln / l;
-      f = f * f * f;
-      rgb[3 * at] *= f;
-      rgb[3 * at + 1] *= f;
-      rgb[3 * at + 2] *= f;
+      blurred[(size_t)y * width + x] = value;
     }
+  }
+  for(uint32_t y = 0; y < height; y++) {
+    float* blurred_row = blurred + (size_t)y * width;
+    memcpy(row, blurred_row, (size_t)width * sizeof *row);
+    for(uint32_t x = 0; x < width; x++) {
+      float value = 0;
+      for(int32_t tap = -half_width; tap <= half_width; tap++) {
+        value +=
+          kernel[tap + half_width] * row[reflect((int64_t)x + tap, width)];
+      }
+      blurred_row[x] = value;
+    }
+  }
+
+  for(uint32_t y = 0; y < height; y++) {
+    for(uint32_t x = 0; x < width; x++) {
+      size_t at = (size_t)y * width + x;
+      float light = lightness[at];
+      if(!(light > MIN_LIGHTNESS)) continue;
+      /* the soft threshold: detail below it is grain, kept as it is */
+      float detail = light - blurred[at];
+      if(detail > FT_SHARPEN_THRESHOLD) {
+        detail = detail - (float)FT_SHARPEN_THRESHOLD;
+      } else if(detail < -FT_SHARPEN_THRESHOLD) {
+        detail = detail + (float)FT_SHARPEN_THRESHOLD;
+      } else {
+        detail = 0.f;
+      }
+      if(detail == 0) continue;
+      /* the 3 x 3 range around the pixel */
+      float lowest = light;
+      float highest = light;
+      for(int32_t dy = -1; dy <= 1; dy++) {
+        for(int32_t dx = -1; dx <= 1; dx++) {
+          float value =
+            lightness[(size_t)reflect((int64_t)y + dy, height) * width +
+                      reflect((int64_t)x + dx, width)];
+          if(value < lowest) lowest = value;
+          if(value > highest) highest = value;
+        }
+      }
+      float sharpened = light + (float)amount * detail;
+      /* clamped to that range, a little widened: no halos */
+      float margin = (float)FT_SHARPEN_CLAMP * (highest - lowest);
+      if(sharpened > highest + margin) sharpened = highest + margin;
+      if(sharpened < lowest - margin) sharpened = lowest - margin;
+      if(sharpened < 0) sharpened = 0;
+      /* scale RGB by the luminance ratio, (Lp' / Lp)^3: hue and
+       * saturation stay */
+      float factor = sharpened / light;
+      factor = factor * factor * factor;
+      pixels[3 * at] *= factor;
+      pixels[3 * at + 1] *= factor;
+      pixels[3 * at + 2] *= factor;
+    }
+  }
 }

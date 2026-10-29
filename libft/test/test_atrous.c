@@ -30,15 +30,15 @@ int main(void) {
   memcpy(a, big, sizeof big);
   for(j = 0; j < FT_ATROUS_SCALES; j++) {
     double m = 0, m2 = 0;
-    ft_atrous_smooth(a, N, N, j, b, row);
+    ft_smooth_atrous(a, N, N, j, b, row);
     for(i = 0; i < N * N; i++) {
       double d = (double)a[i] - b[i];
       m += d;
       m2 += d * d;
     }
     m /= N * N;
-    CHECK_NEAR(sqrt(m2 / (N * N) - m * m), FT_ATROUS_F[j],
-               0.02 * FT_ATROUS_F[j]);
+    CHECK_NEAR(sqrt(m2 / (N * N) - m * m), FT_ATROUS_NOISE_STD[j],
+               0.02 * FT_ATROUS_NOISE_STD[j]);
     t = a;
     a = b;
     b = t;
@@ -46,12 +46,12 @@ int main(void) {
 
   /* threshold 0 reconstructs */
   for(i = 0; i < W * H; i++) in[i] = (float)urand();
-  ft_atrous(in, W, H, out, 0, 1, NULL, scratch);
+  ft_shrink_atrous(in, W, H, out, 0, 1, NULL, scratch);
   for(i = 0; i < W * H; i++) CHECK(fabs(out[i] - in[i]) <= 1e-6);
 
   /* shrinkage at k = 3 removes most of unit white noise */
   for(i = 0; i < W * H; i++) in[i] = (float)gauss();
-  ft_atrous(in, W, H, out, 3, 1, NULL, scratch);
+  ft_shrink_atrous(in, W, H, out, 3, 1, NULL, scratch);
   {
     double so = 0;
     for(i = 0; i < W * H; i++) so += (double)out[i] * out[i];
@@ -62,30 +62,30 @@ int main(void) {
    * any threshold */
   for(i = 0; i < W * H; i++)
     in[i] = (float)(0.001 * (i % W) + 0.0005 * (i / W));
-  ft_atrous(in, W, H, out, 3, 0.01, NULL, scratch);
+  ft_shrink_atrous(in, W, H, out, 3, 0.01, NULL, scratch);
   for(i = 0; i < W * H; i++)
     if(i % W >= 64 && i % W < W - 64 && i / W >= 64 && i / W < H - 64)
       CHECK(fabs(out[i] - in[i]) <= 1e-5);
 
   /* bands are bit-identical to the whole-image run */
   for(i = 0; i < W * H; i++) in[i] = (float)(urand() + (i % W > W / 2));
-  ft_atrous(in, W, H, out, 1.7, 0.2, NULL, scratch);
+  ft_shrink_atrous(in, W, H, out, 1.7, 0.2, NULL, scratch);
   memset(band, 0, sizeof band);
   for(y0 = 0; y0 < H; y0 += 37)
-    ft_atrous_band(in, W, H, y0, y0 + 37, band, 1.7, 0.2, NULL, scratch);
+    ft_shrink_atrous_band(in, W, H, y0, y0 + 37, band, 1.7, 0.2, NULL, scratch);
   CHECK(memcmp(out, band, sizeof out) == 0);
-  CHECK(ft_atrous_scratch_bytes(W, 37) < ft_atrous_scratch_bytes(W, H));
+  CHECK(ft_get_atrous_scratch_bytes(W, 37) < ft_get_atrous_scratch_bytes(W, H));
 
   /* in place */
   memcpy(band, in, sizeof in);
-  ft_atrous(band, W, H, band, 1.7, 0.2, NULL, scratch);
+  ft_shrink_atrous(band, W, H, band, 1.7, 0.2, NULL, scratch);
   CHECK(memcmp(out, band, sizeof out) == 0);
 
   /* a plane below the support passes through, NaN/inf -> 0 */
   for(i = 0; i < 20 * 20; i++) in[i] = (float)urand();
   in[0] = NAN;
   in[1] = INFINITY;
-  ft_atrous(in, 20, 20, out, 2, 1, NULL, scratch);
+  ft_shrink_atrous(in, 20, 20, out, 2, 1, NULL, scratch);
   CHECK(out[0] == 0 && out[1] == 0);
   for(i = 2; i < 20 * 20; i++) CHECK(out[i] == in[i]);
   return TEST_DONE();

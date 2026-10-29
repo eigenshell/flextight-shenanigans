@@ -3,373 +3,548 @@
 #include "ft_stream_detect.h"
 
 #include <math.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define OPEN_T 0.85f     /* all channels above: open beam (ft_detect) */
-#define DARK_T 0.005f    /* all channels below: holder metal (ft_detect) */
-#define NOFILM_OPEN 0.50 /* band this much open: no film on the line */
-#define METAL_FRAC 0.80  /* band this much dark: metal (negatives) */
-#define FLAT_D 0.12      /* a flat line: 3rd..97th percentile per channel */
-#define SLIDE_D 2.0      /* slide gap: 97 % of the band denser than this */
-#define BASE_MM 10.0     /* base samples kept: ~10 mm of gap lines */
+/* all channels above: open beam (as ft_detect) */
+#define OPEN_TRANSMITTANCE 0.85f
+/* all channels below: holder metal (as ft_detect) */
+#define DARK_TRANSMITTANCE 0.005f
+/* the band this much open: no film on the line */
+#define NO_FILM_OPEN_SHARE 0.50
+/* the band this much dark: metal (negatives) */
+#define METAL_SHARE 0.80
+/* a flat line: 3rd..97th percentile per channel within this density */
+#define FLAT_DENSITY 0.12
+/* a slide gap: 97 % of the band denser than this */
+#define SLIDE_GAP_DENSITY 2.0
+/* base samples kept: ~10 mm of gap lines */
+#define BASE_MM 10.0
+/* a run shorter than this is dropped */
 #define SLIVER_MM 3.0
-#define FULL_LO 33.0
-#define FULL_HI 39.5
-#define HALF_LO 15.5
-#define HALF_HI 21.0
-#define END_TOL 1.5 /* at the film's ends: this close to 36 / 18 */
+/* frame lengths, mm: full 33..39.5, half 15.5..21 */
+#define FULL_MIN_MM 33.0
+#define FULL_MAX_MM 39.5
+#define HALF_MIN_MM 15.5
+#define HALF_MAX_MM 21.0
+#define FULL_LENGTH_MM 36.0
+#define HALF_LENGTH_MM 18.0
+/* at the film's ends: this close to 36 / 18 */
+#define END_TOLERANCE_MM 1.5
+/* where the holder grid cuts a run with no gap */
 #define GRID_MM 36.0
-#define EXPOSED 0.30    /* a column of the image: this share of lines */
-#define GROW_GAP_MM 0.4 /* across: unexposed columns crossed at most */
+/* a column belongs to the image: off the base on this share of lines */
+#define EXPOSED_SHARE 0.30
+/* across: the most unexposed columns crossed while growing */
+#define GROW_GAP_MM 0.4
+/* density histogram: BINS bins of STEP density, 0..4 */
 #define BINS 80
-#define STEP 0.05 /* density per bin: 0..4 */
-#define BLOCK 4   /* px averaged for the line statistics */
-#define D_OF(t) (-log10((t) > 1e-4f ? (double)(t) : 1e-4))
+#define STEP 0.05
+/* pixels averaged for the line statistics */
+#define BLOCK 4
+/* the least ring of base samples */
+#define MIN_RING 8
+/* the densest a pixel reads: transmittance 1e-4 */
+#define MIN_TRANSMITTANCE 1e-4
 
-enum { L_NOFILM, L_GAP, L_FRAME };
+/* What a line shows. */
+typedef enum line_kind { LINE_NO_FILM, LINE_GAP, LINE_FRAME } line_kind;
 
-/* k-th smallest of v[0..n) (reorders v) */
-static float kth(float* v, int n, int k) {
-  int lo = 0, hi = n - 1;
-  while(lo < hi) {
-    float piv = v[(lo + hi) / 2], tmp;
-    int i = lo, j = hi;
-    while(i <= j) {
-      while(v[i] < piv) i++;
-      while(v[j] > piv) j--;
-      if(i <= j) {
-        tmp = v[i];
-        v[i] = v[j];
-        v[j] = tmp;
-        i++;
-        j--;
+/* density from transmittance, floored at MIN_TRANSMITTANCE */
+static double get_density(double transmittance) {
+  if(!(transmittance > MIN_TRANSMITTANCE)) transmittance = MIN_TRANSMITTANCE;
+  return -log10(transmittance);
+}
+
+static bool is_open(const float* pixel) {
+  return pixel[0] > OPEN_TRANSMITTANCE &&
+         pixel[1] > OPEN_TRANSMITTANCE &&
+         pixel[2] > OPEN_TRANSMITTANCE;
+}
+
+static bool is_dark(const float* pixel) {
+  return pixel[0] < DARK_TRANSMITTANCE &&
+         pixel[1] < DARK_TRANSMITTANCE &&
+         pixel[2] < DARK_TRANSMITTANCE;
+}
+
+/* The k-th smallest of values[0..count), by quickselect (Hoare
+ * partition). Reorders values. */
+static float select_kth(float* values, int32_t count, int32_t k) {
+  int32_t low = 0;
+  int32_t high = count - 1;
+  while(low < high) {
+    float pivot = values[(low + high) / 2];
+    int32_t left = low;
+    int32_t right = high;
+    while(left <= right) {
+      while(values[left] < pivot) left++;
+      while(values[right] > pivot) right--;
+      if(left <= right) {
+        float swap = values[left];
+        values[left] = values[right];
+        values[right] = swap;
+        left++;
+        right--;
       }
     }
-    if(k <= j)
-      hi = j;
-    else if(k >= i)
-      lo = i;
-    else
-      break;
-  }
-  return v[k];
-}
-
-static int col(double mm, const ft_axes* ax, int up) {
-  double c = (mm - ax->x_mm0) / ax->x_mm_per_px;
-  return (int)(up ? ceil(c - 1e-9) : floor(c + 1e-9));
-}
-
-int ft_sdet_init(ft_sdet* d, const ft_axes* ax, int px, ft_film film,
-                 const ft_holder* h, ft_err* e) {
-  double ym = ax ? ax->y_mm_per_line : 0;
-  memset(d, 0, sizeof *d);
-  if(!h || !ax || px < 1 || !(ym > 0) || !(ax->x_mm_per_px > 0))
-    return ft_fail(e, "stream detect: bad geometry");
-  d->ax = *ax;
-  d->px = px;
-  d->film = film;
-  d->h = h;
-  d->b0 = col(h->band_start_mm, ax, 1);
-  d->b1 = col(h->band_end_mm, ax, 0);
-  d->s0 = col(h->image_start_mm, ax, 0);
-  d->s1 = col(h->image_end_mm, ax, 1);
-  if(d->b0 < 0) d->b0 = 0;
-  if(d->b1 > px) d->b1 = px;
-  if(d->s0 < 0) d->s0 = 0;
-  if(d->s1 > px) d->s1 = px;
-  if(d->b1 - d->b0 < 8 * BLOCK)
-    return ft_fail(e,
-                   "stream detect: the holder's image band is not "
-                   "on the line");
-  if(d->s0 > d->b0) d->s0 = d->b0;
-  if(d->s1 < d->b1) d->s1 = d->b1;
-  d->gap_lines = (int)ceil(FT_SDET_GAP_MM / ym - 1e-9);
-  d->weak_lines = d->gap_lines / 2 < 3 ? 3 : d->gap_lines / 2;
-  d->grid_lines = (int)floor(FULL_HI / ym + 1e-9);
-  d->cut_lines = (int)floor(GRID_MM / ym + 0.5);
-  d->ring_cap = (int)floor(BASE_MM / ym + 0.5);
-  if(d->ring_cap < 8) d->ring_cap = 8;
-  if(d->ring_cap > FT_SDET_RING) d->ring_cap = FT_SDET_RING;
-  d->run_s = -1;
-  d->weak_s = d->weak_e = -1;
-  d->hist = calloc((size_t)px * 3 * BINS, sizeof *d->hist);
-  d->valid = calloc((size_t)px, sizeof *d->valid);
-  d->scratch = malloc((size_t)(d->s1 - d->s0) * 3 * sizeof *d->scratch);
-  if(!d->hist || !d->valid || !d->scratch) {
-    ft_sdet_free(d);
-    return ft_fail(e, "stream detect: out of memory");
-  }
-  return 0;
-}
-
-void ft_sdet_free(ft_sdet* d) {
-  free(d->hist);
-  free(d->valid);
-  free(d->scratch);
-  d->hist = d->valid = NULL;
-  d->scratch = NULL;
-}
-
-int ft_sdet_base(const ft_sdet* d, float base[3]) {
-  int c;
-  if(!d->have_base) return 0;
-  for(c = 0; c < 3; c++) base[c] = (float)pow(10, -d->base[c]);
-  return 1;
-}
-
-static void base_update(ft_sdet* d) {
-  float v[FT_SDET_RING];
-  int c, i;
-  for(c = 0; c < 3; c++) {
-    for(i = 0; i < d->nring; i++) v[i] = d->ring[i][c];
-    d->base[c] = kth(v, d->nring, d->nring / 2);
-  }
-  d->have_base = 1;
-}
-
-static void base_push(ft_sdet* d, const float* s, int reset) {
-  if(reset) {
-    d->nring = 0;
-    d->ring_at = 0;
-  }
-  memcpy(d->ring[d->ring_at], s, sizeof d->ring[0]);
-  d->ring_at = (d->ring_at + 1) % d->ring_cap;
-  if(d->nring < d->ring_cap) d->nring++;
-  base_update(d);
-}
-
-static void run_reset(ft_sdet* d) {
-  memset(d->hist, 0, (size_t)d->px * 3 * BINS * sizeof *d->hist);
-  memset(d->valid, 0, (size_t)d->px * sizeof *d->valid);
-}
-
-/* column c of the open run: off the base on >= EXPOSED of its lines */
-static int exposed(const ft_sdet* d, int c) {
-  const unsigned short* hc = d->hist + (size_t)c * 3 * BINS;
-  long v = d->valid[c];
-  int k, b;
-  if(v == 0) return 0;
-  for(k = 0; k < 3; k++) {
-    long n = 0;
-    if(d->film == FT_FILM_SLIDE) {
-      for(b = 0; b < (int)(SLIDE_D / STEP + 0.5); b++) n += hc[k * BINS + b];
+    if(k <= right) {
+      high = right;
+    } else if(k >= left) {
+      low = left;
     } else {
-      double base = d->have_base ? d->base[k] : d->have_dmin ? d->dmin[k] : 0;
-      int from = (int)ceil((base + FT_SDET_NEAR_D) / STEP - 1e-9);
-      for(b = from < 0 ? 0 : from; b < BINS; b++) n += hc[k * BINS + b];
+      break;
     }
-    if(n >= EXPOSED * v) return 1;
+  }
+  return values[k];
+}
+
+/* the column at mm across, rounded up or down */
+static int32_t get_column(double mm, const ft_axes* axes, bool round_up) {
+  double column = (mm - axes->first_pixel_mm) / axes->mm_per_pixel;
+  if(round_up) return (int32_t)ceil(column - 1e-9);
+  return (int32_t)floor(column + 1e-9);
+}
+
+int32_t ft_init_stream_detector(ft_stream_detector* detector,
+                                const ft_axes* axes, uint32_t pixels,
+                                ft_film film, const ft_holder* holder,
+                                ft_err* error) {
+  ft_stream_detector* d = detector;
+  memset(d, 0, sizeof *d);
+  double mm_per_line = axes != NULL ? axes->mm_per_line : 0;
+  if(holder == NULL ||
+     axes == NULL ||
+     pixels < 1 ||
+     pixels > INT32_MAX ||
+     !(mm_per_line > 0) ||
+     !(axes->mm_per_pixel > 0)) {
+    return ft_fail(error, "stream detect: bad geometry");
+  }
+  d->axes = *axes;
+  d->pixels = (int32_t)pixels;
+  d->film = film;
+  d->holder = holder;
+  d->band_start = get_column(holder->band_start_mm, axes, true);
+  d->band_end = get_column(holder->band_end_mm, axes, false);
+  d->search_start = get_column(holder->image_start_mm, axes, false);
+  d->search_end = get_column(holder->image_end_mm, axes, true);
+  if(d->band_start < 0) d->band_start = 0;
+  if(d->band_end > d->pixels) d->band_end = d->pixels;
+  if(d->search_start < 0) d->search_start = 0;
+  if(d->search_end > d->pixels) d->search_end = d->pixels;
+  if(d->band_end - d->band_start < 8 * BLOCK) {
+    return ft_fail(error,
+                   "stream detect: the holder's image band is not on the "
+                   "line");
+  }
+  /* the search covers at least the band */
+  if(d->search_start > d->band_start) d->search_start = d->band_start;
+  if(d->search_end < d->band_end) d->search_end = d->band_end;
+  d->gap_lines = (int32_t)ceil(FT_STREAM_DETECT_GAP_MM / mm_per_line - 1e-9);
+  d->weak_lines = d->gap_lines / 2 < 3 ? 3 : d->gap_lines / 2;
+  d->grid_lines = (int32_t)floor(FULL_MAX_MM / mm_per_line + 1e-9);
+  d->cut_lines = (int32_t)floor(GRID_MM / mm_per_line + 0.5);
+  d->ring_capacity = (int32_t)floor(BASE_MM / mm_per_line + 0.5);
+  if(d->ring_capacity < MIN_RING) d->ring_capacity = MIN_RING;
+  if(d->ring_capacity > FT_STREAM_DETECT_RING_SIZE) {
+    d->ring_capacity = FT_STREAM_DETECT_RING_SIZE;
+  }
+  d->run_start = -1;
+  d->weak_start = -1;
+  d->weak_end = -1;
+  d->histogram = calloc((size_t)pixels * 3 * BINS, sizeof *d->histogram);
+  d->valid_lines = calloc(pixels, sizeof *d->valid_lines);
+  d->scratch =
+    malloc((size_t)(d->search_end - d->search_start) * 3 * sizeof *d->scratch);
+  if(d->histogram == NULL || d->valid_lines == NULL || d->scratch == NULL) {
+    ft_free_stream_detector(d);
+    return ft_fail(error, "stream detect: out of memory");
   }
   return 0;
 }
 
-static double clampd(double v, double lo, double hi) {
-  return v < lo ? lo : v > hi ? hi : v;
+void ft_free_stream_detector(ft_stream_detector* detector) {
+  free(detector->histogram);
+  free(detector->valid_lines);
+  free(detector->scratch);
+  detector->histogram = NULL;
+  detector->valid_lines = NULL;
+  detector->scratch = NULL;
 }
 
-/* seal the run [s, e): ts / te its ends at a gap (or the grid) */
-static int seal(ft_sdet* d, long s, long e, int ts, int te, int grid) {
-  const ft_axes* ax = &d->ax;
-  double ym = ax->y_mm_per_line, len = (e - s) * ym;
-  int gap = (int)ceil(GROW_GAP_MM / ax->x_mm_per_px - 1e-9), n, c;
-  int c0 = d->b0, c1 = d->b1;
-  ft_sdet_frame* f;
-  ft_frame_type type;
+bool ft_get_stream_base(const ft_stream_detector* detector, float base[3]) {
+  if(detector->has_base == false) return false;
+  for(uint32_t channel = 0; channel < 3; channel++) {
+    base[channel] = (float)pow(10, -detector->base_density[channel]);
+  }
+  return true;
+}
+
+/* the base: the median of the ring per channel */
+static void update_base(ft_stream_detector* d) {
+  float values[FT_STREAM_DETECT_RING_SIZE];
+  for(uint32_t channel = 0; channel < 3; channel++) {
+    for(int32_t index = 0; index < d->ring_count; index++) {
+      values[index] = d->ring[index][channel];
+    }
+    d->base_density[channel] =
+      select_kth(values, d->ring_count, d->ring_count / 2);
+  }
+  d->has_base = true;
+}
+
+/* add a base sample (3 densities); should_reset empties the ring first */
+static void push_base_sample(ft_stream_detector* d, const float* sample,
+                             bool should_reset) {
+  if(should_reset) {
+    d->ring_count = 0;
+    d->ring_position = 0;
+  }
+  memcpy(d->ring[d->ring_position], sample, sizeof d->ring[0]);
+  d->ring_position = (d->ring_position + 1) % d->ring_capacity;
+  if(d->ring_count < d->ring_capacity) d->ring_count++;
+  update_base(d);
+}
+
+/* start the histograms of a new run */
+static void reset_run(ft_stream_detector* d) {
+  memset(d->histogram, 0, (size_t)d->pixels * 3 * BINS * sizeof *d->histogram);
+  memset(d->valid_lines, 0, (size_t)d->pixels * sizeof *d->valid_lines);
+}
+
+/* Is column of the open run off the base on >= EXPOSED_SHARE of its
+ * lines, in any channel? */
+static bool is_column_exposed(const ft_stream_detector* d, int32_t column) {
+  const uint16_t* histogram = d->histogram + (size_t)column * 3 * BINS;
+  int64_t valid = d->valid_lines[column];
+  if(valid == 0) return false;
+  for(uint32_t channel = 0; channel < 3; channel++) {
+    const uint16_t* bins = histogram + channel * BINS;
+    int64_t exposed_count = 0;
+    if(d->film == FT_FILM_SLIDE) {
+      /* a slide's image is thinner than its dark gaps */
+      int32_t end_bin = (int32_t)(SLIDE_GAP_DENSITY / STEP + 0.5);
+      for(int32_t bin = 0; bin < end_bin; bin++) exposed_count += bins[bin];
+    } else {
+      /* a negative's image is denser than its base */
+      double base = 0;
+      if(d->has_base) {
+        base = d->base_density[channel];
+      } else if(d->has_min_density) {
+        base = d->min_density[channel];
+      }
+      int32_t first_bin =
+        (int32_t)ceil((base + FT_STREAM_DETECT_NEAR_DENSITY) / STEP - 1e-9);
+      for(int32_t bin = first_bin < 0 ? 0 : first_bin; bin < BINS; bin++) {
+        exposed_count += bins[bin];
+      }
+    }
+    if(exposed_count >= EXPOSED_SHARE * valid) return true;
+  }
+  return false;
+}
+
+static double clamp(double value, double low, double high) {
+  if(value < low) return low;
+  if(value > high) return high;
+  return value;
+}
+
+/* the type of a run of length_mm; is_bounded: a gap (or the grid) at
+ * both ends */
+static ft_frame_type classify_run(double length_mm, bool is_bounded) {
+  if(is_bounded) {
+    if(length_mm >= FULL_MIN_MM && length_mm <= FULL_MAX_MM) {
+      return FT_FRAME_FULL;
+    }
+    if(length_mm >= HALF_MIN_MM && length_mm <= HALF_MAX_MM) {
+      return FT_FRAME_HALF;
+    }
+    return FT_FRAME_PARTIAL;
+  }
+  if(fabs(length_mm - FULL_LENGTH_MM) <= END_TOLERANCE_MM) return FT_FRAME_FULL;
+  if(fabs(length_mm - HALF_LENGTH_MM) <= END_TOLERANCE_MM) return FT_FRAME_HALF;
+  return FT_FRAME_PARTIAL;
+}
+
+/* Seal the run [start, end) as a frame. starts_at_gap / ends_at_gap: its
+ * ends are at a gap (or the grid); is_grid: cut by the holder grid.
+ * Returns 1 when a frame was added, else 0. */
+static uint32_t seal_run(ft_stream_detector* d, int64_t start, int64_t end,
+                         bool starts_at_gap, bool ends_at_gap, bool is_grid) {
+  const ft_axes* axes = &d->axes;
+  double mm_per_line = axes->mm_per_line;
+  double length_mm = (end - start) * mm_per_line;
 
   /* the film's end just after a short gap: the frame ended there */
-  if(!te && !grid && d->weak_s > s && (e - d->weak_e) * ym < SLIVER_MM) {
-    e = d->weak_s;
-    te = 1;
-    len = (e - s) * ym;
+  if(ends_at_gap == false &&
+     is_grid == false &&
+     d->weak_start > start &&
+     (end - d->weak_end) * mm_per_line < SLIVER_MM) {
+    end = d->weak_start;
+    ends_at_gap = true;
+    length_mm = (end - start) * mm_per_line;
   }
-  if(e <= s || (!grid && len < SLIVER_MM) || d->nframes == FT_MAX_FRAMES)
-    return 0;
-  if(grid)
-    type = FT_FRAME_FULL;
-  else if(ts && te)
-    type = len >= FULL_LO && len <= FULL_HI   ? FT_FRAME_FULL
-           : len >= HALF_LO && len <= HALF_HI ? FT_FRAME_HALF
-                                              : FT_FRAME_PARTIAL;
-  else
-    type = fabs(len - 36) <= END_TOL   ? FT_FRAME_FULL
-           : fabs(len - 18) <= END_TOL ? FT_FRAME_HALF
-                                       : FT_FRAME_PARTIAL;
-  /* across: the band, grown outward over the run's exposed columns */
-  for(n = 0, c = d->b0 - 1; c >= d->s0 && n <= gap; c--) {
-    if(exposed(d, c)) {
-      c0 = c;
-      n = 0;
+  if(end <= start) return 0;
+  if(is_grid == false && length_mm < SLIVER_MM) return 0;
+  if(d->frame_count == FT_MAX_FRAMES) return 0;
+
+  ft_frame_type type = FT_FRAME_FULL;
+  if(is_grid == false) {
+    type = classify_run(length_mm, starts_at_gap && ends_at_gap);
+  }
+
+  /* across: the band, grown outward over the run's exposed columns,
+   * crossing at most max_gap unexposed ones */
+  int32_t max_gap = (int32_t)ceil(GROW_GAP_MM / axes->mm_per_pixel - 1e-9);
+  int32_t first_column = d->band_start;
+  int32_t end_column = d->band_end;
+  int32_t unexposed_run = 0;
+  for(int32_t column = d->band_start - 1;
+      column >= d->search_start && unexposed_run <= max_gap; column--) {
+    if(is_column_exposed(d, column)) {
+      first_column = column;
+      unexposed_run = 0;
     } else {
-      n++;
+      unexposed_run++;
     }
   }
-  for(n = 0, c = d->b1; c < d->s1 && n <= gap; c++) {
-    if(exposed(d, c)) {
-      c1 = c + 1;
-      n = 0;
+  unexposed_run = 0;
+  for(int32_t column = d->band_end;
+      column < d->search_end && unexposed_run <= max_gap; column++) {
+    if(is_column_exposed(d, column)) {
+      end_column = column + 1;
+      unexposed_run = 0;
     } else {
-      n++;
+      unexposed_run++;
     }
   }
-  f = &d->f[d->nframes];
-  memset(f, 0, sizeof *f);
-  f->index = ++d->nframes;
-  f->type = type;
-  f->grid = grid;
-  f->l0 = s;
-  f->l1 = e;
-  f->y0 = clampd(ax->y_mm0 + s * ym - FT_SDET_PAD_MM, 0, d->h->scan_length_mm);
-  f->y1 = clampd(ax->y_mm0 + e * ym + FT_SDET_PAD_MM, 0, d->h->scan_length_mm);
-  f->x0 = clampd(ax->x_mm0 + c0 * ax->x_mm_per_px - FT_SDET_PAD_MM, 0,
-                 d->h->scan_width_mm);
-  f->x1 = clampd(ax->x_mm0 + c1 * ax->x_mm_per_px + FT_SDET_PAD_MM, 0,
-                 d->h->scan_width_mm);
-  d->grid |= grid;
+
+  ft_stream_frame* frame = &d->frames[d->frame_count];
+  memset(frame, 0, sizeof *frame);
+  d->frame_count++;
+  frame->index = d->frame_count;
+  frame->type = type;
+  frame->is_from_grid = is_grid;
+  frame->first_line = start;
+  frame->end_line = end;
+  double scan_length_mm = d->holder->scan_length_mm;
+  double scan_width_mm = d->holder->scan_width_mm;
+  frame->start_mm =
+    clamp(axes->first_line_mm + start * mm_per_line - FT_STREAM_DETECT_PAD_MM,
+          0, scan_length_mm);
+  frame->end_mm =
+    clamp(axes->first_line_mm + end * mm_per_line + FT_STREAM_DETECT_PAD_MM, 0,
+          scan_length_mm);
+  frame->across_start_mm = clamp(axes->first_pixel_mm +
+                                   first_column * axes->mm_per_pixel -
+                                   FT_STREAM_DETECT_PAD_MM,
+                                 0, scan_width_mm);
+  frame->across_end_mm = clamp(axes->first_pixel_mm +
+                                 end_column * axes->mm_per_pixel +
+                                 FT_STREAM_DETECT_PAD_MM,
+                               0, scan_width_mm);
+  d->used_grid |= is_grid;
   return 1;
 }
 
-/* the open run takes line t: its columns' densities */
-static void accumulate(ft_sdet* d, const float* t) {
-  int c, k;
-  for(c = d->s0; c < d->s1; c++) {
-    const float* p = t + (size_t)c * 3;
-    unsigned short* hc = d->hist + (size_t)c * 3 * BINS;
-    if((p[0] > OPEN_T && p[1] > OPEN_T && p[2] > OPEN_T) ||
-       (d->film != FT_FILM_SLIDE &&
-        p[0] < DARK_T &&
-        p[1] < DARK_T &&
-        p[2] < DARK_T))
-      continue;
-    if(d->valid[c] == 0xffff) continue;
-    d->valid[c]++;
-    for(k = 0; k < 3; k++) {
-      int b = (int)(D_OF(p[k]) / STEP);
-      hc[k * BINS + (b < 0 ? 0 : b >= BINS ? BINS - 1 : b)]++;
+/* the open run takes a line: its columns' densities into the
+ * histograms */
+static void accumulate_line(ft_stream_detector* d, const float* line) {
+  for(int32_t column = d->search_start; column < d->search_end; column++) {
+    const float* pixel = line + (size_t)column * 3;
+    uint16_t* histogram = d->histogram + (size_t)column * 3 * BINS;
+    /* open beam never counts; dark (metal) does not on negatives */
+    if(is_open(pixel)) continue;
+    if(d->film != FT_FILM_SLIDE && is_dark(pixel)) continue;
+    /* the count is 16 bits: stop at its top */
+    if(d->valid_lines[column] == 0xffff) continue;
+    d->valid_lines[column]++;
+    for(uint32_t channel = 0; channel < 3; channel++) {
+      int32_t bin = (int32_t)(get_density(pixel[channel]) / STEP);
+      if(bin < 0) bin = 0;
+      if(bin >= BINS) bin = BINS - 1;
+      histogram[channel * BINS + bin]++;
     }
   }
 }
 
-/* the line's kind; base and dmin updated */
-static int classify(ft_sdet* d, const float* t) {
-  int nb = d->b1 - d->b0, nopen = 0, ndark = 0, c, k, flat = 1, gap = 1;
-  float *v = d->scratch, p03[3], p50[3], p97[3];
-  int lo = nb * 3 / 100, hi = nb - 1 - nb * 3 / 100;
-  for(c = d->b0; c < d->b1; c++) {
-    const float* p = t + (size_t)c * 3;
-    nopen += p[0] > OPEN_T && p[1] > OPEN_T && p[2] > OPEN_T;
-    ndark += p[0] < DARK_T && p[1] < DARK_T && p[2] < DARK_T;
+/* Classify a line; the base and the thinnest density are updated. */
+static line_kind classify_line(ft_stream_detector* d, const float* line) {
+  int32_t band_pixels = d->band_end - d->band_start;
+  int32_t open_count = 0;
+  int32_t dark_count = 0;
+  for(int32_t column = d->band_start; column < d->band_end; column++) {
+    const float* pixel = line + (size_t)column * 3;
+    open_count += is_open(pixel);
+    dark_count += is_dark(pixel);
   }
-  if(nopen >= NOFILM_OPEN * nb ||
-     (d->film != FT_FILM_SLIDE && ndark >= METAL_FRAC * nb))
-    return L_NOFILM;
-  /* the band in blocks of BLOCK px: sensor noise on a dense base (blue
-   * T ~0.05) would otherwise spread a gap line past FLAT_D */
-  nb /= BLOCK;
-  lo = nb * 3 / 100;
-  hi = nb - 1 - nb * 3 / 100;
-  for(k = 0; k < 3; k++) {
-    float* w = v + (size_t)k * nb;
-    for(c = 0; c < nb; c++) {
-      const float* p = t + (size_t)(d->b0 + c * BLOCK) * 3 + k;
-      float s = 0;
-      int i;
-      for(i = 0; i < BLOCK; i++) s += p[i * 3];
-      w[c] = (float)D_OF(s / BLOCK);
+  if(open_count >= NO_FILM_OPEN_SHARE * band_pixels) return LINE_NO_FILM;
+  if(d->film != FT_FILM_SLIDE && dark_count >= METAL_SHARE * band_pixels) {
+    return LINE_NO_FILM;
+  }
+
+  /* The band in blocks of BLOCK pixels: sensor noise on a dense base
+   * (blue T ~0.05) would otherwise spread a gap line past FLAT_DENSITY.
+   * Then the 3rd, 50th and 97th percentile per channel. */
+  int32_t block_count = band_pixels / BLOCK;
+  int32_t low = block_count * 3 / 100;
+  int32_t high = block_count - 1 - block_count * 3 / 100;
+  float percentile3[3];
+  float percentile50[3];
+  float percentile97[3];
+  bool is_flat = true;
+  for(uint32_t channel = 0; channel < 3; channel++) {
+    float* densities = d->scratch + (size_t)channel * block_count;
+    for(int32_t block = 0; block < block_count; block++) {
+      const float* first =
+        line + (size_t)(d->band_start + block * BLOCK) * 3 + channel;
+      float sum = 0;
+      for(int32_t index = 0; index < BLOCK; index++) sum += first[index * 3];
+      densities[block] = (float)get_density(sum / BLOCK);
     }
-    p03[k] = kth(w, nb, lo);
-    p97[k] = kth(w, nb, hi);
-    p50[k] = kth(w, nb, nb / 2);
-    flat &= p97[k] - p03[k] <= FLAT_D;
+    percentile3[channel] = select_kth(densities, block_count, low);
+    percentile97[channel] = select_kth(densities, block_count, high);
+    percentile50[channel] = select_kth(densities, block_count, block_count / 2);
+    if(percentile97[channel] - percentile3[channel] > FLAT_DENSITY) {
+      is_flat = false;
+    }
   }
+
   if(d->film == FT_FILM_SLIDE) {
-    for(k = 0; k < 3; k++) gap &= p03[k] >= SLIDE_D;
-    if(gap) base_push(d, p50, 0);
-    return gap ? L_GAP : L_FRAME;
-  }
-  if(nopen == 0)
-    for(k = 0; k < 3; k++)
-      if(!d->have_dmin || p03[k] < d->dmin[k]) d->dmin[k] = p03[k];
-  if(nopen == 0) d->have_dmin = 1;
-  if(flat) {
-    double m = 0;
-    int near = 1;
-    for(k = 0; k < 3 && d->have_base; k++) {
-      m += (p50[k] - d->base[k]) / 3;
-      near &= fabs(p50[k] - d->base[k]) <= FT_SDET_NEAR_D;
+    bool is_gap = true;
+    for(uint32_t channel = 0; channel < 3; channel++) {
+      if(!(percentile3[channel] >= SLIDE_GAP_DENSITY)) is_gap = false;
     }
-    if(!d->have_base || m < -FT_SDET_NEAR_D)
-      base_push(d, p50, 1); /* thinner: that is the base */
-    else if(near)
-      base_push(d, p50, 0);
+    if(is_gap) push_base_sample(d, percentile50, false);
+    return is_gap ? LINE_GAP : LINE_FRAME;
   }
-  for(k = 0; k < 3; k++)
-    gap &= d->have_base &&
-           p03[k] >= d->base[k] - FT_SDET_NEAR_D &&
-           p97[k] <= d->base[k] + FT_SDET_NEAR_D;
-  return gap ? L_GAP : L_FRAME;
+
+  /* a line without open beam: track the thinnest film density */
+  if(open_count == 0) {
+    for(uint32_t channel = 0; channel < 3; channel++) {
+      if(d->has_min_density == false ||
+         percentile3[channel] < d->min_density[channel]) {
+        d->min_density[channel] = percentile3[channel];
+      }
+    }
+    d->has_min_density = true;
+  }
+  if(is_flat) {
+    /* the mean difference from the base, and is every channel near it */
+    double mean_difference = 0;
+    bool is_near = true;
+    for(uint32_t channel = 0; channel < 3 && d->has_base; channel++) {
+      double difference = percentile50[channel] - d->base_density[channel];
+      mean_difference += difference / 3;
+      if(!(fabs(difference) <= FT_STREAM_DETECT_NEAR_DENSITY)) is_near = false;
+    }
+    if(d->has_base == false ||
+       mean_difference < -FT_STREAM_DETECT_NEAR_DENSITY) {
+      /* thinner than the base: that is the base */
+      push_base_sample(d, percentile50, true);
+    } else if(is_near) {
+      push_base_sample(d, percentile50, false);
+    }
+  }
+  bool is_gap = d->has_base;
+  for(uint32_t channel = 0; channel < 3 && is_gap; channel++) {
+    double base = d->base_density[channel];
+    is_gap = percentile3[channel] >= base - FT_STREAM_DETECT_NEAR_DENSITY &&
+             percentile97[channel] <= base + FT_STREAM_DETECT_NEAR_DENSITY;
+  }
+  return is_gap ? LINE_GAP : LINE_FRAME;
 }
 
-int ft_sdet_line(ft_sdet* d, const float* t) {
-  int kind = classify(d, t), n = 0;
-  long l = d->line++;
+uint32_t ft_detect_stream_line(ft_stream_detector* detector,
+                               const float* line) {
+  ft_stream_detector* d = detector;
+  line_kind kind = classify_line(d, line);
+  int64_t line_number = d->lines_fed;
+  d->lines_fed++;
+  uint32_t sealed = 0;
 
-  if(kind == L_NOFILM) {
-    if(d->run_s >= 0)
-      n += seal(d, d->run_s, d->gap_n ? d->gap_s : l, d->run_trusted, 0, 0);
-    d->run_s = -1;
-    d->gap_n = 0;
-    d->after_gap = 0;
-    return n;
+  switch(kind) {
+    case LINE_NO_FILM:
+      /* no film: the open run ends, untrusted at this end */
+      if(d->run_start >= 0) {
+        int64_t end = d->gap_length > 0 ? d->gap_start : line_number;
+        sealed +=
+          seal_run(d, d->run_start, end, d->is_run_trusted, false, false);
+      }
+      d->run_start = -1;
+      d->gap_length = 0;
+      d->is_after_gap = false;
+      return sealed;
+    case LINE_GAP:
+      if(d->gap_length == 0) d->gap_start = line_number;
+      d->gap_length++;
+      /* a full gap: the open run ends at it */
+      if(d->gap_length == d->gap_lines) {
+        if(d->run_start >= 0) {
+          sealed += seal_run(d, d->run_start, d->gap_start, d->is_run_trusted,
+                             true, false);
+        }
+        d->run_start = -1;
+        d->is_after_gap = true;
+      }
+      return sealed;
+    case LINE_FRAME:
+      break;
   }
-  if(kind == L_GAP) {
-    if(d->gap_n++ == 0) d->gap_s = l;
-    if(d->gap_n == d->gap_lines) {
-      if(d->run_s >= 0) n += seal(d, d->run_s, d->gap_s, d->run_trusted, 1, 0);
-      d->run_s = -1;
-      d->after_gap = 1;
-    }
-    return n;
-  }
-  if(d->run_s >= 0 && d->gap_n >= d->weak_lines) {
-    if(!d->run_trusted &&
-       (d->gap_s - d->run_s) * d->ax.y_mm_per_line < SLIVER_MM) {
-      d->run_s = -1; /* the film's start: the frame's edge */
+
+  /* a short gap just ended inside the run */
+  if(d->run_start >= 0 && d->gap_length >= d->weak_lines) {
+    if(d->is_run_trusted == false &&
+       (d->gap_start - d->run_start) * d->axes.mm_per_line < SLIVER_MM) {
+      /* the film's start: the short gap is the frame's edge */
+      d->run_start = -1;
     } else {
-      d->weak_s = d->gap_s;
-      d->weak_e = l;
+      d->weak_start = d->gap_start;
+      d->weak_end = line_number;
     }
   }
-  if(d->run_s < 0) {
-    d->run_trusted = d->after_gap || d->gap_n >= d->weak_lines;
-    d->run_s = l;
-    d->weak_s = d->weak_e = -1;
-    run_reset(d);
+  if(d->run_start < 0) {
+    d->is_run_trusted = d->is_after_gap || d->gap_length >= d->weak_lines;
+    d->run_start = line_number;
+    d->weak_start = -1;
+    d->weak_end = -1;
+    reset_run(d);
   }
-  d->gap_n = 0;
-  accumulate(d, t);
-  if(l + 1 - d->run_s > d->grid_lines) { /* no gap: the holder grid */
-    long cut = d->run_s + d->cut_lines;
-    n += seal(d, d->run_s, cut, 1, 1, 1);
-    d->run_s = cut;
-    d->run_trusted = 1;
-    run_reset(d);
+  d->gap_length = 0;
+  accumulate_line(d, line);
+  /* no gap for too long: the holder grid cuts the run */
+  if(line_number + 1 - d->run_start > d->grid_lines) {
+    int64_t cut = d->run_start + d->cut_lines;
+    sealed += seal_run(d, d->run_start, cut, true, true, true);
+    d->run_start = cut;
+    d->is_run_trusted = true;
+    reset_run(d);
   }
-  return n;
+  return sealed;
 }
 
-int ft_sdet_feed(ft_sdet* d, const float* lines, int n) {
-  int i, k = 0;
-  for(i = 0; i < n; i++) k += ft_sdet_line(d, lines + (size_t)i * d->px * 3);
-  return k;
+uint32_t ft_detect_stream_lines(ft_stream_detector* detector,
+                                const float* lines, uint32_t line_count) {
+  uint32_t sealed = 0;
+  for(uint32_t index = 0; index < line_count; index++) {
+    sealed += ft_detect_stream_line(
+      detector, lines + (size_t)index * detector->pixels * 3);
+  }
+  return sealed;
 }
 
-int ft_sdet_end(ft_sdet* d) {
-  int n = 0;
-  if(d->run_s >= 0)
-    n = seal(d, d->run_s, d->gap_n ? d->gap_s : d->line, d->run_trusted, 0, 0);
-  d->run_s = -1;
-  d->gap_n = 0;
-  return n;
+uint32_t ft_end_stream_detection(ft_stream_detector* detector) {
+  ft_stream_detector* d = detector;
+  uint32_t sealed = 0;
+  if(d->run_start >= 0) {
+    int64_t end = d->gap_length > 0 ? d->gap_start : d->lines_fed;
+    sealed = seal_run(d, d->run_start, end, d->is_run_trusted, false, false);
+  }
+  d->run_start = -1;
+  d->gap_length = 0;
+  return sealed;
 }

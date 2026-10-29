@@ -7,7 +7,7 @@
  *   ftdev emulsions
  *
  * The frames given are the roll: the auto balance compares them (on stats
- * proxies, FT_PRINT_STATS_EDGE px), so print a roll's frames together.
+ * proxies, FT_PRINT_STATS_EDGE_PIXELS px), so print a roll's frames together.
  * Each frame (ftdev cut's <base>_frameNN.dng and its sidecar) is cropped
  * to its box, noise-reduced, printed through the emulsion with its clicks
  * (--cmyd for every frame, or the .print file's per frame), resized to the
@@ -62,7 +62,7 @@ int ftdev_emulsions(int argc, char** argv) {
     return 2;
   }
   printf("emulsions (science revision %d):\n", FT_EMULSION_REV);
-  for(i = 0; (em = ft_emulsion_at(i)) != NULL; i++)
+  for(i = 0; (em = ft_get_emulsion_at(i)) != NULL; i++)
     printf("  %-16s %-9s %s\n", em->id, MODE[em->mode], em->name);
   return 0;
 }
@@ -70,7 +70,7 @@ int ftdev_emulsions(int argc, char** argv) {
 static void list_ids(void) {
   const ft_emulsion* em;
   int i;
-  for(i = 0; (em = ft_emulsion_at(i)) != NULL; i++)
+  for(i = 0; (em = ft_get_emulsion_at(i)) != NULL; i++)
     fprintf(stderr, "%s%s", i ? " " : "", em->id);
 }
 
@@ -95,20 +95,20 @@ static int frame_of_name(const char* path) {
 static int load_cut(const pframe* f, ft_image* im, ft_image* cut) {
   int box[4];
   ft_err e;
-  if(ft_dng_read(f->dng, im, &e)) {
-    fprintf(stderr, "ftdev: %s\n", e.msg);
+  if(ft_read_dng(f->dng, im, &e)) {
+    fprintf(stderr, "ftdev: %s\n", e.message);
     return 1;
   }
   if(f->has_side) {
     memcpy(box, f->sc.box, sizeof box);
   } else {
     box[0] = box[1] = 0;
-    box[2] = im->w;
-    box[3] = im->h;
+    box[2] = im->width;
+    box[3] = im->height;
   }
-  if(ft_image_crop(im, box, cut, &e)) {
+  if(ft_crop_image(im, box, cut, &e)) {
     fprintf(stderr, "ftdev: %s: %s (sidecar from another DNG?)\n", f->dng,
-            e.msg);
+            e.message);
     return 1;
   }
   return 0;
@@ -150,7 +150,7 @@ int ftdev_print(int argc, char** argv) {
       }
       memset(&fs[n], 0, sizeof fs[n]);
       fs[n].dng = a;
-      ft_image_init(&fs[n].proxy);
+      ft_init_image(&fs[n].proxy);
       n++;
     }
   }
@@ -185,15 +185,15 @@ int ftdev_print(int argc, char** argv) {
       fprintf(stderr, "ftdev: cannot read %s\n", roll_path);
       return 1;
     }
-    if(ft_print_file_parse(txt, (size_t)nt, &g_pf, &e)) {
-      fprintf(stderr, "ftdev: %s: %s\n", roll_path, e.msg);
+    if(ft_parse_print_file(txt, (size_t)nt, &g_pf, &e)) {
+      fprintf(stderr, "ftdev: %s: %s\n", roll_path, e.message);
       free(txt);
       return 2;
     }
     free(txt);
     emulsion = g_pf.emulsion;
   }
-  em = ft_emulsion_find(emulsion);
+  em = ft_find_emulsion(emulsion);
   if(!em) {
     fprintf(stderr, "ftdev: --emulsion: '%s' is not an emulsion (", emulsion);
     list_ids();
@@ -202,8 +202,9 @@ int ftdev_print(int argc, char** argv) {
   }
   if(cmyd) {
     char extra;
-    if(sscanf(cmyd, "%d,%d,%d,%d%c", &k1.c, &k1.m, &k1.y, &k1.d, &extra) != 4 ||
-       ft_print_clicks_ok(em, k1, &e)) {
+    if(sscanf(cmyd, "%d,%d,%d,%d%c", &k1.cyan, &k1.magenta, &k1.yellow,
+              &k1.density, &extra) != 4 ||
+       ft_check_print_clicks(em, k1, &e)) {
       fprintf(stderr,
               "ftdev: --cmyd is c,m,y,d (whole numbers, "
               "-%d..%d; b&w: 0,0,0,d)\n",
@@ -226,8 +227,8 @@ int ftdev_print(int argc, char** argv) {
     }
     side = ftdev_load(path, &ns);
     if(side) {
-      if(ft_share_sidecar_parse(side, (size_t)ns, &f->sc, &e)) {
-        fprintf(stderr, "ftdev: %s: %s\n", path, e.msg);
+      if(ft_parse_share_sidecar(side, (size_t)ns, &f->sc, &e)) {
+        fprintf(stderr, "ftdev: %s: %s\n", path, e.message);
         free(side);
         goto out;
       }
@@ -235,7 +236,7 @@ int ftdev_print(int argc, char** argv) {
       f->has_side = 1;
     }
     f->frame =
-      f->has_side && f->sc.frame > 0 ? f->sc.frame : frame_of_name(f->dng);
+      f->has_side && f->sc.frame > 0 ? (int)f->sc.frame : frame_of_name(f->dng);
     if(roll_path && f->frame < 0) {
       fprintf(stderr,
               "ftdev: %s: no frame number (no sidecar, no "
@@ -254,33 +255,33 @@ int ftdev_print(int argc, char** argv) {
     }
     if(f->has_side && f->sc.has_film_base) {
       int c;
-      for(c = 0; c < 3; c++) bsum[c][nbase] = f->sc.film_base[c];
+      for(c = 0; c < 3; c++) bsum[c][nbase] = f->sc.film_base_density[c];
       nbase++;
     }
-    ft_image_init(&im);
-    ft_image_init(&cut);
+    ft_init_image(&im);
+    ft_init_image(&cut);
     if(load_cut(f, &im, &cut)) {
-      ft_image_free(&im);
-      ft_image_free(&cut);
+      ft_free_image(&im);
+      ft_free_image(&cut);
       goto out;
     }
-    ft_image_free(&im);
-    if(ft_share_print_proxy(&cut, &f->proxy, &e)) {
-      fprintf(stderr, "ftdev: %s\n", e.msg);
-      ft_image_free(&cut);
+    ft_free_image(&im);
+    if(ft_make_share_proxy(&cut, &f->proxy, &e)) {
+      fprintf(stderr, "ftdev: %s\n", e.message);
+      ft_free_image(&cut);
       goto out;
     }
-    ft_image_free(&cut);
+    ft_free_image(&cut);
     proxies[i] = &f->proxy;
   }
 
   /* the roll: base, [frame N] check, the balance across the frames */
   if(nbase) {
     int c;
-    for(c = 0; c < 3; c++) base[c] = (float)ft_print_median(bsum[c], nbase);
+    for(c = 0; c < 3; c++) base[c] = (float)ft_get_print_median(bsum[c], nbase);
   } else {
-    if(ft_render_base_from_frames(proxies, n, em->mode, base, &e)) {
-      fprintf(stderr, "ftdev: %s\n", e.msg);
+    if(ft_estimate_base_from_frames(proxies, n, em->mode, base, &e)) {
+      fprintf(stderr, "ftdev: %s\n", e.message);
       goto out;
     }
     fprintf(stderr,
@@ -292,26 +293,26 @@ int ftdev_print(int argc, char** argv) {
     if(job_path) {
       static ft_job job;
       FILE* jf = fopen(job_path, "r");
-      if(!jf || ft_job_read(&job, jf, &e)) {
+      if(!jf || ft_read_job(&job, jf, &e)) {
         fprintf(stderr, "ftdev: %s: %s\n", job_path,
-                jf ? e.msg : "cannot read");
+                jf ? e.message : "cannot read");
         if(jf) fclose(jf);
         rc = 2;
         goto out;
       }
       fclose(jf);
-      for(i = 0; i < job.nframes; i++) idx[ni++] = job.f[i].index;
+      for(i = 0; i < (int)job.frame_count; i++) idx[ni++] = job.frames[i].index;
     } else {
       for(i = 0; i < n; i++) idx[ni++] = fs[i].frame;
     }
-    if(ft_print_file_unknown(&g_pf, idx, ni, &e))
-      fprintf(stderr, "ftdev: warning: %s: %s\n", roll_path, e.msg);
+    if(ft_count_unknown_print_frames(&g_pf, idx, ni, &e))
+      fprintf(stderr, "ftdev: warning: %s: %s\n", roll_path, e.message);
   }
-  if(ft_print_roll_measure(em, base, proxies, n, pfr, &roll, &e)) {
-    fprintf(stderr, "ftdev: %s\n", e.msg);
+  if(ft_measure_print_roll(em, base, proxies, n, pfr, &roll, &e)) {
+    fprintf(stderr, "ftdev: %s\n", e.message);
     goto out;
   }
-  if(n < 6 && em->balance == &ft_pm_balance_frontier)
+  if(n < 6 && em->balance == &ft_balance_module_frontier)
     fprintf(stderr,
             "ftdev: note: %d frame%s: print a roll's frames "
             "together for the roll's colour balance\n",
@@ -320,13 +321,13 @@ int ftdev_print(int argc, char** argv) {
   /* each frame: the print */
   for(i = 0; i < n; i++) {
     pframe* f = &fs[i];
-    ft_cmyd k = roll_path ? ft_print_file_clicks(&g_pf, f->frame) : k1;
-    int rot = roll_path ? ft_print_file_rotation(&g_pf, f->frame) : 0;
+    ft_cmyd k = roll_path ? ft_get_print_clicks(&g_pf, f->frame) : k1;
+    int rot = roll_path ? ft_get_print_rotation(&g_pf, f->frame) : 0;
     ft_share_print_info info;
     ft_image im;
     unsigned char* jpg;
     size_t nj;
-    char out[PATH_CAP], text[FT_SHARE_TEXT_MAX];
+    char out[PATH_CAP], text[FT_SHARE_TEXT_BYTES];
     int r2;
     if(outp) {
       snprintf(out, sizeof out, "%s", outp);
@@ -341,9 +342,9 @@ int ftdev_print(int argc, char** argv) {
       memcpy(out, f->dng, l);
       memcpy(out + l, ".jpg", 5);
     }
-    ft_image_init(&im);
-    if(ft_dng_read(f->dng, &im, &e)) {
-      fprintf(stderr, "ftdev: %s\n", e.msg);
+    ft_init_image(&im);
+    if(ft_read_dng(f->dng, &im, &e)) {
+      fprintf(stderr, "ftdev: %s\n", e.message);
       goto out;
     }
     if(!f->has_side)
@@ -352,27 +353,27 @@ int ftdev_print(int argc, char** argv) {
               "full size\n",
               f->dng);
     printf("print: %s frame %d, %s, cmyd %d %d %d %d\n", f->dng, f->frame,
-           em->id, k.c, k.m, k.y, k.d);
-    if(ft_share_print_frame(em, &roll, &pfr[i], k, rot, &im,
+           em->id, k.cyan, k.magenta, k.yellow, k.density);
+    if(ft_print_share_frame(em, &roll, &pfr[i], k, rot, &im,
                             f->has_side ? &f->sc : NULL, f->frame, &jpg, &nj,
                             text, &info, &e)) {
-      fprintf(stderr, "ftdev: %s: %s\n", f->dng, e.msg);
-      ft_image_free(&im);
+      fprintf(stderr, "ftdev: %s: %s\n", f->dng, e.message);
+      ft_free_image(&im);
       goto out;
     }
-    ft_image_free(&im);
-    if(info.clamped)
+    ft_free_image(&im);
+    if(info.was_clamped)
       fprintf(stderr,
               "ftdev: warning: %s: the filtration is at its "
               "limit (50 CC, 6 stops)\n",
               f->dng);
-    if(info.nr_notes & FT_NR_NOTE_DISAGREE)
+    if(info.noise_notes & FT_NOISE_NOTE_DISAGREE)
       fprintf(stderr,
               "ftdev: warning: sidecar noise_profile disagrees "
               "with the DNG; using the DNG's\n");
-    if(info.nr_notes & FT_NR_NOTE_ESTIMATED)
+    if(info.noise_notes & FT_NOISE_NOTE_ESTIMATED)
       fprintf(stderr, "ftdev: warning: no noise profile, estimated\n");
-    r2 = ftdev_write_jpeg(out, jpg, nj, info.w, info.h, FT_SPACE_SRGB,
+    r2 = ftdev_write_jpeg(out, jpg, nj, info.width, info.height, FT_SPACE_SRGB,
                           FT_GAMUT_SOFT, FT_JPEG_QUALITY, text);
     free(jpg);
     if(r2) {
@@ -382,6 +383,6 @@ int ftdev_print(int argc, char** argv) {
   }
   rc = 0;
 out:
-  for(i = 0; i < n; i++) ft_image_free(&fs[i].proxy);
+  for(i = 0; i < n; i++) ft_free_image(&fs[i].proxy);
   return rc;
 }

@@ -2,191 +2,274 @@
 #include "ft_dplan.h"
 
 #include <math.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 #include "ft_geom.h"
 #include "ft_plan.h"
 
-static double pass_window(const ft_dframe* f, int i, int j, double scan_len_mm,
-                          double* y0) {
-  double a = f[i].y0 - FT_DETAIL_MARGIN_MM;
-  double b = f[j].y0 + f[j].len + FT_DETAIL_MARGIN_MM;
-  if(a < 0) a = 0;
-  if(b > scan_len_mm) b = scan_len_mm;
-  *y0 = a;
-  return b - a;
+#define MM_PER_INCH 25.4
+/* a frame list's numbers have at most this many digits */
+#define MAX_LIST_DIGITS 6
+
+/* The scan window along the strip for frames[first..last], margins
+ * included and clipped to the holder. Returns its length;
+ * *start_mm receives its start. */
+static double get_pass_window(const ft_detail_frame* frames, uint32_t first,
+                              uint32_t last, double scan_length_mm,
+                              double* start_mm) {
+  double start = frames[first].start_mm - FT_DETAIL_MARGIN_MM;
+  double end =
+    frames[last].start_mm + frames[last].length_mm + FT_DETAIL_MARGIN_MM;
+  if(start < 0) start = 0;
+  if(end > scan_length_mm) end = scan_length_mm;
+  *start_mm = start;
+  return end - start;
 }
 
-int ft_dplan_make(const ft_dframe* f, int n, double ppi, double scan_len_mm,
-                  long span, ft_dplan* out, ft_err* e) {
-  double best[FT_MAX_FRAMES + 1];
-  int from[FT_MAX_FRAMES + 1], i, j, k, np;
+/* Check the frames are inside the holder, in order and not overlapping.
+ * Returns 0, or -1 with error filled. */
+static int32_t check_frames(const ft_detail_frame* frames, uint32_t frame_count,
+                            double scan_length_mm, ft_err* error) {
+  for(uint32_t index = 0; index < frame_count; index++) {
+    const ft_detail_frame* frame = &frames[index];
+    /* written as "not inside" so that NaN is refused too */
+    bool is_inside = frame->length_mm > 0 &&
+                     frame->start_mm >= 0 &&
+                     frame->start_mm + frame->length_mm <= scan_length_mm;
+    if(is_inside == false) {
+      return ft_fail(error, "detail plan: frame %u is outside the holder",
+                     (unsigned)frame->index);
+    }
+    if(index == 0) continue;
+    const ft_detail_frame* previous = &frames[index - 1];
+    if(!(frame->start_mm >= previous->start_mm + previous->length_mm)) {
+      return ft_fail(error,
+                     "detail plan: frame %u overlaps or precedes frame %u",
+                     (unsigned)frame->index, (unsigned)previous->index);
+    }
+  }
+  return 0;
+}
 
-  if(n < 1 || n > FT_MAX_FRAMES)
-    return ft_fail(e, "detail plan: %d frames (1..%d)", n, FT_MAX_FRAMES);
-  if(!ft_bin_ok(ppi, FT_DETAIL_BIN))
-    return ft_fail(e,
+int32_t ft_make_detail_plan(const ft_detail_frame* frames, uint32_t frame_count,
+                            double ppi, double scan_length_mm,
+                            int64_t focus_span_steps, ft_detail_plan* plan,
+                            ft_err* error) {
+  if(frame_count < 1 || frame_count > FT_MAX_FRAMES) {
+    return ft_fail(error, "detail plan: %u frames (1..%d)",
+                   (unsigned)frame_count, FT_MAX_FRAMES);
+  }
+  if(ft_is_bin_usable(ppi, FT_DETAIL_BIN) == false) {
+    return ft_fail(error,
                    "detail plan: %g ppi cannot be scanned at bin 1 "
                    "(optics %.0f..%.0f)",
-                   ppi, FT_SCALE_MIN, FT_SCALE_MAX);
-  if(!(span >= 0) || !(scan_len_mm > 0))
-    return ft_fail(e, "detail plan: bad focus span or holder");
-  for(i = 0; i < n; i++) {
-    if(!(f[i].len > 0 && f[i].y0 >= 0 && f[i].y0 + f[i].len <= scan_len_mm))
-      return ft_fail(e, "detail plan: frame %d is outside the holder",
-                     f[i].index);
-    if(i && !(f[i].y0 >= f[i - 1].y0 + f[i - 1].len))
-      return ft_fail(e,
-                     "detail plan: frame %d overlaps or precedes "
-                     "frame %d",
-                     f[i].index, f[i - 1].index);
+                   ppi, FT_SCALE_MIN_PPI, FT_SCALE_MAX_PPI);
   }
-  /* best[j]: fastest plan for frames 0..j-1; from[j]: its last pass's
-   * first frame */
-  best[0] = 0;
-  for(j = 1; j <= n; j++) {
-    long lo = f[j - 1].focus, hi = lo;
-    best[j] = HUGE_VAL;
-    from[j] = -1;
-    for(i = j; i >= 1; i--) {
-      double y0, t;
-      if(f[i - 1].focus < lo) lo = f[i - 1].focus;
-      if(f[i - 1].focus > hi) hi = f[i - 1].focus;
-      if(hi - lo > span) break; /* adding frames only widens it */
-      t = best[i - 1] +
-          ft_scan_seconds(ppi, FT_DETAIL_BIN,
-                          pass_window(f, i - 1, j - 1, scan_len_mm, &y0));
-      if(t < best[j]) {
-        best[j] = t;
-        from[j] = i - 1;
+  if(focus_span_steps < 0 || !(scan_length_mm > 0)) {
+    return ft_fail(error, "detail plan: bad focus span or holder");
+  }
+  if(check_frames(frames, frame_count, scan_length_mm, error) != 0) return -1;
+
+  /* The dynamic program. best_seconds[end]: the fastest plan for frames
+   * 0..end-1. last_pass_first[end]: the first frame of that plan's last
+   * pass. Each end tries every last pass that stays in focus. */
+  double best_seconds[FT_MAX_FRAMES + 1];
+  int32_t last_pass_first[FT_MAX_FRAMES + 1];
+  best_seconds[0] = 0;
+  for(uint32_t end = 1; end <= frame_count; end++) {
+    int64_t lowest = frames[end - 1].focus_offset_steps;
+    int64_t highest = lowest;
+    best_seconds[end] = HUGE_VAL;
+    last_pass_first[end] = -1;
+    /* the last pass covers frames[start - 1 .. end - 1] */
+    for(uint32_t start = end; start >= 1; start--) {
+      int64_t focus = frames[start - 1].focus_offset_steps;
+      if(focus < lowest) lowest = focus;
+      if(focus > highest) highest = focus;
+      /* adding more frames only widens the spread */
+      if(highest - lowest > focus_span_steps) break;
+      double window_start_mm;
+      double window_length_mm = get_pass_window(
+        frames, start - 1, end - 1, scan_length_mm, &window_start_mm);
+      double seconds =
+        best_seconds[start - 1] +
+        ft_estimate_scan_seconds(ppi, FT_DETAIL_BIN, window_length_mm);
+      if(seconds < best_seconds[end]) {
+        best_seconds[end] = seconds;
+        last_pass_first[end] = (int32_t)(start - 1);
       }
     }
   }
-  /* walk back, then reverse into strip order */
-  np = 0;
-  for(j = n; j > 0; j = from[j]) {
-    ft_dpass* p = &out->p[np++];
-    long lo, hi;
-    p->first = from[j];
-    p->last = j - 1;
-    lo = hi = f[p->first].focus;
-    for(k = p->first; k <= p->last; k++) {
-      if(f[k].focus < lo) lo = f[k].focus;
-      if(f[k].focus > hi) hi = f[k].focus;
+
+  /* Walk back from the last frame, one pass at a time. This gives the
+   * passes from last to first; they are reversed below. A single frame
+   * always fits a pass, so last_pass_first is never -1 here. */
+  uint32_t pass_count = 0;
+  for(uint32_t end = frame_count; end > 0;
+      end = (uint32_t)last_pass_first[end]) {
+    ft_detail_pass* pass = &plan->passes[pass_count];
+    pass_count++;
+    pass->first_frame = (uint32_t)last_pass_first[end];
+    pass->last_frame = end - 1;
+    int64_t lowest = frames[pass->first_frame].focus_offset_steps;
+    int64_t highest = lowest;
+    for(uint32_t index = pass->first_frame; index <= pass->last_frame;
+        index++) {
+      int64_t focus = frames[index].focus_offset_steps;
+      if(focus < lowest) lowest = focus;
+      if(focus > highest) highest = focus;
     }
-    p->focus = ft_dplan_mid(lo, hi);
-    p->len = pass_window(f, p->first, p->last, scan_len_mm, &p->y0);
-    p->seconds = ft_scan_seconds(ppi, FT_DETAIL_BIN, p->len);
+    pass->focus_offset_steps = ft_get_focus_middle(lowest, highest);
+    pass->length_mm =
+      get_pass_window(frames, pass->first_frame, pass->last_frame,
+                      scan_length_mm, &pass->start_mm);
+    pass->seconds =
+      ft_estimate_scan_seconds(ppi, FT_DETAIL_BIN, pass->length_mm);
   }
-  for(i = 0; i < np / 2; i++) {
-    ft_dpass t = out->p[i];
-    out->p[i] = out->p[np - 1 - i];
-    out->p[np - 1 - i] = t;
+  for(uint32_t index = 0; index < pass_count / 2; index++) {
+    ft_detail_pass swap = plan->passes[index];
+    plan->passes[index] = plan->passes[pass_count - 1 - index];
+    plan->passes[pass_count - 1 - index] = swap;
   }
-  out->npass = np;
-  out->seconds = best[n];
+  plan->pass_count = pass_count;
+  plan->seconds = best_seconds[frame_count];
   return 0;
 }
 
-long ft_dplan_mid(long lo, long hi) {
-  long s = lo + hi;
-  return s >= 0 ? (s + 1) / 2 : -((-s + 1) / 2);
+int64_t ft_get_focus_middle(int64_t low, int64_t high) {
+  int64_t sum = low + high;
+  /* halve, rounding half away from zero */
+  if(sum >= 0) return (sum + 1) / 2;
+  return -((-sum + 1) / 2);
 }
 
-int ft_dplan_selected(const char* list, int index, ft_err* e) {
-  const char* p = list;
-  int hit = 0;
-  if(!p || !*p) return ft_fail(e, "select: empty frame list");
-  for(;;) {
-    long a = 0, b;
-    int digits = 0;
-    while(*p >= '0' && *p <= '9' && digits < 6) {
-      a = a * 10 + (*p++ - '0');
-      digits++;
+/* Read up to MAX_LIST_DIGITS decimal digits at *cursor.
+ * Returns how many digits were read; *value receives the number. */
+static uint32_t read_frame_number(const char** cursor, int64_t* value) {
+  uint32_t digit_count = 0;
+  *value = 0;
+  while(**cursor >= '0' && **cursor <= '9' && digit_count < MAX_LIST_DIGITS) {
+    *value = *value * 10 + (**cursor - '0');
+    (*cursor)++;
+    digit_count++;
+  }
+  return digit_count;
+}
+
+int32_t ft_is_frame_selected(const char* list, uint32_t index, ft_err* error) {
+  if(list == NULL || list[0] == '\0') {
+    return ft_fail(error, "select: empty frame list");
+  }
+  const char* cursor = list;
+  bool is_selected = false;
+  while(true) {
+    int64_t first;
+    if(read_frame_number(&cursor, &first) == 0 || first < 1) {
+      return ft_fail(error, "select: expected a frame number in '%s'", list);
     }
-    if(!digits || a < 1)
-      return ft_fail(e, "select: expected a frame number in '%s'", list);
-    b = a;
-    if(*p == '-') {
-      p++;
-      b = 0;
-      digits = 0;
-      while(*p >= '0' && *p <= '9' && digits < 6) {
-        b = b * 10 + (*p++ - '0');
-        digits++;
+    int64_t last = first;
+    if(*cursor == '-') {
+      cursor++;
+      if(read_frame_number(&cursor, &last) == 0 || last < first) {
+        return ft_fail(error, "select: bad range in '%s'", list);
       }
-      if(!digits || b < a) return ft_fail(e, "select: bad range in '%s'", list);
     }
-    hit |= index >= a && index <= b;
-    if(*p == 0) return hit;
-    if(*p++ != ',')
-      return ft_fail(e, "select: unexpected '%c' in '%s'", p[-1], list);
+    if(index >= first && index <= last) is_selected = true;
+    if(*cursor == '\0') return is_selected ? 1 : 0;
+    if(*cursor != ',') {
+      return ft_fail(error, "select: unexpected '%c' in '%s'", *cursor, list);
+    }
+    cursor++;
   }
 }
 
-void ft_dscan_for(double ppi, int bin, double x0, double w, double y0,
-                  double len, ft_dscan* s) {
-  double scale = ppi * bin;
-  s->ppi = ppi;
-  s->bin = bin;
-  s->x_out =
-    (long)((ft_get_ccd_pixel_from_mm(x0, scale) - FT_CCD_FIRST_PIXEL) / bin +
-           0.5);
-  s->y_line = (long)(y0 / 25.4 * ppi + 0.5);
-  s->px = (long)(w / 25.4 * ppi + 0.5);
-  s->lines = (long)(len / 25.4 * ppi + 0.5);
+/* round to the nearest integer, halves up */
+static int64_t round_to_int64(double value) {
+  return (int64_t)floor(value + 0.5);
 }
 
-void ft_dscan_reach(double ppi, int bin, double* lo, double* hi) {
-  *lo = ft_get_mm_from_ccd_pixel(FT_CCD_FIRST_PIXEL, ppi * bin);
-  *hi = ft_get_mm_from_ccd_pixel(FT_CCD_FIRST_PIXEL + FT_CCD_PIXEL_COUNT,
-                                 ppi * bin);
+void ft_make_detail_scan(double ppi, int32_t bin, double across_start_mm,
+                         double width_mm, double along_start_mm,
+                         double length_mm, ft_detail_scan* scan) {
+  double scale_ppi = ppi * bin;
+  double first_ccd_pixel = ft_get_ccd_pixel_from_mm(across_start_mm, scale_ppi);
+  scan->ppi = ppi;
+  scan->bin = bin;
+  /* + 0.5 then truncate: Sancho's crop rounding, kept as it is */
+  scan->first_pixel =
+    (int64_t)((first_ccd_pixel - FT_CCD_FIRST_PIXEL) / bin + 0.5);
+  scan->first_line = (int64_t)(along_start_mm / MM_PER_INCH * ppi + 0.5);
+  scan->pixel_count = (int64_t)(width_mm / MM_PER_INCH * ppi + 0.5);
+  scan->line_count = (int64_t)(length_mm / MM_PER_INCH * ppi + 0.5);
 }
 
-static long round_l(double v) { return (long)floor(v + 0.5); }
-
-long ft_dscan_line(const ft_dscan* s, double y_mm) {
-  /* aligned line l is green row l + k of the scan (write_crop) */
-  return round_l(y_mm * s->ppi / 25.4) - s->y_line - 12 / s->bin;
+void ft_get_ccd_reach_mm(double ppi, int32_t bin, double* first_mm,
+                         double* last_mm) {
+  double scale_ppi = ppi * bin;
+  *first_mm = ft_get_mm_from_ccd_pixel(FT_CCD_FIRST_PIXEL, scale_ppi);
+  *last_mm = ft_get_mm_from_ccd_pixel(FT_CCD_FIRST_PIXEL + FT_CCD_PIXEL_COUNT,
+                                      scale_ppi);
 }
 
-long ft_dscan_px(const ft_dscan* s, double x_mm) {
-  return round_l((ft_get_ccd_pixel_from_mm(x_mm, s->ppi * s->bin) -
-                  FT_CCD_FIRST_PIXEL) /
-                 s->bin) -
-         s->x_out;
+int64_t ft_get_scan_line(const ft_detail_scan* scan, double along_mm) {
+  /* aligned line l is green row l + row spacing of the scan (Sancho's
+   * write_crop) */
+  int64_t row_spacing = FT_CCD_ROW_SPACING_LINES / scan->bin;
+  return round_to_int64(along_mm * scan->ppi / MM_PER_INCH) -
+         scan->first_line -
+         row_spacing;
 }
 
-int ft_dscan_ranges(const ft_dscan* s, double y0, double y1, double x0,
-                    double x1, int r[4]) {
-  long aligned = s->lines - 2 * (12 / s->bin);
-  long l0 = ft_dscan_line(s, y0), l1 = ft_dscan_line(s, y1);
-  long c0 = ft_dscan_px(s, x0), c1 = ft_dscan_px(s, x1);
-  if(l0 < 0) l0 = 0;
-  if(c0 < 0) c0 = 0;
-  if(l1 > aligned) l1 = aligned;
-  if(c1 > s->px) c1 = s->px;
-  if(l1 <= l0 || c1 <= c0) return -1;
-  r[0] = (int)l0;
-  r[1] = (int)l1;
-  r[2] = (int)c0;
-  r[3] = (int)c1;
+int64_t ft_get_scan_pixel(const ft_detail_scan* scan, double across_mm) {
+  double ccd_pixel = ft_get_ccd_pixel_from_mm(across_mm, scan->ppi * scan->bin);
+  return round_to_int64((ccd_pixel - FT_CCD_FIRST_PIXEL) / scan->bin) -
+         scan->first_pixel;
+}
+
+int32_t ft_find_scan_ranges(const ft_detail_scan* scan, double along_start_mm,
+                            double along_end_mm, double across_start_mm,
+                            double across_end_mm, int32_t ranges[4]) {
+  int64_t row_spacing = FT_CCD_ROW_SPACING_LINES / scan->bin;
+  int64_t aligned_lines = scan->line_count - 2 * row_spacing;
+  int64_t first_line = ft_get_scan_line(scan, along_start_mm);
+  int64_t end_line = ft_get_scan_line(scan, along_end_mm);
+  int64_t first_pixel = ft_get_scan_pixel(scan, across_start_mm);
+  int64_t end_pixel = ft_get_scan_pixel(scan, across_end_mm);
+  if(first_line < 0) first_line = 0;
+  if(first_pixel < 0) first_pixel = 0;
+  if(end_line > aligned_lines) end_line = aligned_lines;
+  if(end_pixel > scan->pixel_count) end_pixel = scan->pixel_count;
+  if(end_line <= first_line || end_pixel <= first_pixel) return -1;
+  /* safe: all four are within the scan, far below 2^31 */
+  ranges[0] = (int32_t)first_line;
+  ranges[1] = (int32_t)end_line;
+  ranges[2] = (int32_t)first_pixel;
+  ranges[3] = (int32_t)end_pixel;
   return 0;
 }
 
-int ft_dscan_thumb(const ft_dscan* s) {
-  long f = round_l(s->ppi / FT_DETAIL_THUMB_PPI);
-  return f < 1 ? 1 : (int)f;
+int32_t ft_get_thumbnail_factor(const ft_detail_scan* scan) {
+  int64_t factor = round_to_int64(scan->ppi / FT_DETAIL_THUMBNAIL_PPI);
+  return factor < 1 ? 1 : (int32_t)factor;
 }
 
-void ft_dscan_axes(const ft_dscan* s, int f, ft_axes* ax) {
-  double scale = s->ppi * s->bin;
-  double half = (f * s->bin - 1) / 2.0; /* centre of a box, CCD px */
-  ax->y_mm_per_line = 25.4 / s->ppi * f;
-  ax->y_mm0 = (s->y_line + 12 / s->bin + (f - 1) / 2.0) * 25.4 / s->ppi;
-  ax->x_mm0 = ft_get_mm_from_ccd_pixel(
-    ft_get_ccd_pixel_from_output(s->x_out, 0, s->bin) + half, scale);
-  ax->x_mm_per_px =
-    ft_get_mm_from_ccd_pixel(
-      ft_get_ccd_pixel_from_output(s->x_out, f, s->bin) + half, scale) -
-    ax->x_mm0;
+void ft_get_detail_axes(const ft_detail_scan* scan, int32_t factor,
+                        ft_axes* axes) {
+  double scale_ppi = scan->ppi * scan->bin;
+  int32_t row_spacing = FT_CCD_ROW_SPACING_LINES / scan->bin;
+  /* the centre of a box: factor x bin CCD pixels wide */
+  double box_centre = (factor * scan->bin - 1) / 2.0;
+  axes->mm_per_line = MM_PER_INCH / scan->ppi * factor;
+  axes->first_line_mm = (scan->first_line + row_spacing + (factor - 1) / 2.0) *
+                        MM_PER_INCH /
+                        scan->ppi;
+  double first_ccd_pixel =
+    ft_get_ccd_pixel_from_output(scan->first_pixel, 0, scan->bin) + box_centre;
+  double next_ccd_pixel =
+    ft_get_ccd_pixel_from_output(scan->first_pixel, factor, scan->bin) +
+    box_centre;
+  axes->first_pixel_mm = ft_get_mm_from_ccd_pixel(first_ccd_pixel, scale_ppi);
+  axes->mm_per_pixel =
+    ft_get_mm_from_ccd_pixel(next_ccd_pixel, scale_ppi) - axes->first_pixel_mm;
 }

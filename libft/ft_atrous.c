@@ -2,108 +2,143 @@
 #include "ft_atrous.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <string.h>
 
 /* sqrt(sum((a_j - a_{j+1})^2)) over the 2-D equivalent filters a_j of
  * c_j: the exact per-scale std for unit white noise */
-const double FT_ATROUS_F[FT_ATROUS_SCALES] = {0.890796, 0.200664, 0.085508,
-                                              0.041217, 0.020425};
-const double FT_ATROUS_W[FT_ATROUS_SCALES] = {1.0, 0.8, 0.5, 0.25, 0.1};
+const double FT_ATROUS_NOISE_STD[FT_ATROUS_SCALES] = {
+  0.890796, 0.200664, 0.085508, 0.041217, 0.020425};
+const double FT_ATROUS_DEFAULT_WEIGHTS[FT_ATROUS_SCALES] = {1.0, 0.8, 0.5, 0.25,
+                                                            0.1};
 
+/* the B3 spline kernel [1 4 6 4 1] / 16 */
 static const float B3[5] = {1.f / 16, 4.f / 16, 6.f / 16, 4.f / 16, 1.f / 16};
 
-/* mirror without repeating the edge sample; one reflection is enough for
- * |i| < n + n - 1 (n >= FT_ATROUS_MIN covers the hole 16 x 2) */
-static int refl(int i, int n) {
-  return i < 0 ? -i : i >= n ? 2 * n - 2 - i : i;
+/* Mirror without repeating the edge sample. One reflection is enough for
+ * |index| < count + count - 1 (count >= FT_ATROUS_MIN_SIDE covers the
+ * hole 16 x 2). */
+static uint32_t reflect(int64_t index, uint32_t count) {
+  if(index < 0) return (uint32_t)-index;
+  if(index >= count) return (uint32_t)(2 * (int64_t)count - 2 - index);
+  return (uint32_t)index;
 }
 
-static float clean(float v) { return isfinite(v) ? v : 0.f; }
+/* NaN and inf count as 0 */
+static float clean(float value) { return isfinite(value) ? value : 0.f; }
 
-size_t ft_atrous_scratch_bytes(int w, int band_h) {
-  int rows = band_h + 2 * FT_ATROUS_HALO;
-  return ((size_t)2 * rows * w + w) * sizeof(float);
+size_t ft_get_atrous_scratch_bytes(uint32_t width, uint32_t band_height) {
+  /* two planes of the band and its halos, and one row */
+  size_t rows = (size_t)band_height + 2 * FT_ATROUS_HALO_ROWS;
+  return ((size_t)2 * rows * width + width) * sizeof(float);
 }
 
-void ft_atrous_smooth(const float* in, int w, int h, int j, float* out,
-                      float* row) {
-  int s = 1 << j, x, y, t;
-  /* vertical in -> out, then horizontal in place through row */
-  for(y = 0; y < h; y++) {
-    const float* r[5];
-    float* o = out + (size_t)y * w;
-    for(t = 0; t < 5; t++) r[t] = in + (size_t)refl(y + (t - 2) * s, h) * w;
-    for(x = 0; x < w; x++)
-      o[x] = B3[0] * r[0][x] +
-             B3[1] * r[1][x] +
-             B3[2] * r[2][x] +
-             B3[3] * r[3][x] +
-             B3[4] * r[4][x];
+void ft_smooth_atrous(const float* input, uint32_t width, uint32_t height,
+                      uint32_t scale, float* output, float* row) {
+  /* the distance between taps: 2^scale */
+  int64_t spacing = (int64_t)1 << scale;
+  /* vertical input -> output, then horizontal in place through row */
+  for(uint32_t y = 0; y < height; y++) {
+    const float* rows[5];
+    float* target = output + (size_t)y * width;
+    for(int64_t tap = 0; tap < 5; tap++) {
+      rows[tap] =
+        input + (size_t)reflect(y + (tap - 2) * spacing, height) * width;
+    }
+    for(uint32_t x = 0; x < width; x++) {
+      target[x] = B3[0] * rows[0][x] +
+                  B3[1] * rows[1][x] +
+                  B3[2] * rows[2][x] +
+                  B3[3] * rows[3][x] +
+                  B3[4] * rows[4][x];
+    }
   }
-  for(y = 0; y < h; y++) {
-    float* o = out + (size_t)y * w;
-    memcpy(row, o, (size_t)w * sizeof *row);
-    for(x = 0; x < w; x++)
-      o[x] = B3[0] * row[refl(x - 2 * s, w)] +
-             B3[1] * row[refl(x - s, w)] +
-             B3[2] * row[x] +
-             B3[3] * row[refl(x + s, w)] +
-             B3[4] * row[refl(x + 2 * s, w)];
+  for(uint32_t y = 0; y < height; y++) {
+    float* target = output + (size_t)y * width;
+    memcpy(row, target, (size_t)width * sizeof *row);
+    for(uint32_t x = 0; x < width; x++) {
+      target[x] = B3[0] * row[reflect(x - 2 * spacing, width)] +
+                  B3[1] * row[reflect(x - spacing, width)] +
+                  B3[2] * row[x] +
+                  B3[3] * row[reflect(x + spacing, width)] +
+                  B3[4] * row[reflect(x + 2 * spacing, width)];
+    }
   }
 }
 
-static float soft(float d, float t) {
-  return d > t ? d - t : d < -t ? d + t : 0.f;
+/* soft threshold: shrink towards 0 by threshold, 0 inside it */
+static float shrink(float detail, float threshold) {
+  if(detail > threshold) return detail - threshold;
+  if(detail < -threshold) return detail + threshold;
+  return 0.f;
 }
 
-void ft_atrous_band(const float* in, int w, int h, int y0, int y1, float* out,
-                    double k, double sigma, const double* wts, void* scratch) {
-  int r0, r1, n, j, y, x;
-  float *a = scratch, *b, *row, *t;
-  if(y0 < 0) y0 = 0;
-  if(y1 > h) y1 = h;
-  if(y0 >= y1) return;
-  if(w < FT_ATROUS_MIN || h < FT_ATROUS_MIN) {
-    for(y = y0; y < y1; y++)
-      for(x = 0; x < w; x++)
-        out[(size_t)y * w + x] = clean(in[(size_t)y * w + x]);
+void ft_shrink_atrous_band(const float* input, uint32_t width, uint32_t height,
+                           int32_t first_row, int32_t end_row, float* output,
+                           double k, double sigma, const double* weights,
+                           void* scratch) {
+  if(first_row < 0) first_row = 0;
+  if(end_row > (int64_t)height) end_row = (int32_t)height;
+  if(first_row >= end_row) return;
+  if(width < FT_ATROUS_MIN_SIDE || height < FT_ATROUS_MIN_SIDE) {
+    for(int32_t y = first_row; y < end_row; y++) {
+      for(uint32_t x = 0; x < width; x++) {
+        output[(size_t)y * width + x] = clean(input[(size_t)y * width + x]);
+      }
+    }
     return;
   }
-  if(!wts) wts = FT_ATROUS_W;
-  /* the region the band depends on; mirrored at its ends, which only
-   * matters (and is exact) where they are the image edges */
-  r0 = y0 - FT_ATROUS_HALO < 0 ? 0 : y0 - FT_ATROUS_HALO;
-  r1 = y1 + FT_ATROUS_HALO > h ? h : y1 + FT_ATROUS_HALO;
-  n = r1 - r0;
-  b = a + (size_t)n * w;
-  row = b + (size_t)n * w;
-  for(y = 0; y < n; y++)
-    for(x = 0; x < w; x++)
-      a[(size_t)y * w + x] = clean(in[(size_t)(r0 + y) * w + x]);
-  for(y = y0; y < y1; y++)
-    memset(out + (size_t)y * w, 0, (size_t)w * sizeof *out);
-  for(j = 0; j < FT_ATROUS_SCALES; j++) {
-    float th = (float)(k * sigma * FT_ATROUS_F[j] * wts[j]);
-    ft_atrous_smooth(a, w, n, j, b, row);
-    for(y = y0; y < y1; y++) {
-      const float* c = a + (size_t)(y - r0) * w;
-      const float* s = b + (size_t)(y - r0) * w;
-      float* o = out + (size_t)y * w;
-      for(x = 0; x < w; x++) o[x] += soft(c[x] - s[x], th);
+  if(weights == NULL) weights = FT_ATROUS_DEFAULT_WEIGHTS;
+  /* the rows the band depends on; mirrored at their ends, which only
+   * matters (and is exact) where they are the image's edges */
+  int32_t region_start =
+    first_row - FT_ATROUS_HALO_ROWS < 0 ? 0 : first_row - FT_ATROUS_HALO_ROWS;
+  int32_t region_end = end_row + FT_ATROUS_HALO_ROWS > (int64_t)height
+                         ? (int32_t)height
+                         : end_row + FT_ATROUS_HALO_ROWS;
+  uint32_t region_rows = (uint32_t)(region_end - region_start);
+  /* current is c_j, smoothed receives c_{j+1}; they swap each scale */
+  float* current = scratch;
+  float* smoothed = current + (size_t)region_rows * width;
+  float* row = smoothed + (size_t)region_rows * width;
+  for(uint32_t y = 0; y < region_rows; y++) {
+    for(uint32_t x = 0; x < width; x++) {
+      current[(size_t)y * width + x] =
+        clean(input[((size_t)region_start + y) * width + x]);
     }
-    t = a;
-    a = b;
-    b = t;
   }
-  for(y = y0; y < y1; y++) {
-    const float* c = a + (size_t)(y - r0) * w;
-    float* o = out + (size_t)y * w;
-    for(x = 0; x < w; x++) o[x] += c[x];
+  for(int32_t y = first_row; y < end_row; y++) {
+    memset(output + (size_t)y * width, 0, (size_t)width * sizeof *output);
+  }
+  for(uint32_t scale = 0; scale < FT_ATROUS_SCALES; scale++) {
+    float threshold =
+      (float)(k * sigma * FT_ATROUS_NOISE_STD[scale] * weights[scale]);
+    ft_smooth_atrous(current, width, region_rows, scale, smoothed, row);
+    /* the detail w_j = c_j - c_{j+1}, shrunk, added up */
+    for(int32_t y = first_row; y < end_row; y++) {
+      const float* coarse = current + (size_t)(y - region_start) * width;
+      const float* smooth = smoothed + (size_t)(y - region_start) * width;
+      float* target = output + (size_t)y * width;
+      for(uint32_t x = 0; x < width; x++) {
+        target[x] += shrink(coarse[x] - smooth[x], threshold);
+      }
+    }
+    float* swap = current;
+    current = smoothed;
+    smoothed = swap;
+  }
+  /* plus the last smooth plane, c_5 */
+  for(int32_t y = first_row; y < end_row; y++) {
+    const float* coarse = current + (size_t)(y - region_start) * width;
+    float* target = output + (size_t)y * width;
+    for(uint32_t x = 0; x < width; x++) target[x] += coarse[x];
   }
 }
 
-void ft_atrous(const float* in, int w, int h, float* out, double k,
-               double sigma, const double* wts, void* scratch) {
-  /* the band copies the whole input first, so out may equal in */
-  ft_atrous_band(in, w, h, 0, h, out, k, sigma, wts, scratch);
+void ft_shrink_atrous(const float* input, uint32_t width, uint32_t height,
+                      float* output, double k, double sigma,
+                      const double* weights, void* scratch) {
+  /* the band copies the whole input first, so output may equal input */
+  ft_shrink_atrous_band(input, width, height, 0, (int32_t)height, output, k,
+                        sigma, weights, scratch);
 }

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""ftdev plan: sizes per frame for a share scan (ft_share_plan_sizes), the
+"""ftdev plan: sizes per frame for a share scan (ft_plan_share_sizes), the
 web page's planner from a terminal."""
 import shutil
 import subprocess

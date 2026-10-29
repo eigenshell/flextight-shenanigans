@@ -11,90 +11,130 @@
  *   all       3x3 matrix to linear Rec.2020, then the curves (master,
  *             then per channel) on sRGB-encoded values
  *
- * ft_render_compile turns a recipe into lookup tables (per-channel input
+ * ft_compile_render turns a recipe into lookup tables (per-channel input
  * LUT indexed by the float bits of T, i.e. log-spaced; per-channel curve
- * LUT indexed by sqrt(v)); ft_render_apply streams pixels through them
+ * LUT indexed by sqrt(v)); ft_apply_render streams pixels through them
  * with no transcendental calls, fast enough for live sliders in the
  * browser (this file compiles to WASM: no I/O, no allocation, no
- * threads). ft_render_direct evaluates the same maths per pixel in double;
- * the tests hold the LUT path to it. */
+ * threads). ft_render_pixel_directly evaluates the same maths per pixel in
+ * double; the tests hold the LUT path to it. */
 #ifndef FT_RENDER_H
 #define FT_RENDER_H
+
 #include <stddef.h>
+#include <stdint.h>
 
 #include "ft.h"
 #include "ft_curve.h"
 #include "ft_image.h"
 
-typedef enum { FT_RENDER_NEG, FT_RENDER_SLIDE, FT_RENDER_BW } ft_render_mode;
+/* What the film is, for the render. */
+typedef enum ft_render_mode {
+  FT_RENDER_NEGATIVE,
+  FT_RENDER_SLIDE,
+  FT_RENDER_BW
+} ft_render_mode;
 
-#define FT_RENDER_T_MAX 1.26f /* LUT top: noise/flare above open beam */
+/* the input table's top: noise and flare reach above the open beam */
+#define FT_RENDER_MAX_TRANSMITTANCE 1.26f
 
-typedef struct {
+/* How to render: plain numbers a user's sliders set. */
+typedef struct ft_recipe {
   ft_render_mode mode;
-  float base[3];       /* D: film base (neg; b&w uses base[1]) or the
-                          black of unexposed film (slide) */
-  float range[3];      /* neg: D above base of the brightest highlight,
-                          per channel (b&w uses range[1]) */
-  float exposure;      /* stops, + = brighter */
-  float tint[3];       /* CC (10 CC = 0.10 D): + = redder, greener,
-                          bluer; b&w: must be 0 */
-  float grade;         /* paper contrast, 1.5 = normal */
-  float paper_black;   /* D of the paper's deepest black */
-  float paper_white;   /* D of the paper base (white = 1.0 out) */
-  float bw_weights[3]; /* b&w luminance from R, G, B; sum 1 */
-  float matrix[9];     /* scanner RGB -> linear Rec.2020, row-major */
-  ft_curve master, ch[3];
+  /* density of the film base (negative; b&w uses [1]) or of the black of
+   * unexposed film (slide) */
+  float base_density[3];
+  /* negative: the density above the base of the brightest highlight, per
+   * channel (b&w uses [1]) */
+  float range_density[3];
+  /* print exposure, stops; + = brighter */
+  float exposure;
+  /* filtration, CC (10 CC = 0.10 D): + = redder, greener, bluer; b&w:
+   * must be 0 */
+  float tint[3];
+  /* paper contrast, 1.5 = normal */
+  float grade;
+  /* density of the paper's deepest black */
+  float paper_black;
+  /* density of the paper base (white = 1.0 out) */
+  float paper_white;
+  /* b&w: luminance from R, G, B; they sum to 1 */
+  float bw_weights[3];
+  /* scanner RGB -> linear Rec.2020, row-major */
+  float matrix[9];
+  /* the master curve, then one per channel */
+  ft_curve master;
+  ft_curve channels[3];
 } ft_recipe;
 
-/* neutral recipe for mode: base 0 (neg) / 3.0 (slide), range 1, exposure
- * and tint 0, grade 1.5, paper 0..2 D, Rec.709 b&w weights, the linear
- * sRGB -> Rec.2020 matrix, linear curves */
-void ft_recipe_default(ft_recipe* r, ft_render_mode m);
-/* -1 with e naming the field if any value is out of range */
-int ft_recipe_validate(const ft_recipe* r, ft_err* e);
-/* set base from per-channel film densities; b&w: folds them to the
- * luminance density of r->bw_weights and stores it in all three. If any
- * d[c] is not finite, r->base is left unchanged. */
-void ft_recipe_set_base(ft_recipe* r, const float d[3]);
+/* A neutral recipe for mode: base 0 (negative) / 3.0 (slide), range 1,
+ * exposure and tint 0, grade 1.5, paper 0..2 D, Rec.709 b&w weights, the
+ * linear sRGB -> Rec.2020 matrix, linear curves. */
+void ft_init_recipe(ft_recipe* recipe, ft_render_mode mode);
+
+/* Check every value is in range.
+ * Returns 0, or -1 with error naming the field. */
+int32_t ft_validate_recipe(const ft_recipe* recipe, ft_err* error);
+
+/* Set the base from per-channel film densities. b&w folds them to the
+ * luminance density of bw_weights and stores it in all three. When any
+ * density is not finite, the base is left unchanged. */
+void ft_set_recipe_base(ft_recipe* recipe, const float density[3]);
 
 /* Accuracy: the compiled path is within 2/65535 (sRGB-encoded) of
- * ft_render_direct for grade/range up to ~25; up to ~15/65535 at the
- * validated extreme (grade 5, range 0.05): invisible at 8 bits.
- * LUT sizes: input LUT nodes are the floats whose bits >> 13 run from
- * FT_RENDER_IN_K0 (10^-4.5) to that of FT_RENDER_T_MAX, 1024 per octave */
-#define FT_RENDER_IN_SHIFT 13
-#define FT_RENDER_IN_K0 114725u
-#define FT_RENDER_IN_N 15591
-#define FT_RENDER_CURVE_N 16384
+ * ft_render_pixel_directly for grade/range up to ~25; up to ~15/65535 at
+ * the validated extreme (grade 5, range 0.05): invisible at 8 bits.
+ *
+ * The input table's nodes are the floats whose bits >> 13 run from
+ * FT_RENDER_INPUT_FIRST_KEY (10^-4.5) to that of
+ * FT_RENDER_MAX_TRANSMITTANCE: 1024 per octave. */
+#define FT_RENDER_INPUT_SHIFT 13
+#define FT_RENDER_INPUT_FIRST_KEY 114725u
+#define FT_RENDER_INPUT_SIZE 15591
+/* the curve table's entries, indexed by sqrt(value) */
+#define FT_RENDER_CURVE_SIZE 16384
 
-/* ~380 KB: keep it static or on the heap, not on a (WASM) stack */
-typedef struct {
+/* A compiled recipe. ~380 KB: keep it static or on the heap, not on a
+ * (wasm) stack. */
+typedef struct ft_render {
   ft_render_mode mode;
-  float w[3];
-  float in[3][FT_RENDER_IN_N];
-  float m[9];
-  float out[3][FT_RENDER_CURVE_N];
+  /* b&w: the luminance weights */
+  float bw_weights[3];
+  /* film -> linear, per channel, indexed by the bits of T */
+  float input[3][FT_RENDER_INPUT_SIZE];
+  /* the recipe's matrix */
+  float matrix[9];
+  /* the curves, per channel, indexed by sqrt(value) */
+  float output[3][FT_RENDER_CURVE_SIZE];
 } ft_render;
 
-/* an input LUT (in[] above) at transmittance t: linear between the two
- * nodes around t, clamped to the LUT's range (NaN and -inf: the floor) */
-float ft_render_lut_in(const float* tab, float t);
-/* validates r, then builds c; -1 with e filled on a bad recipe */
-int ft_render_compile(const ft_recipe* r, ft_render* c, ft_err* e);
-/* npx interleaved RGB pixels; in == out is allowed. NaN, -inf and values
- * below the floor -> the floor; +inf and values above FT_RENDER_T_MAX ->
- * T_MAX. Never fails, never writes NaN */
-void ft_render_apply(const ft_render* c, const float* in, float* out,
-                     size_t npx);
-/* the same pipeline in double, one pixel; r must be valid */
-void ft_render_direct(const ft_recipe* r, const float in[3], float out[3]);
-/* apply to every pixel of im in place; im becomes linear Rec.2020
- * (xyz_to_rgb set to match) */
-void ft_render_image(const ft_render* c, ft_image* im);
+/* Look up an input table at transmittance: linear between the two nodes
+ * around it, clamped to the table's range (NaN and -inf: the floor). */
+float ft_look_up_render_input(const float* table, float transmittance);
 
-/* sRGB transfer curve, clamped to [0,1] (shared with the writers) */
-double ft_srgb_encode(double v);
-double ft_srgb_decode(double v);
+/* Validate the recipe, then build the tables.
+ * Returns 0, or -1 with error filled on a bad recipe. */
+int32_t ft_compile_render(const ft_recipe* recipe, ft_render* render,
+                          ft_err* error);
+
+/* Render pixel_count interleaved RGB pixels; input == output is allowed.
+ * NaN, -inf and values below the floor give the floor; +inf and values
+ * above FT_RENDER_MAX_TRANSMITTANCE give that. Never fails, never writes
+ * NaN. */
+void ft_apply_render(const ft_render* render, const float* input, float* output,
+                     size_t pixel_count);
+
+/* The same pipeline in double, one pixel; the recipe must be valid. */
+void ft_render_pixel_directly(const ft_recipe* recipe, const float input[3],
+                              float output[3]);
+
+/* Render every pixel of image in place; image becomes linear Rec.2020
+ * (xyz_to_rgb set to match). */
+void ft_render_image(const ft_render* render, ft_image* image);
+
+/* The sRGB transfer curve and its inverse, clamped to [0,1] (shared with
+ * the writers). */
+double ft_encode_srgb(double value);
+double ft_decode_srgb(double value);
 
 #endif

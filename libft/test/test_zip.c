@@ -34,36 +34,37 @@ int main(int argc, char** argv) {
   ft_err e;
   char longname[70000];
 
-  CHECK(ft_crc32(0, "123456789", 9) == 0xCBF43926UL);
-  CHECK(ft_crc32(ft_crc32(0, "1234", 4), "56789", 5) == 0xCBF43926UL);
-  CHECK(ft_crc32(0, "", 0) == 0);
+  CHECK(ft_compute_crc32(0, "123456789", 9) == 0xCBF43926UL);
+  CHECK(ft_compute_crc32(ft_compute_crc32(0, "1234", 4), "56789", 5) ==
+        0xCBF43926UL);
+  CHECK(ft_compute_crc32(0, "", 0) == 0);
 
-  ft_zip_init(&z);
-  CHECK(ft_zip_add(&z, "a.txt", "abc", 3, &e) == 0);
-  CHECK(ft_zip_finish(&z, &out, &n, &e) == 0);
+  ft_init_zip(&z);
+  CHECK(ft_add_to_zip(&z, "a.txt", "abc", 3, &e) == 0);
+  CHECK(ft_finish_zip(&z, &out, &n, &e) == 0);
   CHECK(n == sizeof ONE && memcmp(out, ONE, n) == 0);
   free(out);
 
   /* an empty archive is just the end record */
-  ft_zip_init(&z);
-  CHECK(ft_zip_finish(&z, &out, &n, &e) == 0);
+  ft_init_zip(&z);
+  CHECK(ft_finish_zip(&z, &out, &n, &e) == 0);
   CHECK(n == 22 && rd32(out) == 0x06054b50UL && rd16(out + 10) == 0);
   free(out);
 
   /* refusals: the archive is still usable after one */
-  ft_zip_init(&z);
-  CHECK(ft_zip_add(&z, "", "x", 1, &e) == -1);
-  CHECK(strcmp(e.msg, "zip: bad name") == 0);
-  CHECK(ft_zip_add(&z, "../x", "x", 1, &e) == -1);
-  CHECK(strcmp(e.msg, "zip: bad name ../x") == 0);
-  CHECK(ft_zip_add(&z, "/x", "x", 1, &e) == -1);
+  ft_init_zip(&z);
+  CHECK(ft_add_to_zip(&z, "", "x", 1, &e) == -1);
+  CHECK(strcmp(e.message, "zip: bad name") == 0);
+  CHECK(ft_add_to_zip(&z, "../x", "x", 1, &e) == -1);
+  CHECK(strcmp(e.message, "zip: bad name ../x") == 0);
+  CHECK(ft_add_to_zip(&z, "/x", "x", 1, &e) == -1);
   memset(longname, 'a', sizeof longname - 1);
   longname[sizeof longname - 1] = 0;
-  CHECK(ft_zip_add(&z, longname, "x", 1, &e) == -1);
-  CHECK(strcmp(e.msg, "zip: name too long") == 0);
-  CHECK(ft_zip_add(&z, "frame01.jpg", "\377\330\377\331", 4, &e) == 0);
-  CHECK(ft_zip_add(&z, "frame01.jpg.txt", "emulsion=x\n", 11, &e) == 0);
-  CHECK(ft_zip_finish(&z, &out, &n, &e) == 0);
+  CHECK(ft_add_to_zip(&z, longname, "x", 1, &e) == -1);
+  CHECK(strcmp(e.message, "zip: name too long") == 0);
+  CHECK(ft_add_to_zip(&z, "frame01.jpg", "\377\330\377\331", 4, &e) == 0);
+  CHECK(ft_add_to_zip(&z, "frame01.jpg.txt", "emulsion=x\n", 11, &e) == 0);
+  CHECK(ft_finish_zip(&z, &out, &n, &e) == 0);
   CHECK(rd16(out + n - 12) == 2);                         /* entries */
   CHECK(rd32(out + n - 6) == 30 + 11 + 4 + 30 + 15 + 11); /* cd offset */
   if(argc > 1) {

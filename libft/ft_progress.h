@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-/* ftpoc --progress: one machine-readable line per event, for the web
+/* Sancho --progress: one machine-readable line per event, for the web
  * server and page (the human output stays as it is around them):
  *
  *   progress begin window 3        a run of 3 units (preview, window,
@@ -22,65 +22,99 @@
  *   progress file C:\scans\a.raw   a finished file (the rest of the line)
  *   progress end ok                ok, stopped, failed or refused
  *
- * Formatting and parsing into buffers only (the browser tier). */
+ * Formatting and parsing into buffers only, so it runs in the browser. */
 #ifndef FT_PROGRESS_H
 #define FT_PROGRESS_H
+
 #include <stddef.h>
+#include <stdint.h>
 
-typedef enum {
-  FT_PG_BEGIN,
-  FT_PG_UNIT,
-  FT_PG_LINES,
-  FT_PG_FILE,
-  FT_PG_END,
-  FT_PG_FOCUS,
-  FT_PG_SHARP,
-  FT_PG_FOCUSED
-} ft_pg_type;
-typedef enum {
-  FT_PG_PREVIEW,
-  FT_PG_WINDOW,
-  FT_PG_FRAME,
-  FT_PG_PASS,
-  FT_PG_UPLOAD
-} ft_pg_kind;
-typedef enum {
-  FT_PG_OK,
-  FT_PG_STOPPED,
-  FT_PG_FAILED,
-  FT_PG_REFUSED
-} ft_pg_status;
-typedef enum {
-  FT_PG_MEASURED,
-  FT_PG_CHECKED,
-  FT_PG_CARRIED,
-  FT_PG_NONE
-} ft_pg_how;
+/* The event a line reports: the word after "progress". */
+typedef enum ft_progress_type {
+  FT_PROGRESS_BEGIN,
+  FT_PROGRESS_UNIT,
+  FT_PROGRESS_LINES,
+  FT_PROGRESS_FILE,
+  FT_PROGRESS_END,
+  FT_PROGRESS_FOCUS,
+  FT_PROGRESS_SHARP,
+  FT_PROGRESS_FOCUSED
+} ft_progress_type;
 
-typedef struct {
-  ft_pg_type type;
-  ft_pg_kind kind;     /* begin, unit */
-  int n;               /* begin: units in the run (0..);
-                          unit: this one (1..) */
-  int label;           /* unit: its number in the job (0..);
-                          focus: the frame (0: none given) */
-  long k, total;       /* lines: 0 <= k <= total;
-                          focus: k, the crop (1..) */
-  long off;            /* focus (with a frame), sharp, focused:
-                          the focus offset */
-  double sharp;        /* sharp: >= 0, 4 decimals on the line */
-  ft_pg_how how;       /* focused */
-  ft_pg_status status; /* end */
-  char path[260];      /* file: no '\n' or '\r', not empty */
+/* What one unit of a run is. */
+typedef enum ft_progress_kind {
+  FT_PROGRESS_PREVIEW,
+  FT_PROGRESS_WINDOW,
+  FT_PROGRESS_FRAME,
+  FT_PROGRESS_PASS,
+  FT_PROGRESS_UPLOAD
+} ft_progress_kind;
+
+/* How a run ended. */
+typedef enum ft_progress_status {
+  FT_PROGRESS_OK,
+  FT_PROGRESS_STOPPED,
+  FT_PROGRESS_FAILED,
+  FT_PROGRESS_REFUSED
+} ft_progress_status;
+
+/* Where a unit's focus offset came from. */
+typedef enum ft_progress_how {
+  FT_PROGRESS_MEASURED,
+  FT_PROGRESS_CHECKED,
+  FT_PROGRESS_CARRIED,
+  FT_PROGRESS_NONE
+} ft_progress_how;
+
+/* One progress line as values. Which fields count depends on type. */
+typedef struct ft_progress {
+  /* the event */
+  ft_progress_type type;
+  /* begin, unit: what the units are */
+  ft_progress_kind kind;
+  /* begin: units in the run (0..); unit: this unit (1..) */
+  int32_t number;
+  /* unit: its number in the job (0..); focus: the frame (0: none given) */
+  int32_t label;
+  /* lines: lines read so far (0..total); focus: the crop (1..) */
+  int64_t step;
+  /* lines: lines in the unit */
+  int64_t total;
+  /* focus (with a frame), sharp, focused: the focus offset */
+  int64_t offset;
+  /* sharp: the sharpness, >= 0, 4 decimals on the line */
+  double sharpness;
+  /* focused: where the offset came from */
+  ft_progress_how how;
+  /* end: how the run ended */
+  ft_progress_status status;
+  /* file: the file's path; not empty, no '\n' or '\r' */
+  char path[260];
 } ft_progress;
 
-#define FT_PG_BAD ((size_t)-1)
-/* p -> one line with its '\n' in buf (NUL-terminated if cap > 0); the
- * length the whole line needs: >= cap means truncated. FT_PG_BAD (buf
- * empty) for fields the format cannot carry. */
-size_t ft_progress_fmt(const ft_progress* p, char* buf, size_t cap);
-/* line[0..n) (a '\n' or "\r\n" at the end is fine) -> p; 0, or -1 when
- * it is not a well-formed progress line (other output) */
-int ft_progress_parse(const char* line, size_t n, ft_progress* p);
+/* ft_format_progress's answer for a line the format cannot carry */
+#define FT_PROGRESS_BAD ((size_t)-1)
+
+/* Format one progress line, '\n' included, into line.
+ *
+ * progress       the event
+ * line           receives the line, NUL-terminated when capacity > 0
+ * line_capacity  bytes available in line
+ *
+ * Returns the length the whole line needs (>= line_capacity: it was cut
+ * short), or FT_PROGRESS_BAD (line empty) when a field is out of range. */
+size_t ft_format_progress(const ft_progress* progress, char* line,
+                          size_t line_capacity);
+
+/* Parse one line of output.
+ *
+ * line         the line; a '\n' or "\r\n" at the end is fine
+ * line_length  its length in bytes
+ * progress     receives the event
+ *
+ * Returns 0, or -1 when the line is not a well-formed progress line
+ * (other output). */
+int32_t ft_parse_progress(const char* line, size_t line_length,
+                          ft_progress* progress);
 
 #endif

@@ -36,7 +36,7 @@ int main(void) {
   for(bi = 0; bi < 6; bi++) {
     int bin = bins[bi], k = 12 / bin, x = 9, n = 0;
     char faul[200];
-    ft_develop_opts o;
+    ft_develop_options o;
     ft_defects d;
     ft_image im;
     ft_stream* s;
@@ -49,53 +49,54 @@ int main(void) {
              "Faul Pixs\n100\t0\n%d\t+999\n100\t0\n100\t0\n%d\t+999\n"
              "%d\t+999\n",
              (x + 5) * bin + 144, (x + 6) * bin + 144, (x + 7) * bin + 144);
-    d.n = 1;
-    d.ccd[0] = (x + 20) * bin + 144;
-    d.ch[0] = 2;
+    d.count = 1;
+    d.ccd_pixel[0] = (x + 20) * bin + 144;
+    d.channels[0] = 2;
     memset(&o, 0, sizeof o);
-    o.x = x;
+    o.first_pixel = x;
     o.bin = bin;
     o.defects = &d;
 
-    ft_image_init(&im);
+    ft_init_image(&im);
     CHECK(ft_develop(raw, L, P, cal, CL, faul, strlen(faul), &o, &im, &e) == 0);
-    CHECK(im.w == L - 2 * k && im.h == P);
+    CHECK((int)im.width == L - 2 * k && (int)im.height == P);
 
-    s = ft_stream_open(P, cal, CL, faul, strlen(faul), &o, &e);
+    s = ft_open_stream(P, cal, CL, faul, strlen(faul), &o, &e);
     CHECK(s != NULL);
-    CHECK(ft_stream_k(s) == k);
+    CHECK((int)ft_get_stream_row_offset(s) == k);
     for(l = 0; l < L; l++) {
-      int rc = ft_stream_push(s, raw + (size_t)l * P * 3, out, &e);
+      int rc = ft_push_stream_line(s, raw + (size_t)l * P * 3, out, &e);
       CHECK(rc == (l >= 2 * k));
       if(rc != 1) continue;
       /* ft_develop's image is transposed: row = px, column = line */
       for(c = 0; c < P; c++)
         for(i = 0; i < 3; i++)
-          mismatch += out[c * 3 + i] != im.rgb[((size_t)c * im.w + n) * 3 + i];
+          mismatch +=
+            out[c * 3 + i] != im.pixels[((size_t)c * im.width + n) * 3 + i];
       n++;
     }
-    CHECK(n == im.w);
+    CHECK(n == (int)im.width);
     CHECK(mismatch == 0);
-    ft_stream_close(s);
-    ft_image_free(&im);
+    ft_close_stream(s);
+    ft_free_image(&im);
   }
 
   /* refusals */
   {
-    ft_develop_opts o;
+    ft_develop_options o;
     ft_defects many;
     memset(&o, 0, sizeof o);
     o.bin = 0;
-    CHECK(ft_stream_open(P, cal, CL, NULL, 0, &o, &e) == NULL);
+    CHECK(ft_open_stream(P, cal, CL, NULL, 0, &o, &e) == NULL);
     o.bin = 3;
-    CHECK(ft_stream_open(P, cal, 5, NULL, 0, &o, &e) == NULL); /* cal */
-    many.n = FT_DEFECT_MAX;
+    CHECK(ft_open_stream(P, cal, 5, NULL, 0, &o, &e) == NULL); /* cal */
+    many.count = FT_DEFECT_MAX;
     for(i = 0; i < FT_DEFECT_MAX; i++) {
-      many.ccd[i] = 1000 + i;
-      many.ch[i] = 1;
+      many.ccd_pixel[i] = 1000 + i;
+      many.channels[i] = 1;
     }
     o.defects = &many; /* 64 user + 1 Faul in R: too many */
-    CHECK(ft_stream_open(P, cal, CL, "Faul Pixs\n100\t0\n999\t+999\n", 25, &o,
+    CHECK(ft_open_stream(P, cal, CL, "Faul Pixs\n100\t0\n999\t+999\n", 25, &o,
                          &e) == NULL);
   }
   return TEST_DONE();

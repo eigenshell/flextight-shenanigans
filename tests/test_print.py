@@ -250,8 +250,8 @@ def test_cube2c_compiles_a_table(tmp_path):
     prog = tmp_path / "t.c"
     prog.write_text(
         '#include <stdio.h>\n#include "ft_emulsion_luts.h"\n'
-        "int main(void) { printf(\"%d %g %g\\n\", CUBE_test_look.n, "
-        "(double)CUBE_test_look.rgb[3], (double)CUBE_test_look.rgb[22]);"
+        "int main(void) { printf(\"%d %g %g\\n\", CUBE_test_look.size, "
+        "(double)CUBE_test_look.nodes[3], (double)CUBE_test_look.nodes[22]);"
         " return 0; }\n")
     exe = tmp_path / "t"
     r = subprocess.run(["cc", "-std=c99", "-Wall", "-Wextra", "-Wpedantic",

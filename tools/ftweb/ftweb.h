@@ -6,7 +6,7 @@
  * One strip at a time (one ftw): its strip.job and strip.print, and the
  * share frames cut from its window scans. Cutting and printing go
  * through the same libft calls as ftdev cut + ftdev print --roll
- * (ft_share_cut, ft_share_print_frame), and each frame is kept as the
+ * (ft_share_cut, ft_print_share_frame), and each frame is kept as the
  * DNG would keep it (16-bit samples, ppi and noise profile as stored,
  * the sidecar through its text), so the JPEG bytes are the CLI's
  * (tests/test_ftweb.py).
@@ -33,11 +33,11 @@ int ftw_emulsions(ftw* w);
 
 /* the landing page's resolutions, one per ppi[i] -> out: [{"ppi","mp",
  * "px","dmax"}]: mp = a 36x24 frame's megapixels (one decimal), px = its
- * long side (the planner's target, FT_SHARE_FF_LONG_MM), dmax = libft's
+ * long side (the planner's target, FT_SHARE_FULL_FRAME_LONG_MM), dmax = libft's
  * rough per-read Dmax (R) estimate (ft_estimate_dmax on today's optics
- * limits: FT_SCALE_MIN, FT_SCALE_MAX, ft_lens_default) to one decimal, or
- * null where it has none (the page shows #N/A). -1 for a ppi no bin
- * reaches. */
+ * limits: FT_SCALE_MIN_PPI, FT_SCALE_MAX_PPI, ft_lens_default) to one decimal,
+ * or null where it has none (the page shows #N/A). -1 for a ppi no bin reaches.
+ */
 int ftw_resolutions(ftw* w, const double* ppi, int n);
 /* the holders -> out: [{"name","label","frames"}] */
 int ftw_holders(ftw* w);
@@ -46,15 +46,15 @@ int ftw_holders(ftw* w);
  * built-in curve, ft_lens_default) */
 int ftw_lens(ftw* w, const char* text, size_t n);
 /* the 95 % depth of field in tandem focus steps at an optical scale
- * (ppi x bin) and bin, on that lens (ft_lens_dof95) */
+ * (ppi x bin) and bin, on that lens (ft_estimate_depth_of_field95) */
 double ftw_dof95(const ftw* w, double scale, int bin);
 
 /* strip.job. ftw_job_load: the preview's job (strip.preview.job, every
  * frame as detected), the base every plan starts from (the planner
  * excludes frames). ftw_plan_load: the job as planned on the box
  * (strip.job: sizes, windows, done). ftw_plan: re-plan the base with a
- * size per frame (px[i] for its i-th frame: 0 skip, FT_SHARE_4MP,
- * FT_SHARE_6MP, ...); the number of windows. ftw_job_text: the planned
+ * size per frame (px[i] for its i-th frame: 0 skip, FT_SHARE_4MP_PIXELS,
+ * FT_SHARE_6MP_PIXELS, ...); the number of windows. ftw_job_text: the planned
  * job's text (else the base's) -> out. ftw_job_json -> out: {"film":
  * "neg|slide","holder","windows","frames":[{"n","type","low","x","y",
  * "w","h","px","ppi","group","done","dof"}]}: the base's frames, their

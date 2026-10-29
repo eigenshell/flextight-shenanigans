@@ -8,43 +8,43 @@
 static void both(const ft_progress* p, const char* want) {
   char buf[400];
   ft_progress q;
-  size_t n = ft_progress_fmt(p, buf, sizeof buf);
+  size_t n = ft_format_progress(p, buf, sizeof buf);
   CHECK(n == strlen(want) && strcmp(buf, want) == 0);
-  CHECK(ft_progress_parse(want, strlen(want), &q) == 0);
+  CHECK(ft_parse_progress(want, strlen(want), &q) == 0);
   CHECK(q.type == p->type);
   switch(p->type) {
-    case FT_PG_BEGIN:
-      CHECK(q.kind == p->kind && q.n == p->n);
+    case FT_PROGRESS_BEGIN:
+      CHECK(q.kind == p->kind && q.number == p->number);
       break;
-    case FT_PG_UNIT:
-      CHECK(q.kind == p->kind && q.n == p->n && q.label == p->label);
+    case FT_PROGRESS_UNIT:
+      CHECK(q.kind == p->kind && q.number == p->number && q.label == p->label);
       break;
-    case FT_PG_LINES:
-      CHECK(q.k == p->k && q.total == p->total);
+    case FT_PROGRESS_LINES:
+      CHECK(q.step == p->step && q.total == p->total);
       break;
-    case FT_PG_FILE:
+    case FT_PROGRESS_FILE:
       CHECK(strcmp(q.path, p->path) == 0);
       break;
-    case FT_PG_END:
+    case FT_PROGRESS_END:
       CHECK(q.status == p->status);
       break;
-    case FT_PG_FOCUS:
-      CHECK(q.k == p->k && q.label == p->label && q.off == p->off);
+    case FT_PROGRESS_FOCUS:
+      CHECK(q.step == p->step && q.label == p->label && q.offset == p->offset);
       break;
-    case FT_PG_SHARP:
-      CHECK(q.off == p->off &&
-            q.sharp > p->sharp - 5e-5 &&
-            q.sharp < p->sharp + 5e-5);
+    case FT_PROGRESS_SHARP:
+      CHECK(q.offset == p->offset &&
+            q.sharpness > p->sharpness - 5e-5 &&
+            q.sharpness < p->sharpness + 5e-5);
       break;
-    case FT_PG_FOCUSED:
-      CHECK(q.off == p->off && q.how == p->how);
+    case FT_PROGRESS_FOCUSED:
+      CHECK(q.offset == p->offset && q.how == p->how);
       break;
   }
 }
 
 static int bad(const char* s) {
   ft_progress q;
-  return ft_progress_parse(s, strlen(s), &q) == -1;
+  return ft_parse_progress(s, strlen(s), &q) == -1;
 }
 
 int main(void) {
@@ -53,92 +53,92 @@ int main(void) {
 
   /* the wire format: pinned, the web server and page read it */
   memset(&p, 0, sizeof p);
-  p.type = FT_PG_BEGIN;
-  p.kind = FT_PG_WINDOW;
-  p.n = 3;
+  p.type = FT_PROGRESS_BEGIN;
+  p.kind = FT_PROGRESS_WINDOW;
+  p.number = 3;
   both(&p, "progress begin window 3\n");
-  p.kind = FT_PG_PREVIEW;
-  p.n = 1;
+  p.kind = FT_PROGRESS_PREVIEW;
+  p.number = 1;
   both(&p, "progress begin preview 1\n");
-  p.kind = FT_PG_FRAME;
-  p.n = 12;
+  p.kind = FT_PROGRESS_FRAME;
+  p.number = 12;
   both(&p, "progress begin frame 12\n");
-  p.kind = FT_PG_PASS;
-  p.n = 2;
+  p.kind = FT_PROGRESS_PASS;
+  p.number = 2;
   both(&p, "progress begin pass 2\n");
-  p.kind = FT_PG_UPLOAD;
-  p.n = 1; /* the microcode, before a run */
+  p.kind = FT_PROGRESS_UPLOAD;
+  p.number = 1; /* the microcode, before a run */
   both(&p, "progress begin upload 1\n");
-  p.kind = (ft_pg_kind)(FT_PG_UPLOAD + 1);
-  CHECK(ft_progress_fmt(&p, buf, sizeof buf) == FT_PG_BAD);
-  p.type = FT_PG_UNIT;
-  p.kind = FT_PG_WINDOW;
-  p.n = 2;
+  p.kind = (ft_progress_kind)(FT_PROGRESS_UPLOAD + 1);
+  CHECK(ft_format_progress(&p, buf, sizeof buf) == FT_PROGRESS_BAD);
+  p.type = FT_PROGRESS_UNIT;
+  p.kind = FT_PROGRESS_WINDOW;
+  p.number = 2;
   p.label = 5;
   both(&p, "progress unit window 2 5\n");
-  p.type = FT_PG_LINES;
-  p.k = 812;
+  p.type = FT_PROGRESS_LINES;
+  p.step = 812;
   p.total = 1890;
   both(&p, "progress lines 812/1890\n");
-  p.type = FT_PG_FILE;
+  p.type = FT_PROGRESS_FILE;
   strcpy(p.path, "C:\\scans\\my strip\\strip_win05.raw");
   both(&p, "progress file C:\\scans\\my strip\\strip_win05.raw\n");
-  p.type = FT_PG_END;
-  p.status = FT_PG_OK;
+  p.type = FT_PROGRESS_END;
+  p.status = FT_PROGRESS_OK;
   both(&p, "progress end ok\n");
-  p.status = FT_PG_STOPPED;
+  p.status = FT_PROGRESS_STOPPED;
   both(&p, "progress end stopped\n");
-  p.status = FT_PG_FAILED;
+  p.status = FT_PROGRESS_FAILED;
   both(&p, "progress end failed\n");
-  p.status = FT_PG_REFUSED;
+  p.status = FT_PROGRESS_REFUSED;
   both(&p, "progress end refused\n");
-  p.type = FT_PG_FOCUS;
-  p.k = 3;
+  p.type = FT_PROGRESS_FOCUS;
+  p.step = 3;
   p.label = 0;
   both(&p, "progress focus 3\n");
   p.label = 2;
-  p.off = 500; /* crop 3: frame 2, offset +500 */
+  p.offset = 500; /* crop 3: frame 2, offset +500 */
   both(&p, "progress focus 3 frame 2 at +500\n");
-  p.off = -1250;
+  p.offset = -1250;
   both(&p, "progress focus 3 frame 2 at -1250\n");
-  p.off = 0;
+  p.offset = 0;
   both(&p, "progress focus 3 frame 2 at +0\n");
-  p.k = 0; /* crops count from 1 */
-  CHECK(ft_progress_fmt(&p, buf, sizeof buf) == FT_PG_BAD);
+  p.step = 0; /* crops count from 1 */
+  CHECK(ft_format_progress(&p, buf, sizeof buf) == FT_PROGRESS_BAD);
   memset(&p, 0, sizeof p);
-  p.type = FT_PG_SHARP;
-  p.off = -500;
-  p.sharp = 0.0412;
+  p.type = FT_PROGRESS_SHARP;
+  p.offset = -500;
+  p.sharpness = 0.0412;
   both(&p, "progress sharp -500 0.0412\n");
-  p.off = 750;
-  p.sharp = 1.5;
+  p.offset = 750;
+  p.sharpness = 1.5;
   both(&p, "progress sharp +750 1.5000\n");
-  p.sharp = -1; /* sharpness is >= 0 */
-  CHECK(ft_progress_fmt(&p, buf, sizeof buf) == FT_PG_BAD);
+  p.sharpness = -1; /* sharpness is >= 0 */
+  CHECK(ft_format_progress(&p, buf, sizeof buf) == FT_PROGRESS_BAD);
   memset(&p, 0, sizeof p);
-  p.type = FT_PG_FOCUSED;
-  p.off = 620;
-  p.how = FT_PG_MEASURED;
+  p.type = FT_PROGRESS_FOCUSED;
+  p.offset = 620;
+  p.how = FT_PROGRESS_MEASURED;
   both(&p, "progress focused +620 measured\n");
-  p.how = FT_PG_CHECKED;
+  p.how = FT_PROGRESS_CHECKED;
   both(&p, "progress focused +620 checked\n");
-  p.off = -300;
-  p.how = FT_PG_CARRIED;
+  p.offset = -300;
+  p.how = FT_PROGRESS_CARRIED;
   both(&p, "progress focused -300 carried\n");
-  p.off = 0;
-  p.how = FT_PG_NONE;
+  p.offset = 0;
+  p.how = FT_PROGRESS_NONE;
   both(&p, "progress focused +0 none\n");
 
   /* parse: without the '\n', a '\r\n' ending, exactly n bytes */
   {
     ft_progress q;
-    CHECK(ft_progress_parse("progress lines 5/9", 18, &q) == 0 &&
-          q.type == FT_PG_LINES &&
-          q.k == 5 &&
+    CHECK(ft_parse_progress("progress lines 5/9", 18, &q) == 0 &&
+          q.type == FT_PROGRESS_LINES &&
+          q.step == 5 &&
           q.total == 9);
-    CHECK(ft_progress_parse("progress lines 5/9\r\n", 20, &q) == 0 &&
+    CHECK(ft_parse_progress("progress lines 5/9\r\n", 20, &q) == 0 &&
           q.total == 9);
-    CHECK(ft_progress_parse("progress lines 5/99", 18, &q) == 0 &&
+    CHECK(ft_parse_progress("progress lines 5/99", 18, &q) == 0 &&
           q.total == 9);
   }
   /* anything else is not a progress line */
@@ -179,14 +179,15 @@ int main(void) {
   CHECK(bad("progress focused 5x measured\n"));
   /* a path the line cannot carry: nothing written */
   memset(&p, 0, sizeof p);
-  p.type = FT_PG_FILE;
+  p.type = FT_PROGRESS_FILE;
   strcpy(p.path, "a\nb");
-  CHECK(ft_progress_fmt(&p, buf, sizeof buf) == FT_PG_BAD && buf[0] == 0);
+  CHECK(ft_format_progress(&p, buf, sizeof buf) == FT_PROGRESS_BAD &&
+        buf[0] == 0);
   p.path[0] = 0;
-  CHECK(ft_progress_fmt(&p, buf, sizeof buf) == FT_PG_BAD);
+  CHECK(ft_format_progress(&p, buf, sizeof buf) == FT_PROGRESS_BAD);
   /* truncation: the length needed, NUL-terminated */
-  p.type = FT_PG_END;
-  p.status = FT_PG_OK;
-  CHECK(ft_progress_fmt(&p, buf, 5) == 16 && strcmp(buf, "prog") == 0);
+  p.type = FT_PROGRESS_END;
+  p.status = FT_PROGRESS_OK;
+  CHECK(ft_format_progress(&p, buf, 5) == 16 && strcmp(buf, "prog") == 0);
   return TEST_DONE();
 }

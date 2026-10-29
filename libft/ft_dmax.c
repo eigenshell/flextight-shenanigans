@@ -9,7 +9,7 @@
 #include "ft_plan.h"
 
 /* Slack when comparing a scale with the limits, the same as
- * ft_bins_for_ppi uses: a scale of 1500.0000001 still counts as 1500. */
+ * ft_find_bins_for_ppi uses: a scale of 1500.0000001 still counts as 1500. */
 #define SCALE_TOLERANCE 1e-6
 
 /* The bins the scanner can read with, smallest first: the smallest bin
@@ -27,7 +27,8 @@ bool ft_estimate_dmax(const ft_optics_limits* limits, double ppi,
     bool is_too_low = scale_ppi < limits->min_scale_ppi - SCALE_TOLERANCE;
     bool is_too_high = scale_ppi > limits->max_scale_ppi + SCALE_TOLERANCE;
     if(is_too_low == false && is_too_high == false) {
-      *dmax = ft_dmax_est(ft_light_rel(limits->lens, scale_ppi));
+      *dmax = ft_estimate_dmax_for_light(
+        ft_estimate_relative_light(limits->lens, scale_ppi));
       return true;
     }
   }

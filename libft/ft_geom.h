@@ -18,6 +18,10 @@
 #define FT_CCD_FIRST_PIXEL 144.0
 /* CCD pixels the scanner reads: the preview's 666 px x bin 12 */
 #define FT_CCD_PIXEL_COUNT 7992
+/* Lines between the CCD's red, green and blue rows at bin 1. The rows
+ * sit side by side on the CCD, so one colour reaches a point on the film
+ * this many lines after the next; at bin b it is 12 / b lines. */
+#define FT_CCD_ROW_SPACING_LINES 12
 
 /* Convert a position across the film to a CCD pixel.
  *

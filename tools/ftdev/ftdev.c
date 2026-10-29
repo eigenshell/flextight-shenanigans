@@ -117,11 +117,11 @@ static void usage(void) {
           "       ftdev plan <strip.job> --size 4mp|6mp|px:frames "
           "... [-o out.job]\n"
           "formats (default dng):\n");
-  for(w = ft_writers(); w->name; w++)
-    fprintf(stderr, "  %-8s %s\n", w->name, w->what);
+  for(w = ft_get_writers(); w->name; w++)
+    fprintf(stderr, "  %-8s %s\n", w->name, w->description);
   fprintf(stderr, "curve presets:");
-  for(i = 0; ft_curve_preset_name(i); i++)
-    fprintf(stderr, " %s", ft_curve_preset_name(i));
+  for(i = 0; ft_get_curve_preset_name(i); i++)
+    fprintf(stderr, " %s", ft_get_curve_preset_name(i));
   fprintf(stderr, "\n");
 }
 
@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
   unsigned short *raw = NULL, *cal = NULL;
   long nmeta = 0, nraw = 0, ncal = 0, nfaul = 0, nd = 0, px, lines, cl;
   ft_defects defects;
-  ft_develop_opts o;
+  ft_develop_options o;
   ft_image im;
   ft_err e;
 
@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
     return ftdev_emulsions(argc - 2, argv + 2);
   if(argc > 1 && strcmp(argv[1], "plan") == 0)
     return ftdev_plan(argc - 2, argv + 2);
-  ft_image_init(&im);
+  ft_init_image(&im);
   rflags_init(&rf);
   for(i = 1; i < argc; i++) {
     const char* a = argv[i];
@@ -185,7 +185,7 @@ int main(int argc, char** argv) {
     char list[256], *tok;
     snprintf(list, sizeof list, "%s", fmts);
     for(tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
-      const ft_writer* w = ft_writer_find(tok);
+      const ft_writer* w = ft_find_writer(tok);
       if(!w) {
         fprintf(stderr, "ftdev: unknown format '%s'\n", tok);
         usage();
@@ -193,7 +193,7 @@ int main(int argc, char** argv) {
       }
       if(nwr == MAX_FORMATS) break;
       wr[nwr++] = w;
-      render |= w->write == ft_png_write_positive;
+      render |= w->write == ft_write_positive_png;
     }
   }
   if(render) {
@@ -221,22 +221,22 @@ int main(int argc, char** argv) {
   }
   memset(&o, 0, sizeof o);
   px = meta_long(meta, "px", 0);
-  o.x = (int)meta_long(meta, "x", -1);
+  o.first_pixel = (int)meta_long(meta, "x", -1);
   o.bin = (int)meta_long(meta, "bin", 0);
   meta_str(meta, "preset", preset, sizeof preset);
   if(o.bin < 1) /* .txt from before ftpoc recorded bin */
     o.bin = strcmp(preset, "preview") == 0 ? 12
             : strcmp(preset, "2000") == 0  ? 3
                                            : 6;
-  if(px < 1 || px > 20000 || o.x < 0) {
+  if(px < 1 || px > 20000 || o.first_pixel < 0) {
     fprintf(stderr, "ftdev: %s lacks px/x\n", path);
     goto out;
   }
   if(!no_crop && meta_long(meta, "crop_w", 0) > 0) {
     o.crop_x = (int)meta_long(meta, "crop_x", 0);
     o.crop_y = (int)meta_long(meta, "crop_y", 0);
-    o.crop_w = (int)meta_long(meta, "crop_w", 0);
-    o.crop_h = (int)meta_long(meta, "crop_h", 0);
+    o.crop_width = (int)meta_long(meta, "crop_w", 0);
+    o.crop_height = (int)meta_long(meta, "crop_h", 0);
   }
   if(dpath) {
     dtext = ftdev_load(dpath, &nd);
@@ -244,8 +244,8 @@ int main(int argc, char** argv) {
       fprintf(stderr, "ftdev: cannot read %s\n", dpath);
       goto out;
     }
-    if(ft_defects_parse(dtext, (size_t)nd, &defects, &e)) {
-      fprintf(stderr, "ftdev: %s: %s\n", dpath, e.msg);
+    if(ft_parse_defects(dtext, (size_t)nd, &defects, &e)) {
+      fprintf(stderr, "ftdev: %s: %s\n", dpath, e.message);
       goto out;
     }
     o.defects = &defects;
@@ -267,37 +267,39 @@ int main(int argc, char** argv) {
 
   im.ppi = (double)meta_long(meta, "ppi", 0);
   im.film = rf.film;
-  snprintf(im.desc, sizeof im.desc,
+  snprintf(im.description, sizeof im.description,
            "%s; preset %s, %ld ppi, bin %d, x %d, %ld px x %ld lines; "
            "crop %d,%d %dx%d; film %s",
            scan, preset[0] ? preset : "?", meta_long(meta, "ppi", 0), o.bin,
-           o.x, px, lines, o.crop_x, o.crop_y, o.crop_w, o.crop_h,
+           o.first_pixel, px, lines, o.crop_x, o.crop_y, o.crop_width,
+           o.crop_height,
            rf.film == FT_FILM_NEGATIVE ? "negative"
            : rf.film == FT_FILM_SLIDE  ? "slide"
                                        : "unknown");
   if(ft_develop(raw, (int)lines, (int)px, cal, (int)cl, faul,
                 (size_t)(faul ? nfaul : 0), &o, &im, &e)) {
-    fprintf(stderr, "ftdev: %s: %s\n", scan, e.msg);
+    fprintf(stderr, "ftdev: %s: %s\n", scan, e.message);
     goto out;
   }
   free(raw);
   raw = NULL;
   /* the NoiseProfile rides in the DNG; without one export estimates */
   {
-    int nr = ft_noise_model(cal, (int)cl, (int)px, im.noise, &e);
-    im.has_noise = nr >= 0;
-    if(nr) fprintf(stderr, "ftdev: note: %s\n", e.msg);
+    int nr =
+      ft_measure_noise_profile(cal, (int)cl, (int)px, im.noise_profile, &e);
+    im.has_noise_profile = nr >= 0;
+    if(nr) fprintf(stderr, "ftdev: note: %s\n", e.message);
   }
   rc = 0;
   /* the developed image first (DNG, PNG preview), then the render */
   for(i = 0; i < nwr; i++) {
-    if(wr[i]->write == ft_png_write_positive) continue;
-    snprintf(path, sizeof path, "%s%s", base, wr[i]->ext);
+    if(wr[i]->write == ft_write_positive_png) continue;
+    snprintf(path, sizeof path, "%s%s", base, wr[i]->extension);
     if(wr[i]->write(path, &im, &e)) {
-      fprintf(stderr, "ftdev: %s\n", e.msg);
+      fprintf(stderr, "ftdev: %s\n", e.message);
       rc = 1;
     } else
-      printf("%s: %dx%d, %.0f ppi\n", path, im.w, im.h, im.ppi);
+      printf("%s: %dx%d, %.0f ppi\n", path, im.width, im.height, im.ppi);
   }
   if(render) {
     char fb[128];
@@ -312,15 +314,16 @@ int main(int argc, char** argv) {
       rc = r;
       goto out;
     }
-    snprintf(path, sizeof path, "%s%s", base, ft_writer_find("positive")->ext);
-    if(ft_png_write_positive(path, &im, &e)) {
-      fprintf(stderr, "ftdev: %s\n", e.msg);
+    snprintf(path, sizeof path, "%s%s", base,
+             ft_find_writer("positive")->extension);
+    if(ft_write_positive_png(path, &im, &e)) {
+      fprintf(stderr, "ftdev: %s\n", e.message);
       rc = 1;
     } else
-      printf("%s: %dx%d, %.0f ppi\n", path, im.w, im.h, im.ppi);
+      printf("%s: %dx%d, %.0f ppi\n", path, im.width, im.height, im.ppi);
   }
 out:
-  ft_image_free(&im);
+  ft_free_image(&im);
   free(meta);
   free(faul);
   free(dtext);

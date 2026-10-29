@@ -160,7 +160,8 @@ int main(int argc, char** argv) {
 
   if(!w) return 1;
   if(argc == 3 && strcmp(argv[1], "--dmax") == 0) {
-    const ft_optics_limits lim = {FT_SCALE_MIN, FT_SCALE_MAX, &ft_lens_default};
+    const ft_optics_limits lim = {FT_SCALE_MIN_PPI, FT_SCALE_MAX_PPI,
+                                  &ft_lens_default};
     double d;
     if(ft_estimate_dmax(&lim, atof(argv[2]), &d))
       printf("%.6f\n", d);

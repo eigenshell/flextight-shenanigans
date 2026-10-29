@@ -42,24 +42,26 @@ static long key(const char* t, const char* k) {
   return -1;
 }
 
-static void put(const ft_sdet* d, int i, const char* at) {
+static void put(const ft_stream_detector* d, int i, const char* at) {
   static const char* T[] = {"full", "half", "panorama", "partial"};
-  const ft_sdet_frame* f = &d->f[i];
-  printf("frame %d %s %.3f %.3f %.3f %.3f %d %s\n", f->index, T[f->type], f->y0,
-         f->y1, f->x0, f->x1, f->grid, at);
+  const ft_stream_frame* f = &d->frames[i];
+  printf("frame %d %s %.3f %.3f %.3f %.3f %d %s\n", f->index, T[f->type],
+         f->start_mm, f->end_mm, f->across_start_mm, f->across_end_mm,
+         f->is_from_grid, at);
 }
 
 int main(int argc, char** argv) {
-  static ft_sdet d;
+  static ft_stream_detector d;
   char path[1024], at[32];
   long nr, nc, nt, x, px;
   unsigned short *raw, *cal;
   char* txt;
-  ft_develop_opts o;
+  ft_develop_options o;
   ft_axes ax;
   ft_err e;
   float *t, base[3];
-  int nl, l, i, done = 0;
+  uint32_t nl, i, done = 0;
+  int l;
   ft_film film = argc > 2 && strcmp(argv[2], "slide") == 0 ? FT_FILM_SLIDE
                                                            : FT_FILM_NEGATIVE;
 
@@ -79,33 +81,34 @@ int main(int argc, char** argv) {
   }
   px = key(txt, "px");
   x = key(txt, "x");
-  if(px != FT_PREVIEW_PX || key(txt, "bin") != 12) {
+  if(px != FT_PREVIEW_PIXEL_COUNT || key(txt, "bin") != 12) {
     fprintf(stderr, "stream_dump: not a standard preview\n");
     return 1;
   }
   memset(&o, 0, sizeof o);
-  o.x = (int)x;
+  o.first_pixel = (int)x;
   o.bin = 12;
-  t = ft_develop_t(raw, (int)(nr / (px * 6)), (int)px, cal,
-                   (int)(nc / (px * 6)), NULL, 0, &o, &nl, &e);
-  ft_preview_axes(ft_preview_find("standard"), x, &ax);
-  if(!t || ft_sdet_init(&d, &ax, (int)px, film, ft_find_holder("24x217"), &e)) {
-    fprintf(stderr, "stream_dump: %s\n", e.msg);
+  t = ft_develop_transmittance(raw, (int)(nr / (px * 6)), (int)px, cal,
+                               (int)(nc / (px * 6)), NULL, 0, &o, &nl, &e);
+  ft_get_preview_axes(ft_find_preview("standard"), x, &ax);
+  if(!t || ft_init_stream_detector(&d, &ax, (int)px, film,
+                                   ft_find_holder("24x217"), &e)) {
+    fprintf(stderr, "stream_dump: %s\n", e.message);
     return 1;
   }
-  for(l = 0; l < nl; l++) {
-    ft_sdet_line(&d, t + (size_t)l * px * 3);
-    for(; done < d.nframes; done++) {
+  for(l = 0; l < (int)nl; l++) {
+    ft_detect_stream_line(&d, t + (size_t)l * px * 3);
+    for(; done < d.frame_count; done++) {
       snprintf(at, sizeof at, "%d", l + 1);
       put(&d, done, at);
     }
   }
-  ft_sdet_end(&d);
-  for(i = done; i < d.nframes; i++) put(&d, i, "end");
-  if(ft_sdet_base(&d, base))
+  ft_end_stream_detection(&d);
+  for(i = done; i < d.frame_count; i++) put(&d, i, "end");
+  if(ft_get_stream_base(&d, base))
     printf("base %.4f %.4f %.4f\n", base[0], base[1], base[2]);
   printf("lines %d\n", nl);
-  ft_sdet_free(&d);
+  ft_free_stream_detector(&d);
   free(t);
   return 0;
 }

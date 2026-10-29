@@ -13,11 +13,11 @@ static void negative(ft_image* im, double scale) {
   static const double GAMMA[3] = {0.55, 0.62, 0.70};
   static const double MASK[3] = {0.25, 0.6, 0.9};
   int x, y, c;
-  for(y = 0; y < im->h; y++)
-    for(x = 0; x < im->w; x++)
+  for(y = 0; y < (int)im->height; y++)
+    for(x = 0; x < (int)im->width; x++)
       for(c = 0; c < 3; c++) {
-        double ex = scale * pow(10, -2 + 2.0 * x / (im->w - 1));
-        im->rgb[3 * (y * im->w + x) + c] =
+        double ex = scale * pow(10, -2 + 2.0 * x / (im->width - 1));
+        im->pixels[3 * (y * im->width + x) + c] =
           (float)pow(10, -(MASK[c] + GAMMA[c] * log10(ex / 0.002)));
       }
 }
@@ -40,27 +40,27 @@ int main(void) {
   int i, j, n;
 
   CHECK(FT_EMULSION_REV >= 1);
-  for(n = 0; ft_emulsion_at(n); n++);
+  for(n = 0; ft_get_emulsion_at(n); n++);
   CHECK(n >= 3);
-  CHECK(ft_emulsion_at(-1) == NULL && ft_emulsion_at(n) == NULL);
+  CHECK(ft_get_emulsion_at(-1) == NULL && ft_get_emulsion_at(n) == NULL);
   /* the v1 table */
-  g = ft_emulsion_find("generic-neg");
-  CHECK(g && g->mode == FT_RENDER_NEG);
+  g = ft_find_emulsion("generic-neg");
+  CHECK(g && g->mode == FT_RENDER_NEGATIVE);
   CHECK(strcmp(g->name, "Generic colour negative") == 0);
   CHECK(strcmp(g->film->name, "stock") == 0 &&
         strcmp(g->balance->name, "frontier") == 0 &&
         strcmp(g->print->name, "classic") == 0 &&
         strcmp(g->output->name, "classic") == 0);
-  em = ft_emulsion_find("generic-slide");
+  em = ft_find_emulsion("generic-slide");
   CHECK(em && em->mode == FT_RENDER_SLIDE);
-  em = ft_emulsion_find("generic-bw");
+  em = ft_find_emulsion("generic-bw");
   CHECK(em && em->mode == FT_RENDER_BW);
-  CHECK(ft_emulsion_find("portra400") == NULL);
-  CHECK(ft_emulsion_find("") == NULL);
+  CHECK(ft_find_emulsion("portra400") == NULL);
+  CHECK(ft_find_emulsion("") == NULL);
 
   for(i = 0; i < 3; i++) {
-    ft_image_init(&im[i]);
-    CHECK(ft_image_alloc(&im[i], 200, 60, &e) == 0);
+    ft_init_image(&im[i]);
+    CHECK(ft_allocate_image(&im[i], 200, 60, &e) == 0);
     negative(&im[i], i == 1 ? 0.3 : 1);
     ptr[i] = &im[i];
   }
@@ -70,32 +70,33 @@ int main(void) {
     ft_print_roll roll;
     ft_recipe r;
     float px[3] = {0.1f, 0.05f, 0.02f};
-    em = ft_emulsion_at(i);
+    em = ft_get_emulsion_at(i);
     CHECK(id_ok(em->id) && em->name && em->name[0]);
-    for(j = 0; j < i; j++) CHECK(strcmp(ft_emulsion_at(j)->id, em->id) != 0);
+    for(j = 0; j < i; j++)
+      CHECK(strcmp(ft_get_emulsion_at(j)->id, em->id) != 0);
     CHECK(em->film && em->balance && em->print && em->output);
-    CHECK(ft_print_roll_measure(em, em->mode == FT_RENDER_SLIDE ? BLACK : MASK,
+    CHECK(ft_measure_print_roll(em, em->mode == FT_RENDER_SLIDE ? BLACK : MASK,
                                 ptr, 3, fr, &roll, &e) == 0);
-    CHECK(ft_print_recipe(em, &roll, &fr[1], (ft_cmyd){0, 0, 0, 1}, &r, NULL,
-                          NULL, &e) == 0);
-    CHECK(ft_print_compile(em, &r, &pr, &e) == 0);
-    ft_print_apply(&pr, px, px, 1);
+    CHECK(ft_make_print_recipe(em, &roll, &fr[1], (ft_cmyd){0, 0, 0, 1}, &r,
+                               NULL, NULL, &e) == 0);
+    CHECK(ft_compile_print(em, &r, &pr, &e) == 0);
+    ft_apply_print(&pr, px, px, 1);
     for(j = 0; j < 3; j++) CHECK(px[j] >= 0 && px[j] <= 1);
   }
   /* generic-neg's aim: the paper prints e = aim as 18 % grey */
   {
-    const ft_pm_frontier_par* p = g->balance_par;
-    const ft_pm_stock_par* s = g->film_par;
+    const ft_frontier_parameters* p = g->balance_parameters;
+    const ft_stock_film_parameters* s = g->film_parameters;
     ft_recipe r;
     float t[3], o[3];
-    ft_recipe_default(&r, FT_RENDER_NEG);
+    ft_init_recipe(&r, FT_RENDER_NEGATIVE);
     for(i = 0; i < 3; i++) {
-      r.range[i] = s->scale;
-      t[i] = (float)pow(10, -p->aim);
+      r.range_density[i] = s->scale_density;
+      t[i] = (float)pow(10, -p->aim_density);
     }
-    ft_render_direct(&r, t, o);
+    ft_render_pixel_directly(&r, t, o);
     CHECK_NEAR(o[1], 0.18, 0.01);
   }
-  for(i = 0; i < 3; i++) ft_image_free(&im[i]);
+  for(i = 0; i < 3; i++) ft_free_image(&im[i]);
   return TEST_DONE();
 }
