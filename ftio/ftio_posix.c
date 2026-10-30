@@ -82,12 +82,12 @@ void scanner_set_path(const char* path) { g_device = path; }
 #define SG_NODES 32
 
 int scanner_candidate_path(int i, char* path, size_t cap) {
-  if (g_device) {
-    if (i > 0 || strlen(g_device) >= cap) return 0;
+  if(g_device) {
+    if(i > 0 || strlen(g_device) >= cap) return 0;
     strcpy(path, g_device);
     return 1;
   }
-  if (i >= SG_NODES || cap < 16) return 0;
+  if(i >= SG_NODES || cap < 16) return 0;
   sprintf(path, "/dev/sg%d", i);
   return 1;
 }
@@ -95,7 +95,7 @@ int scanner_candidate_path(int i, char* path, size_t cap) {
 /* How many candidates sc_find_and_open_scanner should try:
  * one if --device was given, otherwise every /dev/sgN. */
 uint32_t io_candidate_count(void) {
-  if (g_device) {
+  if(g_device) {
     return 1;
   } else {
     return SG_NODES;
@@ -108,7 +108,7 @@ uint32_t io_candidate_count(void) {
 io_scanner_handle io_open_candidate(uint32_t index) {
   char path[PATH_BUF_MAX + 1];
 
-  if (scanner_candidate_path((int)index, path, sizeof path) == 0) {
+  if(scanner_candidate_path((int)index, path, sizeof path) == 0) {
     return NO_SCANNER;
   }
   return scanner_open(path);
@@ -122,10 +122,10 @@ static int foreign_vendor(const char* path) {
   FILE* f;
   int foreign;
   base = base ? base + 1 : path;
-  if (strlen(base) > 32) return 0;
+  if(strlen(base) > 32) return 0;
   sprintf(sys, "/sys/class/scsi_generic/%s/device/vendor", base);
   f = fopen(sys, "r");
-  if (!f) return 0;
+  if(!f) return 0;
   foreign = !fgets(v, sizeof v, f) || strncmp(v, "Imacon", 6) != 0;
   fclose(f);
   return foreign;
@@ -133,17 +133,17 @@ static int foreign_vendor(const char* path) {
 
 io_scanner_handle scanner_open(const char* path) {
   int fd, ver = 0;
-  if (!g_device && foreign_vendor(path)) return -1;
+  if(!g_device && foreign_vendor(path)) return -1;
   fd = open(path, O_RDWR | O_NONBLOCK | O_EXCL);
-  if (fd < 0) {
-    if (g_device || (errno != ENOENT && errno != ENXIO && errno != ENODEV))
+  if(fd < 0) {
+    if(g_device || (errno != ENOENT && errno != ENXIO && errno != ENODEV))
       fprintf(stderr, "%s: %s%s\n", path, strerror(errno),
               errno == EBUSY    ? " (another program has it open)"
               : errno == EACCES ? " (run as root, or a udev rule)"
                                 : "");
     return -1;
   }
-  if (ioctl(fd, SG_GET_VERSION_NUM, &ver) < 0 || ver < 30000) {
+  if(ioctl(fd, SG_GET_VERSION_NUM, &ver) < 0 || ver < 30000) {
     fprintf(stderr, "%s: not an sg device\n", path);
     close(fd);
     return -1;
@@ -173,7 +173,7 @@ static int finish(const sg_io_hdr_t* h, const BYTE* sense) {
   unsigned got;
   int r = sgio_result(h->status, h->host_status, h->driver_status, h->resid,
                       h->dxfer_len, &got);
-  if (r < 0) {
+  if(r < 0) {
     g_status = h->status;
     g_host = h->host_status;
     g_driver = h->driver_status;
@@ -191,17 +191,17 @@ static int finish(const sg_io_hdr_t* h, const BYTE* sense) {
 #define OUT_PAD_MAX 0x10000
 static BYTE g_pad[OUT_PAD_MAX];
 
-int io_send_command_to(io_scanner_handle device, const BYTE* cdb, int cdb_len, BYTE dir,
-                       BYTE* data, DWORD data_len, DWORD timeout_ms) {
+int io_send_command_to(io_scanner_handle device, const BYTE* cdb, int cdb_len,
+                       BYTE dir, BYTE* data, DWORD data_len, DWORD timeout_ms) {
   sg_io_hdr_t h;
   BYTE sense[SENSE_LEN];
   DWORD want = data_len;
   int r;
   memset(sense, 0, sizeof sense);
-  if (dir == SCSI_TO_DEVICE && data_len)
+  if(dir == SCSI_TO_DEVICE && data_len)
     want = sgio_out_len(cdb, cdb_len, data_len);
-  if (want > data_len) {
-    if (want > OUT_PAD_MAX) {
+  if(want > data_len) {
+    if(want > OUT_PAD_MAX) {
       g_errno = EINVAL;
       return -1;
     }
@@ -211,7 +211,7 @@ int io_send_command_to(io_scanner_handle device, const BYTE* cdb, int cdb_len, B
   } else {
     fill_hdr(&h, cdb, cdb_len, dir, data, data_len, sense, timeout_ms);
   }
-  if (ioctl(device, SG_IO, &h) < 0) {
+  if(ioctl(device, SG_IO, &h) < 0) {
     g_errno = errno;
     return -1;
   }
@@ -220,14 +220,15 @@ int io_send_command_to(io_scanner_handle device, const BYTE* cdb, int cdb_len, B
   return r > (int)data_len ? (int)data_len : r;
 }
 
-int scsi_send_command(const BYTE* cdb, int cdb_len, BYTE dir, BYTE* data, DWORD data_len,
-             DWORD timeout_ms) {
-  return io_send_command_to(g_scanner, cdb, cdb_len, dir, data, data_len, timeout_ms);
+int scsi_send_command(const BYTE* cdb, int cdb_len, BYTE dir, BYTE* data,
+                      DWORD data_len, DWORD timeout_ms) {
+  return io_send_command_to(g_scanner, cdb, cdb_len, dir, data, data_len,
+                            timeout_ms);
 }
 
 const char* scsi_error_text(int r) {
   static char buf[160];
-  switch (r) {
+  switch(r) {
     case -1:
       sprintf(buf, "SG_IO rejected (errno %d: %.60s)", g_errno,
               strerror(g_errno));
@@ -272,12 +273,12 @@ struct read_queue {
 };
 
 read_queue* read_queue_open(int depth, const BYTE cdb[10], WORD blklen,
-                   DWORD timeout_ms) {
+                            DWORD timeout_ms) {
   read_queue* q = calloc(1, sizeof *q);
   int i, one = 1;
-  if (!q) return NULL;
+  if(!q) return NULL;
   q->sl = calloc(depth, sizeof *q->sl);
-  if (!q->sl) {
+  if(!q->sl) {
     free(q);
     return NULL;
   }
@@ -285,15 +286,15 @@ read_queue* read_queue_open(int depth, const BYTE cdb[10], WORD blklen,
   memcpy(q->cdb, cdb, 10);
   q->blklen = blklen;
   q->timeout_ms = timeout_ms;
-  for (i = 0; i < depth; i++) {
+  for(i = 0; i < depth; i++) {
     q->sl[i].buf = malloc(blklen);
-    if (!q->sl[i].buf) {
+    if(!q->sl[i].buf) {
       read_queue_close(q, 0);
       return NULL;
     }
   }
   /* read() collects the request named by pack_id, not just any */
-  if (ioctl(g_scanner, SG_SET_FORCE_PACK_ID, &one) < 0) {
+  if(ioctl(g_scanner, SG_SET_FORCE_PACK_ID, &one) < 0) {
     printf("\nflood: SG_SET_FORCE_PACK_ID: %s\n", strerror(errno));
     read_queue_close(q, 0);
     return NULL;
@@ -311,8 +312,8 @@ int read_queue_issue(read_queue* q, int slot, long seq) {
            q->timeout_ms);
   s->h.pack_id = (int)seq;
   do n = write(g_scanner, &s->h, sizeof s->h);
-  while (n < 0 && errno == EINTR);
-  if (n != (ssize_t)sizeof s->h) {
+  while(n < 0 && errno == EINTR);
+  if(n != (ssize_t)sizeof s->h) {
     printf("\nflood issue %ld: %s\n", seq,
            n < 0 ? strerror(errno) : "short write");
     return -1;
@@ -327,7 +328,7 @@ int read_queue_issue(read_queue* q, int slot, long seq) {
 static int collect(struct slot* s, DWORD timeout_ms) {
   DWORD t0 = now_ms();
   sg_io_hdr_t r;
-  for (;;) {
+  for(;;) {
     ssize_t n;
     DWORD dt;
     struct pollfd p;
@@ -337,14 +338,14 @@ static int collect(struct slot* s, DWORD timeout_ms) {
     r.dxfer_direction = SG_DXFER_FROM_DEV;
     r.pack_id = (int)s->seq;
     n = read(g_scanner, &r, sizeof r);
-    if (n == (ssize_t)sizeof r) break;
-    if (n >= 0 || (errno != EAGAIN && errno != EINTR)) {
+    if(n == (ssize_t)sizeof r) break;
+    if(n >= 0 || (errno != EAGAIN && errno != EINTR)) {
       printf("\nflood read %ld: %s\n", s->seq,
              n < 0 ? strerror(errno) : "short header");
       return READ_ERROR;
     }
     dt = now_ms() - t0;
-    if (dt >= timeout_ms) return READ_TIMEOUT;
+    if(dt >= timeout_ms) return READ_TIMEOUT;
     p.fd = g_scanner;
     p.events = POLLIN;
     p.revents = 0;
@@ -353,7 +354,7 @@ static int collect(struct slot* s, DWORD timeout_ms) {
     poll(&p, 1, (int)(timeout_ms - dt < 20 ? timeout_ms - dt : 20));
   }
   s->busy = 0;
-  if (r.pack_id != (int)s->seq) {
+  if(r.pack_id != (int)s->seq) {
     printf("\nflood read %ld: got request %d instead\n", s->seq, r.pack_id);
     return READ_ERROR;
   }
@@ -364,22 +365,23 @@ static int collect(struct slot* s, DWORD timeout_ms) {
   return 0;
 }
 
-int read_queue_wait(read_queue* q, int slot, long seq, DWORD timeout_ms, DWORD* got) {
+int read_queue_wait(read_queue* q, int slot, long seq, DWORD timeout_ms,
+                    DWORD* got) {
   struct slot* s = &q->sl[slot];
   int r;
   *got = 0;
-  if (!s->busy || s->seq != seq) {
+  if(!s->busy || s->seq != seq) {
     printf("\nflood read %ld: not in flight\n", seq);
     return READ_ERROR;
   }
   r = collect(s, timeout_ms + REAP_SLACK_MS);
-  if (r) return r;
+  if(r) return r;
   r = finish(&s->h, s->sense);
-  if (r == SGIO_TIMEOUT) {
+  if(r == SGIO_TIMEOUT) {
     printf("\nflood read %ld: %s\n", seq, scsi_error_text(-2));
     return READ_TIMEOUT;
   }
-  if (r < 0) {
+  if(r < 0) {
     printf("\nflood read %ld: %s\n", seq, scsi_error_text(-3));
     return READ_ERROR;
   }
@@ -393,11 +395,11 @@ void read_queue_close(read_queue* q, int cancel) {
    * by its own kernel timeout at the latest). Whatever is left is
    * discarded by the driver; it copies into our buffers only on
    * read(), so freeing them is safe. */
-  if (cancel)
-    for (i = 0; i < q->depth; i++)
-      if (q->sl[i].busy) collect(&q->sl[i], q->timeout_ms + REAP_SLACK_MS);
-  if (g_scanner >= 0) ioctl(g_scanner, SG_SET_FORCE_PACK_ID, &zero);
-  for (i = 0; i < q->depth; i++) free(q->sl[i].buf);
+  if(cancel)
+    for(i = 0; i < q->depth; i++)
+      if(q->sl[i].busy) collect(&q->sl[i], q->timeout_ms + REAP_SLACK_MS);
+  if(g_scanner >= 0) ioctl(g_scanner, SG_SET_FORCE_PACK_ID, &zero);
+  for(i = 0; i < q->depth; i++) free(q->sl[i].buf);
   free(q->sl);
   free(q);
 }
@@ -410,14 +412,14 @@ static void sysattr(const char* dev, const char* attr, char* v, size_t cap) {
   FILE* f;
   size_t n;
   v[0] = 0;
-  if (strlen(dev) > 200) return;
+  if(strlen(dev) > 200) return;
   sprintf(p, "/sys/bus/scsi/devices/%s/%s", dev, attr);
   f = fopen(p, "r");
-  if (!f) return;
-  if (!fgets(v, (int)cap, f)) v[0] = 0;
+  if(!f) return;
+  if(!fgets(v, (int)cap, f)) v[0] = 0;
   fclose(f);
   n = strlen(v);
-  while (n && (v[n - 1] == '\n' || v[n - 1] == ' ')) v[--n] = 0;
+  while(n && (v[n - 1] == '\n' || v[n - 1] == ' ')) v[--n] = 0;
 }
 
 /* SCSI bus reset of the bus that hosts the scanner: every device on it
@@ -431,35 +433,35 @@ int scsi_bus_reset(void) {
   int foreign = 0, op = SG_SCSI_RESET_BUS;
 
   memset(&id, 0, sizeof id);
-  if (ioctl(g_scanner, SG_GET_SCSI_ID, &id) < 0) {
+  if(ioctl(g_scanner, SG_GET_SCSI_ID, &id) < 0) {
     printf("SG_GET_SCSI_ID failed (%s)\n", strerror(errno));
     return 1;
   }
   d = opendir("/sys/bus/scsi/devices");
-  if (!d) {
+  if(!d) {
     printf("no /sys/bus/scsi/devices; refusing\n");
     return 1;
   }
-  while ((e = readdir(d)) != NULL) {
+  while((e = readdir(d)) != NULL) {
     int h, c, t, l;
     char end, vendor[32], model[32], type[8];
-    if (sscanf(e->d_name, "%d:%d:%d:%d%c", &h, &c, &t, &l, &end) != 4 ||
-        h != id.host_no ||
-        c != id.channel)
+    if(sscanf(e->d_name, "%d:%d:%d:%d%c", &h, &c, &t, &l, &end) != 4 ||
+       h != id.host_no ||
+       c != id.channel)
       continue;
     sysattr(e->d_name, "vendor", vendor, sizeof vendor);
     sysattr(e->d_name, "model", model, sizeof model);
     sysattr(e->d_name, "type", type, sizeof type);
     printf("scsi %s: type %s %s %s\n", e->d_name, type, vendor, model);
-    if (strncmp(vendor, "Imacon", 6) != 0) foreign = 1;
+    if(strncmp(vendor, "Imacon", 6) != 0) foreign = 1;
   }
   closedir(d);
-  if (foreign) {
+  if(foreign) {
     printf("refusing: scsi host %d channel %d hosts other devices too\n",
            id.host_no, id.channel);
     return 1;
   }
-  if (ioctl(g_scanner, SG_SCSI_RESET, &op) < 0) {
+  if(ioctl(g_scanner, SG_SCSI_RESET, &op) < 0) {
     printf("bus reset failed (%s)\n", strerror(errno));
     return 1;
   }
@@ -476,8 +478,8 @@ static sigset_t g_sigs;
 static void* sig_thread(void* arg) {
   int sig;
   (void)arg;
-  for (;;)
-    if (sigwait(&g_sigs, &sig) == 0) *g_flag = 1;
+  for(;;)
+    if(sigwait(&g_sigs, &sig) == 0) *g_flag = 1;
   return NULL;
 }
 
@@ -488,8 +490,8 @@ void catch_ctrl_c(volatile int* flag) {
   sigaddset(&g_sigs, SIGINT);
   sigaddset(&g_sigs, SIGTERM);
   /* before any other thread starts: they inherit the mask */
-  if (pthread_sigmask(SIG_BLOCK, &g_sigs, NULL) != 0 ||
-      pthread_create(&t, NULL, sig_thread, NULL) != 0) {
+  if(pthread_sigmask(SIG_BLOCK, &g_sigs, NULL) != 0 ||
+     pthread_create(&t, NULL, sig_thread, NULL) != 0) {
     fprintf(stderr, "ftpoc: cannot catch Ctrl+C\n");
     exit(1);
   }
@@ -508,7 +510,7 @@ void sleep_ms(DWORD ms) {
   struct timespec ts;
   ts.tv_sec = ms / 1000;
   ts.tv_nsec = (long)(ms % 1000) * 1000000L;
-  while (nanosleep(&ts, &ts) < 0 && errno == EINTR);
+  while(nanosleep(&ts, &ts) < 0 && errno == EINTR);
 }
 
 void own_exe_path(char exe[PATH_BUF_MAX + 1]) {
@@ -517,14 +519,14 @@ void own_exe_path(char exe[PATH_BUF_MAX + 1]) {
 }
 
 int replace_file(const char* tmp, const char* path) {
-  if (rename(tmp, path) == 0) return 0;
+  if(rename(tmp, path) == 0) return 0;
   g_errno = errno;
   return -1;
 }
 
 int disk_free_bytes(const char* dir, double* bytes) {
   struct statvfs s;
-  if (statvfs(dir ? dir : ".", &s) < 0) {
+  if(statvfs(dir ? dir : ".", &s) < 0) {
     g_errno = errno;
     return -1;
   }

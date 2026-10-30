@@ -22,32 +22,32 @@
 #define DRIVER_SENSE 0x08   /* sense data is valid: not an error */
 
 int sgio_dir(unsigned char dir, unsigned len) {
-  if (len == 0) return SG_DXFER_NONE;
-  if (dir == 0x40) return SG_DXFER_FROM_DEV;
-  if (dir == 0x80) return SG_DXFER_TO_DEV;
+  if(len == 0) return SG_DXFER_NONE;
+  if(dir == 0x40) return SG_DXFER_FROM_DEV;
+  if(dir == 0x80) return SG_DXFER_TO_DEV;
   return SG_DXFER_NONE;
 }
 
 int sgio_result(int status, int host, int driver, int resid, unsigned len,
                 unsigned* got) {
   *got = 0;
-  if (host == DID_TIME_OUT || (driver & 0x0f) == DRIVER_TIMEOUT)
+  if(host == DID_TIME_OUT || (driver & 0x0f) == DRIVER_TIMEOUT)
     return SGIO_TIMEOUT;
-  if ((status & 0xff) != 0 || host != DID_OK || (driver & ~DRIVER_SENSE))
+  if((status & 0xff) != 0 || host != DID_OK || (driver & ~DRIVER_SENSE))
     return SGIO_ERROR;
-  if (resid < 0) resid = 0;
+  if(resid < 0) resid = 0;
   *got = (unsigned)resid >= len ? 0 : len - (unsigned)resid;
   return 0;
 }
 
 unsigned sgio_out_len(const unsigned char* cdb, int cdb_len,
                       unsigned data_len) {
-  if (cdb_len != 10 || (cdb[0] != 0x24 && cdb[0] != 0x3b)) return data_len;
+  if(cdb_len != 10 || (cdb[0] != 0x24 && cdb[0] != 0x3b)) return data_len;
   return ((unsigned)cdb[6] << 16) | ((unsigned)cdb[7] << 8) | cdb[8];
 }
 
 const char* sgio_host_name(int host) {
-  switch (host) {
+  switch(host) {
     case DID_OK:
       return "DID_OK";
     case DID_NO_CONNECT:
