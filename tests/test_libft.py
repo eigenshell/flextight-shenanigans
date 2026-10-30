@@ -79,16 +79,17 @@ import re
 
 TOOLS = LIBFT.parent / "tools"
 BUILD_BAT = TOOLS / "poc" / "build.bat"
-PROJECT_SYM = re.compile(r"(?:ft|ring|worker)_\w+")
+PROJECT_SYM = re.compile(r"(?:ft|ring|worker|sc)_\w+")
 needs_nm = pytest.mark.skipif(
     shutil.which("cc") is None or shutil.which("nm") is None,
     reason="needs a C compiler and nm")
 
 
 def _bat_sources(line):
-    root = {"LIBFT": LIBFT, "DETAIL": TOOLS / "detail"}
+    root = {"LIBFT": LIBFT, "DETAIL": TOOLS / "detail",
+            "SANCHO": LIBFT.parent / "sancho"}
     return sorted({root[d] / f for d, f in
-                   re.findall(r"%(LIBFT|DETAIL)%\\(\w+\.c)", line)})
+                   re.findall(r"%(LIBFT|DETAIL|SANCHO)%\\(\w+\.c)", line)})
 
 
 @needs_nm
@@ -99,14 +100,16 @@ def test_build_bat_links(tmp_path):
              if "ftpoc.c" in l and not l.lstrip().upper().startswith("REM")]
     assert len(lines) == 2   # cl and mingw
     # the Windows transport (ftio.h); ftio_posix.c is the Makefile's
-    assert all(" ftio_win.c " in l for l in lines)
+    assert all(" %FTIO%\\ftio_win.c " in l for l in lines)
     srcs = _bat_sources(lines[0])
     assert srcs == _bat_sources(lines[1])
     objs = []
     for s in srcs:
         o = tmp_path / (s.stem + ".o")
         r = subprocess.run(["cc", "-std=c99", "-c", "-I", str(LIBFT),
-                            "-I", str(TOOLS / "detail"), "-o", str(o), str(s)],
+                            "-I", str(TOOLS / "detail"),
+                            "-I", str(LIBFT.parent / "ftio"),
+                            "-o", str(o), str(s)],
                            capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         objs.append(str(o))

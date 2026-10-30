@@ -62,8 +62,11 @@ purity: $(PURE) ft_image.o
 	@sh test/purity.sh ft_image.o >/dev/null; test $$? -eq 1 || \
 	    { echo "purity: the check did not reject calloc in ft_image.o"; exit 1; }
 
-test: $(TESTS) purity purity-web
+# the suites alone; sanitizer builds skip purity (it sees their runtime)
+check: $(TESTS)
 	@for t in $(TESTS); do ./$$t || exit 1; done
+
+test: check purity purity-web
 
 clean:
 	rm -f $(OBJ) libft.a $(TESTS) test/png_dump test/window_dump test/web/*.o
@@ -86,4 +89,4 @@ purity-web: $(WEB) test/web/web_good.o test/web/web_bad.o
 	@sh test/purity_web.sh test/web/web_bad.o >/dev/null; test $$? -eq 1 || \
 	    { echo "purity-web: the check did not reject fopen"; exit 1; }
 
-.PHONY: test clean purity purity-web luts
+.PHONY: check test clean purity purity-web luts
