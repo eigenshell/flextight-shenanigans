@@ -137,7 +137,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: libft tests
         run: make -C libft test
       - name: ftio and poc tests
@@ -148,13 +148,14 @@ jobs:
         run: uv run --extra test --with pytest pytest -q
 
   # the C suites again under AddressSanitizer and UndefinedBehaviorSanitizer;
-  # libft's check skips purity, which would see the sanitizer runtime
+  # libft's check skips purity, which would see the sanitizer runtime;
+  # fortify is Ubuntu's default, spelled out so a local run catches it too
   sanitize:
     if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     env:
       CFLAGS: >-
-        -std=c99 -O1 -g -fno-omit-frame-pointer
+        -std=c99 -O1 -g -D_FORTIFY_SOURCE=3 -fno-omit-frame-pointer
         -fsanitize=address,undefined -fno-sanitize-recover=all
         -Wall -Wextra -Wpedantic -Wno-overlength-strings
     steps:

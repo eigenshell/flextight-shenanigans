@@ -345,7 +345,8 @@ int main(void) {
   {
     FILE* f = fopen(BASE "_pass01.raw", "rb");
     size_t n = (size_t)p.s.line_count * p.s.pixel_count * 3, got;
-    unsigned short* back = malloc(n * 2);
+    /* one spare: reading n + 1 proves the file holds no more */
+    unsigned short* back = malloc((n + 1) * 2);
     CHECK(f && back);
     got = fread(back, 2, n + 1, f);
     fclose(f);
