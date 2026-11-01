@@ -22,7 +22,9 @@ const [chrome, url, dl, mode, hold] = process.argv.slice(2);
 const prof = mkdtempSync(join(tmpdir(), "ftweb-e2e-"));
 const proc = spawn(chrome, ["--headless=new", "--remote-debugging-port=0",
   "--user-data-dir=" + prof, "--no-first-run", "--no-default-browser-check",
-  "--disable-gpu", "--window-size=1100,900", "about:blank"], { stdio: "ignore" });
+  "--disable-gpu", "--window-size=1100,900", "about:blank"],
+  // stderr through: the test shows it when Chrome never comes up
+  { stdio: ["ignore", "ignore", "inherit"] });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let ws, seq = 0;
 const pending = new Map(), events = [];

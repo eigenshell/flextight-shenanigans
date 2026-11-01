@@ -133,10 +133,15 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/wasi-sdk
       - uses: ./.github/actions/c-deps
-      # node 20 crashes in its GC while the wasm memory grows
+      # node 20 and 22 (22.23 here) crash in their GC while the wasm memory
+      # grows (SIGSEGV); 26 is what passes locally
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
+      # Ubuntu 24.04's AppArmor blocks the user namespaces Chrome's sandbox
+      # needs, so the headless page tests never get a DevTools port
+      - name: Let Chrome sandbox itself
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - uses: astral-sh/setup-uv@v10.3.3
       - name: libft tests
         run: make -C libft test
