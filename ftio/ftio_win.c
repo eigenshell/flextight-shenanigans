@@ -7,10 +7,10 @@
  * FlexColor.exe uses (validated against 67k+ hooked DeviceIoControl calls,
  * sessions 2-6). Moved here unchanged from ftpoc.c.
  */
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
 
 #include "ftio.h"
 
