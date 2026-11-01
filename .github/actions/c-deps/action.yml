@@ -1,0 +1,10 @@
+name: c-deps
+description: The libraries libft's tests and the tools link (libtiff, lcms2, libjpeg)
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -yq --no-install-recommends \
+          pkg-config libtiff-dev liblcms2-dev libjpeg-dev

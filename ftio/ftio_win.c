@@ -7,6 +7,7 @@
  * FlexColor.exe uses (validated against 67k+ hooked DeviceIoControl calls,
  * sessions 2-6). Moved here unchanged from ftpoc.c.
  */
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,7 +16,7 @@
 
 #define IOCTL_SRB 0x190012
 
-io_dev g_dev = INVALID_HANDLE_VALUE;
+io_scanner_handle g_scanner = INVALID_HANDLE_VALUE;
 static HANDLE g_evt = NULL;
 static const char* g_device; /* --device */
 
@@ -30,15 +31,15 @@ static void die(const char* what) {
   exit(1);
 }
 
-void io_init(void) {
+void os_layer_init(void) {
   g_evt = CreateEventA(NULL, TRUE, FALSE, NULL);
   if(!g_evt) die("CreateEvent");
 }
 
-void io_set_device(const char* path) { g_device = path; }
+void scanner_set_path(const char* path) { g_device = path; }
 
 /* \\.\Scanner0..15, as FlexColor's FindDevices */
-int io_dev_path(int i, char* path, size_t cap) {
+int scanner_candidate_path(int i, char* path, size_t cap) {
   if(g_device) {
     if(i > 0 || strlen(g_device) >= cap) return 0;
     strcpy(path, g_device);
@@ -49,20 +50,20 @@ int io_dev_path(int i, char* path, size_t cap) {
   return 1;
 }
 
-io_dev io_open(const char* path) {
+io_scanner_handle scanner_open(const char* path) {
   return CreateFileA(path, GENERIC_READ | GENERIC_WRITE,
                      FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
                      FILE_FLAG_OVERLAPPED, NULL);
 }
 
-void io_close(io_dev d) { CloseHandle(d); }
+void scanner_close(io_scanner_handle d) { CloseHandle(d); }
 
 /* Send one 44-byte SRB; SCSI payload rides lpOutBuffer (METHOD_OUT_DIRECT).
  * Returns bytes transferred, or a negative code:
  *  -1 DeviceIoControl rejected, -2 timed out (cancelled), -3 completion error
  */
-int srb_exec(const BYTE* cdb, int cdb_len, BYTE dir, BYTE* data, DWORD data_len,
-             DWORD timeout_ms) {
+int io_send_command_to(io_scanner_handle device, const BYTE* cdb, int cdb_len,
+                       BYTE dir, BYTE* data, DWORD data_len, DWORD timeout_ms) {
   BYTE srb[0x70];
   OVERLAPPED ov;
   DWORD transferred = 0;
@@ -83,14 +84,14 @@ int srb_exec(const BYTE* cdb, int cdb_len, BYTE dir, BYTE* data, DWORD data_len,
   ov.hEvent = g_evt;
   ResetEvent(g_evt);
 
-  if(!DeviceIoControl(g_dev, IOCTL_SRB, srb, 44, data, data_len, &transferred,
+  if(!DeviceIoControl(device, IOCTL_SRB, srb, 44, data, data_len, &transferred,
                       &ov)) {
     if(GetLastError() != ERROR_IO_PENDING) return -1;
     if(WaitForSingleObject(g_evt, timeout_ms) != WAIT_OBJECT_0) {
-      CancelIo(g_dev);
+      CancelIo(device);
       return -2;
     }
-    if(!GetOverlappedResult(g_dev, &ov, &transferred, TRUE)) {
+    if(!GetOverlappedResult(device, &ov, &transferred, TRUE)) {
       g_srb_status = srb[0x2c];
       memcpy(g_sense, srb + 0x34, sizeof g_sense);
       return -3;
@@ -99,7 +100,13 @@ int srb_exec(const BYTE* cdb, int cdb_len, BYTE dir, BYTE* data, DWORD data_len,
   return (int)transferred;
 }
 
-const char* srb_errstr(int r) {
+int scsi_send_command(const BYTE* cdb, int cdb_len, BYTE dir, BYTE* data,
+                      DWORD data_len, DWORD timeout_ms) {
+  return io_send_command_to(g_scanner, cdb, cdb_len, dir, data, data_len,
+                            timeout_ms);
+}
+
+const char* scsi_error_text(int r) {
   static char buf[128];
   switch(r) {
     case -1:
@@ -133,7 +140,7 @@ struct slot {
   int busy;
 };
 
-struct io_queue {
+struct read_queue {
   struct slot* sl;
   int depth;
   BYTE cdb[10];
@@ -141,9 +148,9 @@ struct io_queue {
   DWORD timeout_ms; /* the cancel's wait per slot */
 };
 
-io_queue* ioq_open(int depth, const BYTE cdb[10], WORD blklen,
-                   DWORD timeout_ms) {
-  io_queue* q = calloc(1, sizeof *q);
+read_queue* read_queue_open(int depth, const BYTE cdb[10], WORD blklen,
+                            DWORD timeout_ms) {
+  read_queue* q = calloc(1, sizeof *q);
   int i;
   if(!q) return NULL;
   q->sl = calloc(depth, sizeof *q->sl);
@@ -159,21 +166,21 @@ io_queue* ioq_open(int depth, const BYTE cdb[10], WORD blklen,
     q->sl[i].buf = malloc(blklen);
     q->sl[i].ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
     if(!q->sl[i].buf || !q->sl[i].ov.hEvent) {
-      ioq_close(q, 0);
+      read_queue_close(q, 0);
       return NULL;
     }
   }
   return q;
 }
 
-BYTE* ioq_buf(io_queue* q, int slot) { return q->sl[slot].buf; }
+BYTE* read_queue_buffer(read_queue* q, int slot) { return q->sl[slot].buf; }
 
-int ioq_issue(io_queue* q, int slot, long seq) {
+int read_queue_issue(read_queue* q, int slot, long seq) {
   struct slot* s = &q->sl[slot];
   BYTE* srb = s->srb;
   memset(srb, 0, sizeof s->srb);
   *(DWORD*)(srb + 0x04) = 44;
-  srb[0x08] = SRB_DIR_IN;
+  srb[0x08] = SCSI_FROM_DEVICE;
   srb[0x0c] = 10;
   srb[0x0d] = 0x0e;
   *(DWORD*)(srb + 0x10) = q->blklen;
@@ -182,7 +189,7 @@ int ioq_issue(io_queue* q, int slot, long seq) {
   *(DWORD*)(srb + 0x28) = (DWORD)(ULONG_PTR)(srb + 0x34);
   ResetEvent(s->ov.hEvent);
   s->ov.Internal = s->ov.InternalHigh = 0;
-  if(!DeviceIoControl(g_dev, IOCTL_SRB, srb, 44, s->buf, q->blklen, NULL,
+  if(!DeviceIoControl(g_scanner, IOCTL_SRB, srb, 44, s->buf, q->blklen, NULL,
                       &s->ov) &&
      GetLastError() != ERROR_IO_PENDING) {
     printf("\nflood issue %ld: GLE=%lu\n", seq, GetLastError());
@@ -192,29 +199,30 @@ int ioq_issue(io_queue* q, int slot, long seq) {
   return 0;
 }
 
-int ioq_reap(io_queue* q, int slot, long seq, DWORD timeout_ms, DWORD* got) {
+int read_queue_wait(read_queue* q, int slot, long seq, DWORD timeout_ms,
+                    DWORD* got) {
   struct slot* s = &q->sl[slot];
   *got = 0;
   if(WaitForSingleObject(s->ov.hEvent, timeout_ms) != WAIT_OBJECT_0)
-    return IOQ_TIMEOUT;
+    return READ_TIMEOUT;
   s->busy = 0;
-  if(!GetOverlappedResult(g_dev, &s->ov, got, TRUE)) {
+  if(!GetOverlappedResult(g_scanner, &s->ov, got, TRUE)) {
     DWORD gle = GetLastError();
     /* SRB_STATUS_DATA_OVERRUN (0x12) also means UNDERRUN on
      * Windows: a short transfer, the host is ahead of the CCD.
      * Keep the bytes that did arrive and carry on. */
     if(gle == ERROR_MORE_DATA && (s->srb[0x2c] & 0x3f) == 0x12)
-      return IOQ_SHORT;
+      return READ_SHORT;
     printf("\nflood read %ld: GLE=%lu srb=%02x\n", seq, gle, s->srb[0x2c]);
-    return IOQ_ERROR;
+    return READ_ERROR;
   }
-  return IOQ_FULL;
+  return READ_FULL;
 }
 
-void ioq_close(io_queue* q, int cancel) {
+void read_queue_close(read_queue* q, int cancel) {
   int i;
   if(cancel) {
-    CancelIo(g_dev);
+    CancelIo(g_scanner);
     for(i = 0; i < q->depth; i++)
       if(q->sl[i].busy && q->sl[i].ov.hEvent)
         WaitForSingleObject(q->sl[i].ov.hEvent, q->timeout_ms);
@@ -237,7 +245,7 @@ typedef struct {
 #define IOCTL_SCSI_GET_INQUIRY_DATA 0x0004100c
 #define IOCTL_STORAGE_RESET_BUS 0x002d5000
 
-int io_busreset(void) {
+int scsi_bus_reset(void) {
   static BYTE info[16384];
   int port;
   for(port = 0; port < 8; port++) {
@@ -313,33 +321,33 @@ static BOOL WINAPI on_ctrl(DWORD type) {
   return FALSE;
 }
 
-void io_catch_interrupt(volatile int* flag) {
+void catch_ctrl_c(volatile int* flag) {
   g_flag = flag;
   SetConsoleCtrlHandler(on_ctrl, TRUE);
 }
 
 DWORD
-io_ms(void) { return GetTickCount(); }
+now_ms(void) { return GetTickCount(); }
 
-void io_sleep(DWORD ms) { Sleep(ms); }
+void sleep_ms(DWORD ms) { Sleep(ms); }
 
-void io_exe_path(char exe[IO_PATH_MAX + 1]) {
+void own_exe_path(char exe[PATH_BUF_MAX + 1]) {
   DWORD n = GetModuleFileNameA(NULL, exe, MAX_PATH);
   exe[n > 0 && n < MAX_PATH ? n : 0] = 0;
 }
 
-int io_replace(const char* tmp, const char* path) {
+int replace_file(const char* tmp, const char* path) {
   return MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING) ? 0 : -1;
 }
 
-int io_free_bytes(const char* dir, double* bytes) {
+int disk_free_bytes(const char* dir, double* bytes) {
   ULARGE_INTEGER avail;
   if(!GetDiskFreeSpaceExA(dir, &avail, NULL, NULL)) return -1;
   *bytes = (double)avail.QuadPart;
   return 0;
 }
 
-const char* io_syserr(void) {
+const char* os_error_text(void) {
   static char buf[32];
   sprintf(buf, "GLE=%lu", GetLastError());
   return buf;
