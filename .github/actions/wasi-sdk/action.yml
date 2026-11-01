@@ -4,7 +4,7 @@ runs:
   using: composite
   steps:
     - id: cache
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ env.WASI_SDK }}
         key: wasi-sdk-${{ env.WASI_SDK_VERSION }}-x86_64-linux

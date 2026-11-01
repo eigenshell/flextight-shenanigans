@@ -1496,7 +1496,7 @@ static int cmd_scan(const struct preset* p, long y, long keep, DWORD hold_ms,
   lines = ft_read_big_endian32(desc, F_LINES);
   maxl = (long)((double)HOLDER_LINES_525 * res / 5250000.0);
   if(y >= 0) {
-    if(y + lines > maxl) {
+    if(y + (long)lines > maxl) {
       fprintf(stderr,
               "start line %ld"
               " + %" PRIu32
@@ -1508,7 +1508,7 @@ static int cmd_scan(const struct preset* p, long y, long keep, DWORD hold_ms,
     }
     ft_write_big_endian32(desc, F_Y, y);
   }
-  if(keep <= 0 || keep > lines) keep = lines;
+  if(keep <= 0 || keep > (long)lines) keep = lines;
   if(!scanned && hold_ms < g_first_hold)
     hold_ms = g_first_hold; /* first scan of the process */
   blklen = (WORD)(px * 6);
@@ -2208,7 +2208,8 @@ static long crop_bin(const struct crop_req* r) {
  * printed). */
 static int crop_check(const struct crop_req* r, long* ccd_out,
                       long* optic_out) {
-  long bin, ccd = r->ccd, optic = r->optic;
+  long bin;
+  int64_t ccd = r->ccd, optic = r->optic;
   double scale, cx;
 
   /* every range check is written so that NaN fails it */
@@ -2340,7 +2341,8 @@ static int preview_scan(const ft_preview* m, long keep, DWORD hold,
                         const char* out) {
   static char what[80];
   double x0, w, len, scale = m->ppi * m->bin;
-  long ccd, optic, x_out, px;
+  int64_t ccd, optic;
+  long x_out, px;
 
   if(m->bin == 12) {
     static BYTE pv[84];
@@ -2452,15 +2454,15 @@ static int cmd_crop(int argc, char** argv) {
 static int g_focus_bin;
 
 static int focus_bracket(double ppi, double xc, double yc, double w,
-                         long centre, long step, int n, int max_samples,
-                         int ccd_only, long* best) {
+                         int64_t centre, long step, int n, int max_samples,
+                         int ccd_only, int64_t* best) {
   /* a wide bracket (low magnification: share_focus) may reach as far
    * as it spans; every crop still goes through crop_check */
   const long lim = ccd_only ? FT_CALIBRATION_BRACKET_MAX_STEPS
                    : (long)(n - 1) * step > FT_BRACKET_MAX_STEPS
                      ? (long)(n - 1) * step
                      : FT_BRACKET_MAX_STEPS;
-  long off[FB_SAMPLES];
+  int64_t off[FB_SAMPLES];
   double sh[FB_SAMPLES];
   int ns = 0, tries, i, k, m, dir = 0;
   int bin = g_focus_bin ? g_focus_bin : ft_get_bin_for_ppi(ppi);
@@ -2566,7 +2568,7 @@ static int focus_bracket(double ppi, double xc, double yc, double w,
     /* maximum against the safe limit: nothing sharper is reachable */
     if((m == 0 && refused_lo < off[0]) ||
        (m == ns - 1 && refused_hi > off[ns - 1])) {
-      printf("  focus: sharpest at the safe limit (%+ld)\n", off[m]);
+      printf("  focus: sharpest at the safe limit (%+" PRId64 ")\n", off[m]);
       *best = off[m];
       return 0;
     }
@@ -2579,10 +2581,12 @@ static int focus_bracket(double ppi, double xc, double yc, double w,
     }
     dir = m == 0 ? -1 : 1;
     if(tries < 2)
-      printf("  focus: still rising at %+ld; moving the bracket\n", off[m]);
+      printf("  focus: still rising at %+" PRId64 "; moving the bracket\n",
+             off[m]);
     centre = off[m];
   }
-  printf("  focus: peak still at the bracket edge (%+ld); no usable peak\n",
+  printf("  focus: peak still at the bracket edge (%+" PRId64
+         "); no usable peak\n",
          *best);
   return FB_NO_PEAK;
 }
@@ -2727,7 +2731,7 @@ static void print_job(const ft_job* j) {
            f->length_mm, f->across_start_mm, f->width_mm, f->tilt_degrees,
            f->ppi, f->is_confidence_low ? "LOW" : "ok");
   }
-  printf(" focus: %s, offset %ld CCD steps\n",
+  printf(" focus: %s, offset %" PRId64 " CCD steps\n",
          j->focus_mode == FT_FOCUS_PER_FRAME ? "per frame" : "shifted curve",
          j->focus_offset_steps);
 }
@@ -2817,7 +2821,7 @@ static int focus_span(double ppi, double x0, double x1, double* lo,
  * cannot give one (no texture, outside the crop area, no peak), -1 on a
  * scan or file failure. */
 static int focus_point(const float* t, int lines, int px, const ft_axes* ax,
-                       double ppi, const ft_job_frame* fr, long* off) {
+                       double ppi, const ft_job_frame* fr, int64_t* off) {
   double score, x0, x1, yc = textured_band(t, lines, px, ax, fr, &score);
   int rc;
   if(!(score >= TEXTURE_MIN)) {
@@ -2846,7 +2850,7 @@ static int focus_check(const float* t, int lines, int px, const ft_axes* ax,
                        double ppi, ft_job* j) {
   int cand[FT_MAX_FRAMES], used[FT_MAX_FRAMES], nc = 0, np = 0, npt = 0;
   int pos[3], dir[3], p, i, k, rc;
-  long off[3];
+  int64_t off[3];
 
   for(i = 0; i < (int)j->frame_count && i < FT_MAX_FRAMES; i++)
     if(j->frames[i].type != FT_FRAME_PARTIAL) {
@@ -2903,7 +2907,8 @@ static int focus_check(const float* t, int lines, int px, const ft_axes* ax,
   }
   j->focus_mode = ft_decide_focus_mode(off, &j->focus_offset_steps);
   printf(
-    "focus offsets %ld %ld %ld -> %s\n", off[0], off[1], off[2],
+    "focus offsets %" PRId64 " %" PRId64 " %" PRId64 " -> %s\n", off[0], off[1],
+    off[2],
     j->focus_mode == FT_FOCUS_PER_FRAME ? "per-frame focus" : "shifted curve");
   if(j->focus_mode == FT_FOCUS_PER_FRAME) {
     int n = 0;
@@ -3561,7 +3566,7 @@ static int detail_plan(const float* t, int lines, int px, const ft_axes* ax,
   static ft_detail_plan plan;
   const ft_holder* h = ft_find_holder(j->holder);
   int idx[FT_MAX_FRAMES], ok[FT_MAX_FRAMES], n = 0, i, k, p, nok = 0;
-  long meas[FT_MAX_FRAMES], med = 0;
+  int64_t meas[FT_MAX_FRAMES], med = 0;
   double total_s = 0, total_b = 0;
   ft_err e;
 
@@ -3612,10 +3617,10 @@ static int detail_plan(const float* t, int lines, int px, const ft_axes* ax,
   for(k = 0; k < n; k++) {
     const ft_job_frame* f = &j->frames[idx[k]];
     if(!ok[k])
-      printf(
-        "WARNING: frame %d: no focus peak; using %ld (the median "
-        "of the others)\n",
-        f->index, med);
+      printf("WARNING: frame %d: no focus peak; using %" PRId64
+             " (the median "
+             "of the others)\n",
+             f->index, med);
     df[k].index = f->index;
     df[k].start_mm = f->along_start_mm;
     df[k].length_mm = f->length_mm;
@@ -3640,12 +3645,12 @@ static int detail_plan(const float* t, int lines, int px, const ft_axes* ax,
     }
     detail_window(j, p + 1, h, &q, &ds);
     b = detail_bytes(j, p + 1, &ds);
-    printf(
-      "  pass %d: frames %d..%d, %.1f..%.1f mm, focus %+ld, ~%.0f s, "
-      "%.0f MB\n",
-      p + 1, df[ps->first_frame].index, df[ps->last_frame].index, ps->start_mm,
-      ps->start_mm + ps->length_mm, ps->focus_offset_steps, ps->seconds,
-      b / 1048576);
+    printf("  pass %d: frames %d..%d, %.1f..%.1f mm, focus %+" PRId64
+           ", ~%.0f s, "
+           "%.0f MB\n",
+           p + 1, df[ps->first_frame].index, df[ps->last_frame].index,
+           ps->start_mm, ps->start_mm + ps->length_mm, ps->focus_offset_steps,
+           ps->seconds, b / 1048576);
     total_s += ps->seconds;
     total_b += b;
   }
@@ -3896,7 +3901,7 @@ static long share_focus_step(double scale, int bin) {
  * gives no peak, centred on centre. 0 with *off, FB_NO_PEAK (no frame
  * gave one), -1 on a scan or file failure. */
 static int share_focus(const ft_job* j, int g, const struct crop_req* q,
-                       long centre, int n, long* off) {
+                       int64_t centre, int n, int64_t* off) {
   double a = q->x + FOCUS_X_MARGIN, b = q->x + q->w - FOCUS_X_MARGIN;
   long step = share_focus_step(q->ppi * q->bin, q->bin);
   int i, tried = 0, rc = FB_NO_PEAK, keep = g_focus_bin;
@@ -3992,7 +3997,7 @@ static int scan_share(ft_job* j, const char* path, const char* jobbase,
     pg_unit(FT_PROGRESS_WINDOW, nscan + 1, g);
     if(j->focus_mode == FT_FOCUS_PER_FRAME) {
       double scale = q.ppi * q.bin;
-      long off = 0;
+      int64_t off = 0;
       ft_progress_how how;
       if(mscale > 0 && scale <= mscale * FT_SHARE_FOCUS_RECHECK) {
         printf(
@@ -4205,7 +4210,7 @@ static int cmd_scanjob(int argc, char** argv) {
     ft_job_frame* fr = &j.frames[i];
     struct crop_req q;
     char out[300];
-    long off = j.focus_offset_steps;
+    int64_t off = j.focus_offset_steps;
     int rc;
 
     if(!fr->is_included || fr->is_done || ref[i]) continue;
@@ -4250,7 +4255,7 @@ static int cmd_scanjob(int argc, char** argv) {
     q.out = out;
     printf(
       "\n=== frame %d: %s, %g ppi, bin %d (~%.0f s), focus offset "
-      "%ld\n",
+      "%" PRId64 "\n",
       fr->index, type_name(fr->type), fr->ppi, ft_get_frame_bin(fr),
       ft_estimate_scan_seconds(fr->ppi, ft_get_frame_bin(fr), q.h), off);
     g_pg_track = 1;
@@ -4330,7 +4335,7 @@ static int cmd_calibrate_focus(int argc, char** argv) {
   static const double PPI[CAL_SCALES] = {3800, 4000, 1075, 2400,
                                          2700, 2850, 2000, 3150};
   double x, y, w, M[CAL_SCALES], S[CAL_SCALES], rc, rl;
-  long C[CAL_SCALES], L[CAL_SCALES], prev = 0;
+  int64_t C[CAL_SCALES], L[CAL_SCALES], prev = 0;
   ft_lens fit = g_lens;
   char *e1, *e2, *e3;
   FILE* fo;
@@ -4371,7 +4376,7 @@ static int cmd_calibrate_focus(int argc, char** argv) {
          5 + CAL_SCALES * 9, ((5 + CAL_SCALES * 9) * CROP_S + 59) / 60);
   for(i = 0; i < CAL_SCALES && !g_abort; i++) {
     double scale = PPI[i] * ft_get_bin_for_ppi(PPI[i]), v, lo, hi;
-    long ccd, optic, best = 0, centre = prev;
+    int64_t ccd, optic, best = 0, centre = prev;
     int r;
     printf("\n=== scale %.0f (%g ppi)\n", scale, PPI[i]);
     if(ft_find_optics_positions(&g_lens, scale, &ccd, &optic)) {
@@ -4397,7 +4402,7 @@ static int cmd_calibrate_focus(int argc, char** argv) {
           scale);
         continue;
       }
-      if(r == 0) printf("fine bracket around %+ld\n", centre);
+      if(r == 0) printf("fine bracket around %+" PRId64 "\n", centre);
     }
     if(r == 0)
       r = focus_bracket(PPI[i], (lo + hi) / 2, y, hi - lo, centre, 1000, 9,
@@ -4417,8 +4422,9 @@ static int cmd_calibrate_focus(int argc, char** argv) {
       ((v - best) / g_lens.focal_length_steps - 1) / g_lens.pixel_pitch_inches;
     C[n] = ccd + best;
     L[n] = optic;
-    printf("peak: CCD %ld (curve %+ld), lens %ld, magnification %.0f\n", C[n],
-           best, L[n], M[n]);
+    printf("peak: CCD %" PRId64 " (curve %+" PRId64 "), lens %" PRId64
+           ", magnification %.0f\n",
+           C[n], best, L[n], M[n]);
     prev = best;
     have_prev = 1;
     n++;
@@ -4451,11 +4457,12 @@ static int cmd_calibrate_focus(int argc, char** argv) {
     return 1;
   }
   for(i = 0; i < n; i++) {
-    long pc, po;
+    int64_t pc, po;
     double fc, foo;
     lens_at(&fit, M[i], &fc, &foo);
-    printf("  scale %.0f: measured CCD %ld lens %ld, fit %.0f / %.0f\n", S[i],
-           C[i], L[i], fc, foo);
+    printf("  scale %.0f: measured CCD %" PRId64 " lens %" PRId64
+           ", fit %.0f / %.0f\n",
+           S[i], C[i], L[i], fc, foo);
     if(!(fabs(fc - C[i]) <= FT_CALIBRATION_MARGIN_STEPS)) {
       fprintf(stderr,
               "calibrate-focus: scale %.0f is %.0f CCD steps "
