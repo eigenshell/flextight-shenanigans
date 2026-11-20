@@ -15,7 +15,7 @@ dimensions are not published. Take the back apart (the sprocket is behind
 the two-screw retaining plate under the film carriage, see README.md),
 measure, then edit the values. Run:
 
-    python3 rb67_65mm.py            # writes STEP + STL to ./out
+    python3 rb67.py                 # writes STEP + STL to ./out
 """
 
 import math
@@ -72,6 +72,26 @@ def root_diameter(p: Params) -> float:
     return pitch_diameter(p) - p.film_t
 
 
+def add_tooth_ring(body: cq.Workplane, r_root: float, n_teeth: int, z: float, p: Params) -> cq.Workplane:
+    """Union a ring of KS-perforation teeth onto `body` at axial position z.
+
+    The body's axis is Z. Teeth are rounded-top blocks sized to the
+    perforation minus clearance.
+    """
+    w_lat = fg.PERF_W - p.tooth_clear_lat
+    w_long = fg.PERF_H - p.tooth_clear_long
+    tooth = (
+        cq.Workplane("XY")
+        .box(w_long, p.tooth_h + 0.3, w_lat, centered=(True, False, True))
+        .edges("|Z and >Y")
+        .fillet(min(w_long, p.tooth_h) * 0.45)
+        .translate((0, r_root - 0.3, z))
+    )
+    for i in range(n_teeth):
+        body = body.union(tooth.rotate((0, 0, 0), (0, 0, 1), 360.0 * i / n_teeth))
+    return body
+
+
 def offset_sprocket(p: Params) -> cq.Workplane:
     """Sprocket hub, Z axis = shaft axis, Z=0 = original wall-side face.
 
@@ -81,7 +101,6 @@ def offset_sprocket(p: Params) -> cq.Workplane:
     shift = fg.sprocket_shift()
     tooth_z = rb.tooth_center_from_outer_face + shift
     tooth_w_lat = fg.PERF_W - p.tooth_clear_lat
-    tooth_w_long = fg.PERF_H - p.tooth_clear_long
     hub_len = tooth_z + tooth_w_lat / 2 + 1.0
     if hub_len > rb.max_hub_length:
         raise ValueError(f"hub {hub_len:.2f}mm exceeds measured room {rb.max_hub_length}mm")
@@ -89,16 +108,7 @@ def offset_sprocket(p: Params) -> cq.Workplane:
     r_root = root_diameter(p) / 2
     hub = cq.Workplane("XY").circle(r_root).extrude(hub_len)
 
-    # Teeth: rounded-top blocks, polar array around the axis.
-    tooth = (
-        cq.Workplane("XY")
-        .box(tooth_w_long, p.tooth_h + 0.3, tooth_w_lat, centered=(True, False, True))
-        .edges("|Z and >Y")
-        .fillet(min(tooth_w_long, p.tooth_h) * 0.45)
-        .translate((0, r_root - 0.3, tooth_z))
-    )
-    for i in range(rb.n_teeth):
-        hub = hub.union(tooth.rotate((0, 0, 0), (0, 0, 1), 360.0 * i / rb.n_teeth))
+    hub = add_tooth_ring(hub, r_root, rb.n_teeth, tooth_z, p)
 
     # Bore with optional D-flat.
     r = rb.shaft_d / 2

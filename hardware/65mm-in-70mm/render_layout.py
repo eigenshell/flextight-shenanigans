@@ -30,7 +30,7 @@ def draw(path: Path) -> None:
 
     g = fg.gate_band()
     ax.add_patch(Rectangle((g.lo, y), g.width, 0.8, fc="#cfe8cf", ec="black", lw=0.8))
-    ax.text(-1, y + 0.4, "RB67 6x7 gate (56mm)", ha="right", va="center", fontsize=9)
+    ax.text(-1, y + 0.4, "6x7 / 645 gate (56mm across)", ha="right", va="center", fontsize=9)
     y -= 1.2
 
     t2 = fg.perf_band_type2()
@@ -66,7 +66,7 @@ def draw(path: Path) -> None:
     ax.set_xticks(range(0, 71, 5))
     for s in ("left", "right", "top"):
         ax.spines[s].set_visible(False)
-    ax.set_title("RB67 70mm back: lateral layout for centered 65mm film", fontsize=11)
+    ax.set_title("65mm in a 70mm back: lateral layout (RB67 and Pentax 645)", fontsize=11)
     fig.tight_layout()
     fig.savefig(path)
 

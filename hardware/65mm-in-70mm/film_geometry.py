@@ -96,6 +96,26 @@ def perf_intrusion_into_gate(path_width: float = W70_STILL) -> float:
     return max(0.0, perf_band_65(off).hi - gate_band(path_width).lo)
 
 
+def far_perf_band_65(offset: float) -> Band:
+    """Far-side perforation row of 65mm film whose near edge sits at `offset`."""
+    hi = offset + W65 - E65
+    return Band(hi - PERF_W, hi)
+
+
+def max_offset_compromised_band(path_width: float = W70_STILL) -> float:
+    """65mm pushed flush to the datum edge (Mercury "Max Offset", Pentax 645).
+
+    Width of image on the far side that has perforations or no film in it.
+    Mercury's Pentax 645 mod sheet says 3.8mm, which cross-checks the gate
+    and datum assumptions above.
+    """
+    return max(0.0, gate_band(path_width).hi - far_perf_band_65(0.0).lo)
+
+
+def frames_per_load(load_ft: float, perfs_per_frame: int, pitch: float = PITCH_TYPE2) -> int:
+    return int(load_ft * 304.8 // (perfs_per_frame * pitch))
+
+
 def summary() -> str:
     off = centered_65_offset()
     t2 = perf_band_type2()
@@ -110,6 +130,7 @@ def summary() -> str:
         f"6x7 gate (56mm):      {g.lo:.2f} .. {g.hi:.2f}",
         f"clear width between 65mm perf rows: {clear_between_perfs:.2f}mm",
         f"=> perfs intrude {perf_intrusion_into_gate():.2f}mm into each long edge of the frame",
+        f"max offset instead: {max_offset_compromised_band():.2f}mm compromised on one edge",
         f"pitch mismatch KS-1866 vs Type II: "
         f"{(PITCH_TYPE2 - PITCH_65_SHORT) / PITCH_TYPE2 * 100:.2f}% "
         f"({15 * (PITCH_TYPE2 - PITCH_65_SHORT):.2f}mm over 15 perfs)",
